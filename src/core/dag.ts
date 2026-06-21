@@ -17,6 +17,7 @@ import pLimit from 'p-limit';
 import toposort from 'toposort';
 
 import type { DagConfig, DagNode, Job, JobContext, Outcome } from './types.ts';
+import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
 import { LoopError } from './errors.ts';
 
@@ -58,17 +59,7 @@ export function dag(config: DagConfig): Job {
     const memo = new Map<string, Promise<Outcome>>();
     let stopped = false;
 
-    const childCtx = (): JobContext => ({
-      engine: parent.engine,
-      resolveEngine: parent.resolveEngine,
-      signal: parent.signal,
-      emit: parent.emit,
-      state: parent.state,
-      log: parent.log,
-      iteration: 0,
-      depth,
-      path,
-    });
+    const childCtx = (): JobContext => childContext(parent, { depth, path });
 
     const record = (name: string, outcome: Outcome, phase: 'done' | 'skip'): Outcome => {
       results.set(name, outcome);
@@ -86,13 +77,15 @@ export function dag(config: DagConfig): Job {
       const promise = (async (): Promise<Outcome> => {
         const needs = node.needs ?? [];
         const deps = await Promise.all(needs.map(run));
-        // A non-pass required dependency blocks this node (skipped deps are pass).
-        const blocked = needs.some((d, i) => deps[i]!.status !== 'pass' && nodes.get(d)!.optional !== true);
+        // A non-pass dependency blocks this node — a declared `needs` is a real
+        // data dependency, so even a failed *optional* producer blocks a
+        // consumer (skipped deps come back with status 'pass', so they're green).
+        const blocked = needs.some((_, i) => deps[i]!.status !== 'pass');
         if (blocked) return record(name, { status: 'aborted', summary: 'blocked by a failed dependency' }, 'done');
         if (parent.signal.aborted || stopped) return record(name, { status: 'aborted', summary: 'aborted before start' }, 'done');
 
         if (node.when) {
-          const r = await toCondition(node.when)(childCtx(), parent.state.lastOutcome as Outcome | undefined);
+          const r = await toCondition(node.when)(childCtx(), undefined);
           if (!r.met) return record(name, { status: 'pass', summary: `skipped: ${r.reason}`, data: { skipped: true } }, 'skip');
         }
 

@@ -41,7 +41,9 @@ loops run \
   --max 20
 ```
 
-Definition-file mode — full power and nesting:
+Definition-file mode — full power and nesting (note: `loops run <file>` **imports
+and executes** that file's module code, like `node <file>` — only run definition
+files you trust):
 
 ```bash
 loops run examples/confidence-gate.loop.ts          # Ink TUI
@@ -99,7 +101,8 @@ export default defineJob(
 | `until` | checked after each body run; met ⇒ stop (then `review`) |
 | `stopOn` | hard early-exit checked each iteration; met ⇒ `aborted` |
 | `max` | iteration cap; reached without passing ⇒ `exhausted` |
-| `review` | runs when `until` is met; non-`pass` re-enters the loop |
+| `review` | runs when `until` is met; non-`pass` re-enters the loop (its outcome is exposed to the next iteration as `ctx.lastReview`) |
+| `maxReviewRestarts` | cap on consecutive failed reviews before `exhausted` — bounds the worker/reviewer standoff independently of `max`; set this whenever `review` is used without a `max` |
 | `delayMs` | delay between iterations (polling); interruptible by abort |
 | `retry` | `{ onError: 'continue' \| 'fail', maxConsecutive?, backoffMs? }` |
 | `onIteration` / `onComplete` | hooks (`onComplete` ≈ Jenkins `post { always }`) |
@@ -151,8 +154,12 @@ The agent launch only ever touches the `Engine` interface. Built-ins:
 |---|---|---|
 | `agent-sdk` | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call; uses host Claude auth |
 | `claude-cli` | `claude` subprocess (`execa`) | fresh process per call |
-| `anthropic-api` | `@anthropic-ai/sdk` | token-level streaming; cheapest for validators; needs `ANTHROPIC_API_KEY` |
+| `anthropic-api` | `@anthropic-ai/sdk` | token-level streaming; cheapest for validators; needs a key |
 | `mock` | scripted, offline | for tests/examples |
+
+> Prefer the `ANTHROPIC_API_KEY` env var over `--api-key` for the `anthropic-api`
+> engine — a flag value is recorded in your shell history and visible in the
+> process table.
 
 Select per-run (`--engine`, `RunOptions.engine`) or per-job/condition
 (`engine:` accepts a name **or** a ready-made `Engine` instance). Add your own:
@@ -176,7 +183,7 @@ framework; a managed/durable runner could later be a drop-in engine too.
 
 ## Output
 
-- **Ink TUI** (default on a TTY): live loop/dag tree, streaming pane, stats footer; `q`/Esc/Ctrl-C aborts cleanly.
+- **Ink TUI** (default on a TTY): live loop/dag tree, streaming pane, stats footer; `q`/Esc/Ctrl-C aborts. Abort is cooperative — it cancels via `AbortController`/`cancelSignal`, so a clean stop depends on the engine honouring it promptly (the CLI engine escalates to SIGKILL after 5s; a second Ctrl-C force-exits).
 - **`--no-tui`**: streamed line logs.
 - **`--json`**: NDJSON event stream on stdout.
 

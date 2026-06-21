@@ -17,7 +17,7 @@ import { run, exitCodeFor } from './runtime/runner.ts';
 import { createHub } from './runtime/hub.ts';
 import { installSignalHandlers } from './runtime/signals.ts';
 import { jsonReporter, plainReporter, printSummary } from './reporters.ts';
-import { buildJobFromFlags, parseDuration, FlagSpec } from './config.ts';
+import { buildJobFromFlags, parseDuration } from './config.ts';
 import { loop } from './core/loop.ts';
 import type { Job, LoopConfig } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
@@ -56,20 +56,21 @@ async function loadJob(file: string): Promise<{ job: Job; title: string }> {
 
 function buildFromFlags(flags: RunFlags): Job {
   const num = (v: string | undefined) => (v == null ? undefined : Number(v));
-  let spec;
   try {
-    spec = FlagSpec.parse({
-    prompt: flags.prompt ?? '',
-    engine: flags.engine,
-    workerModel: flags.workerModel,
-    validatorModel: flags.validatorModel,
-    reviewerModel: flags.reviewerModel,
-    max: num(flags.max),
-    untilAgent: flags.until,
-    threshold: flags.threshold != null ? Number(flags.threshold) : undefined,
-    startAgent: flags.start,
-    review: flags.review,
-    reviewThreshold: flags.reviewThreshold != null ? Number(flags.reviewThreshold) : undefined,
+    // Parsing/validation lives in buildJobFromFlags (single source of truth);
+    // we just shape the raw input and translate a Zod failure into a clean error.
+    return buildJobFromFlags({
+      prompt: flags.prompt ?? '',
+      engine: flags.engine,
+      workerModel: flags.workerModel,
+      validatorModel: flags.validatorModel,
+      reviewerModel: flags.reviewerModel,
+      max: num(flags.max),
+      untilAgent: flags.until,
+      threshold: num(flags.threshold),
+      startAgent: flags.start,
+      review: flags.review,
+      reviewThreshold: num(flags.reviewThreshold),
       interval: flags.interval != null ? parseDuration(flags.interval) : undefined,
       maxTokens: num(flags.maxTokens),
     });
@@ -79,7 +80,6 @@ function buildFromFlags(flags: RunFlags): Job {
     }
     throw e;
   }
-  return buildJobFromFlags(spec);
 }
 
 async function execute(file: string | undefined, flags: RunFlags): Promise<void> {
@@ -90,7 +90,14 @@ async function execute(file: string | undefined, flags: RunFlags): Promise<void>
   if (flags.apiKey) engineOptions.apiKey = flags.apiKey;
   if (flags.cliBinary) engineOptions.cliBinary = flags.cliBinary;
 
-  const state = flags.state ? (JSON.parse(flags.state) as Record<string, unknown>) : undefined;
+  let state: Record<string, unknown> | undefined;
+  if (flags.state) {
+    try {
+      state = JSON.parse(flags.state) as Record<string, unknown>;
+    } catch (e) {
+      throw new Error(`--state must be valid JSON: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   const mode: 'json' | 'plain' | 'tui' = flags.json ? 'json' : flags.tui === false || !process.stdout.isTTY ? 'plain' : 'tui';
 
   const hub = createHub();

@@ -63,6 +63,10 @@ export interface JobContext {
   readonly depth: number;
   /** Loop/step names from the root down to here. */
   readonly path: readonly string[];
+  /** The previous body outcome in the enclosing loop (used by `review`/gates). */
+  readonly lastOutcome?: Outcome;
+  /** The most recent failed-review outcome, so a restart can act on it. */
+  readonly lastReview?: Outcome;
   log(message: string, level?: LogLevel): void;
 }
 
@@ -122,9 +126,17 @@ export interface LoopConfig {
   /**
    * Runs when `until` is met. If it returns `pass`, the loop completes.
    * Any other status re-enters the loop — this is the "review fails, run the
-   * main loop again" behaviour, and `review` may itself be a `loop(...)`.
+   * main loop again" behaviour, and `review` may itself be a `loop(...)`. The
+   * failed review outcome is exposed to the next iteration as `ctx.lastReview`.
    */
   review?: Job;
+  /**
+   * Cap on consecutive failed reviews before giving up with `exhausted`.
+   * Bounds the review-restart cycle independently of `max`; strongly advised
+   * when `review` is set with no `max` (otherwise a worker/reviewer standoff
+   * never terminates). Default: unbounded (relies on `max`).
+   */
+  maxReviewRestarts?: number;
   /** Delay between iterations (polling intervals). Interruptible by abort. */
   delayMs?: number;
   retry?: RetryPolicy;

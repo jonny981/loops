@@ -30,6 +30,9 @@ export class ClaudeCliEngine implements Engine {
     const sub = execa(bin, args, {
       cwd: req.cwd,
       cancelSignal: signal,
+      // If the child ignores the SIGTERM from an abort/timeout, escalate to
+      // SIGKILL so a wedged subprocess can't make Ctrl-C hang.
+      forceKillAfterDelay: 5000,
       reject: false,
       timeout: req.timeoutMs,
       stripFinalNewline: false,

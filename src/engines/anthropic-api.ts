@@ -20,19 +20,33 @@ function isRetryable(error: unknown): boolean {
   return /connection|timeout|socket|network/i.test(name);
 }
 
+/** The slice of the Anthropic SDK this adapter actually consumes. */
+interface FinalMessage {
+  content: { type: string; text?: string }[];
+  usage: { input_tokens: number; output_tokens: number };
+  stop_reason: string | null;
+}
+interface MessageStreamLike {
+  on(event: 'text', cb: (delta: string) => void): void;
+  finalMessage(): Promise<FinalMessage>;
+}
+interface MessagesClientLike {
+  messages: { stream(body: unknown, opts?: { signal?: AbortSignal }): MessageStreamLike };
+}
+
 export class AnthropicApiEngine implements Engine {
   readonly name = 'anthropic-api';
-  // Typed loosely to avoid a hard structural dep on the SDK's class shape.
-  private clientPromise?: Promise<{ messages: { stream: (...a: unknown[]) => never } }>;
+  private clientPromise?: Promise<MessagesClientLike>;
 
   constructor(private readonly opts: EngineOptions = {}) {}
 
-  private async client() {
+  private async client(): Promise<MessagesClientLike> {
     if (!this.clientPromise) {
       this.clientPromise = import('@anthropic-ai/sdk').then((m) => {
         const Anthropic = m.default;
         const apiKey = this.opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-        return new Anthropic({ apiKey }) as never;
+        // One honest cast at the boundary to the structural shape we consume.
+        return new Anthropic({ apiKey }) as unknown as MessagesClientLike;
       });
     }
     return this.clientPromise;
@@ -43,16 +57,9 @@ export class AnthropicApiEngine implements Engine {
     const model = req.model ?? this.opts.defaultModel ?? 'claude-haiku-4-5-20251001';
     const maxTokens = req.maxTokens ?? 1024;
 
-    const attempt = async () => {
+    const attempt = async (): Promise<FinalMessage> => {
       try {
-        const stream = (client.messages.stream as unknown as (body: unknown, opts: unknown) => {
-          on: (event: 'text', cb: (delta: string) => void) => void;
-          finalMessage: () => Promise<{
-            content: { type: string; text?: string }[];
-            usage: { input_tokens: number; output_tokens: number };
-            stop_reason: string | null;
-          }>;
-        })(
+        const stream = client.messages.stream(
           {
             model,
             max_tokens: maxTokens,

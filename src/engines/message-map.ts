@@ -34,6 +34,7 @@ export function mapMessage(message: unknown, acc: Accumulator, onEvent: EngineEv
     case 'assistant': {
       const inner = (msg.message ?? {}) as AnyRecord;
       if (typeof inner.model === 'string') acc.model = inner.model;
+      if (typeof inner.stop_reason === 'string') acc.stopReason = inner.stop_reason;
       for (const block of asArray(inner.content)) {
         if (block.type === 'text' && typeof block.text === 'string') {
           acc.text += block.text;
@@ -75,7 +76,9 @@ export function mapMessage(message: unknown, acc: Accumulator, onEvent: EngineEv
       break;
     }
     case 'result': {
-      if (typeof msg.subtype === 'string') acc.stopReason = msg.subtype;
+      // `subtype` is the result *classification* (success / error_max_turns …),
+      // not the model stop reason — that is the sibling `stop_reason` field.
+      if (typeof msg.stop_reason === 'string') acc.stopReason = msg.stop_reason;
       const usage = msg.usage as AnyRecord | undefined;
       if (usage) {
         // result usage is authoritative for the turn

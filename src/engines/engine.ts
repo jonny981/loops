@@ -5,10 +5,12 @@
  */
 
 /**
- * Built-in adapter names. The union is open (`& {}` trick) so callers can name
- * and register their own engines — the core never assumes a fixed provider set.
+ * Built-in, registry-resolvable adapter names. The union is open (`& {}` trick)
+ * so callers can name and register their own engines — the core never assumes a
+ * fixed provider set. (`mock` is constructed directly in tests/examples, not
+ * registered by name, so it is intentionally not listed here.)
  */
-export type EngineName = 'agent-sdk' | 'claude-cli' | 'anthropic-api' | 'mock' | (string & {});
+export type EngineName = 'agent-sdk' | 'claude-cli' | 'anthropic-api' | (string & {});
 
 export interface Usage {
   inputTokens: number;
@@ -47,6 +49,11 @@ export type EngineEventSink = (event: EngineStreamEvent) => void;
 
 export interface Engine {
   readonly name: EngineName;
+  /**
+   * Run one fresh agent turn. Contract for the `usage` stream event: emit it
+   * **exactly once, at the end** of the turn — stats sums every `usage` event,
+   * so a backend that emits incremental usage mid-stream would inflate totals.
+   */
   run(
     req: AgentRequest,
     onEvent: EngineEventSink,

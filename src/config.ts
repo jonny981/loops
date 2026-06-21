@@ -42,8 +42,8 @@ export function parseDuration(value: string): number {
   return out;
 }
 
-/** Build the standard loop from validated flags. */
-export function buildJobFromFlags(input: FlagSpec): Job {
+/** Build the standard loop from flags. Parses + validates once, here. */
+export function buildJobFromFlags(input: z.input<typeof FlagSpec>): Job {
   const spec = FlagSpec.parse(input);
   const engine = spec.engine as EngineName | undefined;
 
@@ -51,8 +51,13 @@ export function buildJobFromFlags(input: FlagSpec): Job {
     label: 'worker',
     engine,
     model: spec.workerModel,
-    prompt: spec.prompt,
     maxTokens: spec.maxTokens,
+    // On a review-restart, fold the reviewer's objection into the next prompt
+    // so the retry is informed rather than a blind repeat.
+    prompt: (ctx) =>
+      ctx.lastReview
+        ? `${spec.prompt}\n\nYour previous attempt was REJECTED in review: ${ctx.lastReview.summary ?? ctx.lastReview.status}. Address that specifically this time.`
+        : spec.prompt,
   });
 
   const until = spec.untilAgent

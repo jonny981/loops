@@ -51,6 +51,10 @@ function coerceOne(fn: Condition | RawPredicate): Condition {
       return { met: r, reason: `predicate: ${r}` };
     }
     if (r && typeof r === 'object' && 'met' in r) {
+      const res = r as { met: unknown };
+      if (typeof res.met !== 'boolean') {
+        throw new LoopError({ code: 'VALIDATION', message: `condition returned a non-boolean "met": ${String(res.met)}` });
+      }
       return r as ConditionResult;
     }
     return { met: Boolean(r), reason: `coerced: ${String(r)}` };
@@ -174,24 +178,68 @@ function safeJson(value: unknown, limit = 4000): string {
   }
 }
 
-/** Extract the first balanced JSON object from a model reply. */
-function parseVerdict(text: string): Verdict {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start === -1 || end === -1 || end <= start) {
-    throw new LoopError({ code: 'VALIDATION', message: `validator returned no JSON: ${text.slice(0, 200)}` });
+/** Yield each top-level *balanced* JSON object in the text (strings/escapes aware). */
+function* balancedObjects(text: string): Generator<string> {
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf('{', cursor);
+    if (start === -1) return;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === '{') depth += 1;
+      else if (ch === '}' && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    if (end === -1) return; // unbalanced tail — nothing more to find
+    yield text.slice(start, end + 1);
+    cursor = end + 1;
   }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text.slice(start, end + 1));
-  } catch (e) {
-    throw new LoopError({ code: 'VALIDATION', message: 'validator JSON did not parse', cause: e });
-  }
-  const obj = raw as Record<string, unknown>;
+}
+
+function toVerdict(obj: Record<string, unknown>): Verdict {
   const verdict = obj.verdict === 'yes' ? 'yes' : 'no';
-  const confidence = clamp01(typeof obj.confidence === 'number' ? obj.confidence : 0);
+  // A "yes" with no numeric confidence means the model affirmed without scoring;
+  // treat that as confident rather than letting confidence default to 0 (which
+  // would make the gate silently never open).
+  const confidence = typeof obj.confidence === 'number' ? clamp01(obj.confidence) : verdict === 'yes' ? 1 : 0;
   const reason = typeof obj.reason === 'string' ? obj.reason : '(no reason given)';
   return { verdict, confidence, reason };
+}
+
+/**
+ * Pull a verdict from a model reply. Models often wrap JSON in prose or restate
+ * the input as a first object, so we scan every balanced object and prefer the
+ * one that actually carries a `verdict` key (falling back to the first object).
+ */
+function parseVerdict(text: string): Verdict {
+  let fallback: Record<string, unknown> | undefined;
+  for (const candidate of balancedObjects(text)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const obj = parsed as Record<string, unknown>;
+    if ('verdict' in obj) return toVerdict(obj);
+    fallback ??= obj;
+  }
+  if (fallback) return toVerdict(fallback);
+  throw new LoopError({ code: 'VALIDATION', message: `validator returned no JSON verdict: ${text.slice(0, 200)}` });
 }
 
 function clamp01(n: number): number {
@@ -235,10 +283,19 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         ctx.signal,
       );
     } catch (e) {
-      throw LoopError.from(e, { code: 'ENGINE', phase: 'until', path: ctx.path });
+      // phase is left to the caller (loop.ts) — this condition may be a
+      // start/until/stopOn/review gate and cannot know which.
+      throw LoopError.from(e, { code: 'ENGINE', path: ctx.path });
     }
 
-    const v = parseVerdict(result.text);
+    let v: Verdict;
+    try {
+      v = parseVerdict(result.text);
+    } catch {
+      // A flaky or malformed verdict must not crash the whole run; fail
+      // sceptically (gate stays closed) and let the loop continue/exhaust.
+      return { met: false, confidence: 0, reason: `unparseable verdict: ${result.text.slice(0, 120)}` };
+    }
     const met = v.verdict === 'yes' && v.confidence >= threshold;
     return {
       met,
@@ -257,7 +314,7 @@ export function gateJob(label: string, condition: ConditionInput): Job {
   const cond = toCondition(condition);
   return async (ctx) => {
     ctx.emit({ kind: 'job:start', ts: Date.now(), path: [...ctx.path], label });
-    const r = await cond(ctx, ctx.state.lastOutcome as Outcome | undefined);
+    const r = await cond(ctx, ctx.lastOutcome);
     const outcome: Outcome = {
       status: r.met ? 'pass' : 'fail',
       confidence: r.confidence,

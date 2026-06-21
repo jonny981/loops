@@ -5,7 +5,6 @@ import type { Outcome } from '../core/types.ts';
 export const glyph = {
   loop: '↻',
   dag: '▤',
-  job: '•',
   pass: '✔',
   fail: '✘',
   aborted: '◼',

@@ -45,14 +45,24 @@ describe('dag', () => {
     ).toThrow(/cycle/);
   });
 
-  it('optional dependency never blocks dependents', async () => {
+  it('an optional leaf failure does not fail the DAG', async () => {
+    const ran: string[] = [];
+    const { outcome } = await run(
+      dag({ name: 'o', nodes: { a: pass(ran, 'a'), notify: { job: fail(ran, 'notify'), optional: true } } }),
+      mockOpts,
+    );
+    expect(ran.sort()).toEqual(['a', 'notify']);
+    expect(outcome.status).toBe('pass'); // optional failure ignored
+  });
+
+  it('a failed dependency blocks a required dependent even when the dep is optional', async () => {
     const ran: string[] = [];
     const { outcome } = await run(
       dag({ name: 'o', nodes: { a: { job: fail(ran, 'a'), optional: true }, b: { job: pass(ran, 'b'), needs: ['a'] } } }),
       mockOpts,
     );
-    expect(ran.sort()).toEqual(['a', 'b']);
-    expect(outcome.status).toBe('pass');
+    expect(ran).toEqual(['a']); // b never runs against a failed dependency
+    expect(outcome.status).toBe('aborted');
   });
 
   it('skips a node whose `when` gate is unmet', async () => {
