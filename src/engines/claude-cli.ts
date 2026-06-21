@@ -29,7 +29,7 @@ export class ClaudeCliEngine implements Engine {
     // attach a `data` listener to stream stdout line-by-line as it arrives.
     const sub = execa(bin, args, {
       cwd: req.cwd,
-      signal,
+      cancelSignal: signal,
       reject: false,
       timeout: req.timeoutMs,
       stripFinalNewline: false,
