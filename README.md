@@ -1,0 +1,192 @@
+# loops
+
+Run a prompt/agent in a **loop with a fresh context every iteration**, with
+start/stop conditions, agent-validated convergence, review-restart, max
+iterations, message streaming, an Ink TUI, and an exit summary.
+
+One nestable primitive, borrowing the Jenkins instinct — **everything is a job**:
+
+- a **`Job`** is the universal runnable unit (`(ctx) => Promise<Outcome>`). Any
+  size: a single agent turn, or a whole nested loop.
+- **`loop()`** returns a `Job`, so loops nest by passing one as another's `body`
+  or `review`.
+- **`dag()`** (stages) returns a `Job` too, so loops and DAGs nest *both ways*.
+- **`Condition`** is the gate type (a Jenkins `when`); `agentCheck()` is a
+  Condition decided by a small validator model.
+- **`Engine`** is the pluggable, drop-in backend (a Jenkins agent/node) — the
+  agent launch is completely agnostic of harness, model, framework, or provider.
+
+It is a self-contained npm island (not part of the pnpm workspace), like
+`tools/oem-reverse-engineer`.
+
+## Install
+
+```bash
+cd tools/loops
+npm install
+```
+
+## Quick start
+
+Flags mode — the standard worker → until → review loop:
+
+```bash
+# loop a worker until a small model is 85% sure it's done, restarting on a failed review
+loops run \
+  --prompt "Continue implementing the feature in TASK.md; report what changed." \
+  --engine agent-sdk \
+  --until "Is the feature fully implemented with passing tests?" --threshold 0.85 \
+  --validator-model claude-haiku-4-5-20251001 \
+  --review "Does it pass a strict review with no blockers?" \
+  --max 20
+```
+
+Definition-file mode — full power and nesting:
+
+```bash
+loops run examples/confidence-gate.loop.ts          # Ink TUI
+loops run examples/confidence-gate.loop.ts --no-tui  # plain line logs
+loops run examples/confidence-gate.loop.ts --json    # NDJSON event stream
+```
+
+Offline demo (no network/engine):
+
+```bash
+npm run example:poll
+```
+
+## The primitive
+
+```ts
+import { defineJob, loop, agentJob, agentCheck, gateJob, parallel } from 'loops';
+
+export default defineJob(
+  loop({
+    name: 'build-feature',
+    max: 20,
+
+    // runs each iteration with a FRESH context
+    body: agentJob({
+      label: 'worker',
+      engine: 'agent-sdk',
+      prompt: (ctx) => `Iteration ${ctx.iteration}: make concrete progress.`,
+    }),
+
+    // stop only when a small model is confident — an agent-validated condition
+    until: agentCheck({
+      engine: 'anthropic-api',
+      model: 'claude-haiku-4-5-20251001',
+      question: 'Is the feature fully implemented with passing tests?',
+      threshold: 0.85,
+    }),
+
+    // when `until` is met, run a review; if it does NOT pass, the loop runs again.
+    // here the review is two reviewers in PARALLEL (a dag) — loops within loops.
+    review: parallel('reviewers', {
+      security: gateJob('security', agentCheck({ question: 'No security issues?', threshold: 0.9 })),
+      quality: gateJob('quality', agentCheck({ question: 'Meets the quality bar?', threshold: 0.85 })),
+    }),
+  }),
+);
+```
+
+### `loop(config)`
+
+| field | meaning |
+|---|---|
+| `body` | the job run each iteration (a `Job` — pass a `loop()`/`dag()` to nest) |
+| `start` | gate before iterating; unmet ⇒ `aborted` |
+| `until` | checked after each body run; met ⇒ stop (then `review`) |
+| `stopOn` | hard early-exit checked each iteration; met ⇒ `aborted` |
+| `max` | iteration cap; reached without passing ⇒ `exhausted` |
+| `review` | runs when `until` is met; non-`pass` re-enters the loop |
+| `delayMs` | delay between iterations (polling); interruptible by abort |
+| `retry` | `{ onError: 'continue' \| 'fail', maxConsecutive?, backoffMs? }` |
+| `onIteration` / `onComplete` | hooks (`onComplete` ≈ Jenkins `post { always }`) |
+
+With no `until`, a `pass` body ends the loop.
+
+### Conditions — one or many, deterministic or agent
+
+`start` / `until` / `stopOn` accept **one item or many**, freely mixing a bare
+predicate and an agent check. Arrays default to `all` (wrap in `any(...)` for or):
+
+```ts
+until: [
+  (ctx, last) => last?.data != null,                  // deterministic
+  agentCheck({ question: 'Good enough to ship?', threshold: 0.9 }),  // agent-validated
+]
+```
+
+Builders: `predicate`, `bodyPassed`, `minConfidence`, `all`, `any`, `not`,
+`always`, `never`, `agentCheck`, and `gateJob` (lift a Condition into a `Job`,
+e.g. a reviewer).
+
+### Stages / DAG
+
+```ts
+import { dag, sequence, parallel } from 'loops';
+
+dag({
+  name: 'ship',
+  nodes: {
+    research: agentJob({ label: 'research', prompt: '…' }),
+    implement: { needs: ['research'], job: loop({ /* … */ }) },   // a loop as a node
+    test:      { needs: ['implement'], job: agentJob({ label: 'test', prompt: '…' }) },
+    review:    { needs: ['test'], when: () => true, job: gateJob('review', agentCheck({ /* … */ })) },
+  },
+  concurrency: 2,
+});
+```
+
+`needs` = dependencies; `optional` nodes never block/fail the DAG; an unmet
+`when` skips a node (counts green). Cycles are detected before any work runs.
+`sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar.
+
+## Engines (drop-in)
+
+The agent launch only ever touches the `Engine` interface. Built-ins:
+
+| name | backend | notes |
+|---|---|---|
+| `agent-sdk` | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call; uses host Claude auth |
+| `claude-cli` | `claude` subprocess (`execa`) | fresh process per call |
+| `anthropic-api` | `@anthropic-ai/sdk` | token-level streaming; cheapest for validators; needs `ANTHROPIC_API_KEY` |
+| `mock` | scripted, offline | for tests/examples |
+
+Select per-run (`--engine`, `RunOptions.engine`) or per-job/condition
+(`engine:` accepts a name **or** a ready-made `Engine` instance). Add your own:
+
+```ts
+import { run, type Engine } from 'loops';
+
+const myEngine: Engine = {
+  name: 'my-provider',
+  async run(req, onEvent, signal) {
+    // call any provider/framework; stream via onEvent({ type: 'text', delta })
+    return { text, usage: { inputTokens, outputTokens }, model: req.model ?? 'x' };
+  },
+};
+
+await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
+```
+
+That is the whole contract — implement `run`, register a name. No coupling to a
+framework; a managed/durable runner could later be a drop-in engine too.
+
+## Output
+
+- **Ink TUI** (default on a TTY): live loop/dag tree, streaming pane, stats footer; `q`/Esc/Ctrl-C aborts cleanly.
+- **`--no-tui`**: streamed line logs.
+- **`--json`**: NDJSON event stream on stdout.
+
+Every mode prints an exit summary (result, per-loop iterations, review tallies,
+token usage by model, errors). Exit codes: `pass=0`, `fail=1`, `exhausted=2`,
+`aborted=130`.
+
+## Develop
+
+```bash
+npm test          # vitest (offline, mock engine — covers loop/dag/condition paths)
+npm run typecheck # tsc --noEmit
+```

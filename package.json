@@ -1,0 +1,48 @@
+{
+  "name": "loops",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run a prompt/agent in a loop with a fresh context every iteration. A single nestable loop primitive with start/stop/agent-validated conditions, review-restart, max iterations, streaming, an Ink TUI, and an exit summary.",
+  "type": "module",
+  "bin": {
+    "loops": "./bin/loops.mjs"
+  },
+  "exports": {
+    ".": "./src/api.ts"
+  },
+  "scripts": {
+    "loops": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "example:poll": "tsx src/index.ts run examples/simple-poll.loop.ts --no-tui",
+    "example:gate": "tsx src/index.ts run examples/confidence-gate.loop.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.185",
+    "@anthropic-ai/sdk": "^0.105.0",
+    "commander": "^15.0.0",
+    "execa": "^9.6.1",
+    "ink": "^7.1.0",
+    "ms": "^2.1.3",
+    "p-limit": "^7.3.0",
+    "p-retry": "^8.0.0",
+    "p-timeout": "^7.0.1",
+    "picocolors": "^1.1.1",
+    "react": "^19.2.7",
+    "toposort": "^2.0.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/ms": "^2.1.0",
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.2.17",
+    "@types/toposort": "^2.0.7",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

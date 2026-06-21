@@ -1,0 +1,95 @@
+/**
+ * Shared mapping from the Claude stream-json message schema to our neutral
+ * `EngineStreamEvent`s. Both the Agent SDK and the `claude` CLI emit this same
+ * schema, so the two adapters share this one function and stay tiny.
+ *
+ * The boundary with an external schema is the right place for a little `any`:
+ * we read defensively so a minor upstream shape change doesn't crash a run.
+ */
+
+import type { EngineEventSink, Usage } from './engine.ts';
+
+export interface Accumulator {
+  text: string;
+  usage: Usage;
+  model: string;
+  stopReason?: string;
+  /** Set once we have seen token deltas, so we don't double-emit full blocks. */
+  sawDelta: boolean;
+}
+
+export function newAccumulator(model: string): Accumulator {
+  return { text: '', usage: { inputTokens: 0, outputTokens: 0 }, model, sawDelta: false };
+}
+
+type AnyRecord = Record<string, unknown>;
+
+function asArray(value: unknown): AnyRecord[] {
+  return Array.isArray(value) ? (value as AnyRecord[]) : [];
+}
+
+export function mapMessage(message: unknown, acc: Accumulator, onEvent: EngineEventSink): void {
+  const msg = (message ?? {}) as AnyRecord;
+  switch (msg.type) {
+    case 'assistant': {
+      const inner = (msg.message ?? {}) as AnyRecord;
+      if (typeof inner.model === 'string') acc.model = inner.model;
+      for (const block of asArray(inner.content)) {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          acc.text += block.text;
+          if (!acc.sawDelta) onEvent({ type: 'text', delta: block.text });
+        } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
+          if (!acc.sawDelta) onEvent({ type: 'thinking', delta: block.thinking });
+        } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+          onEvent({ type: 'tool', name: block.name, phase: 'use' });
+        }
+      }
+      const usage = inner.usage as AnyRecord | undefined;
+      if (usage) {
+        acc.usage.inputTokens += num(usage.input_tokens);
+        acc.usage.outputTokens += num(usage.output_tokens);
+      }
+      break;
+    }
+    case 'user': {
+      const inner = (msg.message ?? {}) as AnyRecord;
+      for (const block of asArray(inner.content)) {
+        if (block.type === 'tool_result') {
+          onEvent({ type: 'tool', name: typeof block.name === 'string' ? block.name : 'tool', phase: 'result' });
+        }
+      }
+      break;
+    }
+    case 'stream_event': {
+      const event = (msg.event ?? {}) as AnyRecord;
+      if (event.type === 'content_block_delta') {
+        const delta = (event.delta ?? {}) as AnyRecord;
+        if (delta.type === 'text_delta' && typeof delta.text === 'string') {
+          acc.sawDelta = true;
+          onEvent({ type: 'text', delta: delta.text });
+        } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+          acc.sawDelta = true;
+          onEvent({ type: 'thinking', delta: delta.thinking });
+        }
+      }
+      break;
+    }
+    case 'result': {
+      if (typeof msg.subtype === 'string') acc.stopReason = msg.subtype;
+      const usage = msg.usage as AnyRecord | undefined;
+      if (usage) {
+        // result usage is authoritative for the turn
+        const i = num(usage.input_tokens);
+        const o = num(usage.output_tokens);
+        if (i) acc.usage.inputTokens = i;
+        if (o) acc.usage.outputTokens = o;
+      }
+      if (!acc.text && typeof msg.result === 'string') acc.text = msg.result;
+      break;
+    }
+  }
+}
+
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
