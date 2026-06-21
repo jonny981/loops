@@ -7,6 +7,7 @@
  * for an NDJSON event stream. Ctrl-C / `q` aborts cleanly and still summarises.
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import React from 'react';
@@ -46,6 +47,9 @@ interface RunFlags {
 
 async function loadJob(file: string): Promise<{ job: Job; title: string }> {
   const resolved = path.resolve(file);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`loop file not found: ${file}\n(omit the file argument to use flags mode, or run \`loops run --help\`)`);
+  }
   const mod = (await import(pathToFileURL(resolved).href)) as Record<string, unknown>;
   const def = mod.default ?? mod.job ?? mod.loop;
   const title = path.basename(file).replace(/\.(loop\.)?(t|j)sx?$/, '');
@@ -92,11 +96,16 @@ async function execute(file: string | undefined, flags: RunFlags): Promise<void>
 
   let state: Record<string, unknown> | undefined;
   if (flags.state) {
+    let parsed: unknown;
     try {
-      state = JSON.parse(flags.state) as Record<string, unknown>;
+      parsed = JSON.parse(flags.state);
     } catch (e) {
       throw new Error(`--state must be valid JSON: ${e instanceof Error ? e.message : String(e)}`);
     }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`--state must be a JSON object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`);
+    }
+    state = parsed as Record<string, unknown>;
   }
   const mode: 'json' | 'plain' | 'tui' = flags.json ? 'json' : flags.tui === false || !process.stdout.isTTY ? 'plain' : 'tui';
 

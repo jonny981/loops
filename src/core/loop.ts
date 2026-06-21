@@ -15,14 +15,22 @@
  * The review-restart cycle is bounded: by `max` (shared with ordinary
  * iterations) and, independently, by `maxReviewRestarts`. The failed review is
  * threaded to the next iteration as `ctx.lastReview` so the body can act on it.
+ *
+ * Every piece of user code (conditions, the body, hooks, the review) is guarded:
+ * a throw is classified and ends the loop with `fail`, but `loop:end` and the
+ * `onComplete` post-action still run.
  */
 
 import type { JobContext, LoopConfig, Outcome, Job } from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
-import { LoopError } from './errors.ts';
+import { LoopError, type LoopPhase } from './errors.ts';
+
+const VALID_STATUS = new Set<Outcome['status']>(['pass', 'fail', 'aborted', 'exhausted']);
+const yieldToLoop = (): Promise<void> => new Promise((r) => setImmediate(r));
 
 export function loop(config: LoopConfig): Job {
+  if (!config.name) throw new LoopError({ code: 'CONFIG', message: 'loop() requires a non-empty name' });
   const start = config.start ? toCondition(config.start) : undefined;
   const until = config.until ? toCondition(config.until) : undefined;
   const stopOn = config.stopOn ? toCondition(config.stopOn) : undefined;
@@ -34,98 +42,146 @@ export function loop(config: LoopConfig): Job {
     const ts = () => Date.now();
 
     let lastReview: Outcome | undefined;
-    const ctxAt = (iteration: number, lastOutcome?: Outcome): JobContext =>
-      childContext(parent, { depth, path, iteration, lastOutcome, lastReview });
+    let iteration = 0;
+    const ctxAt = (iter: number, lastOutcome?: Outcome): JobContext =>
+      childContext(parent, { depth, path, iteration: iter, lastOutcome, lastReview });
 
     parent.emit({ kind: 'loop:start', ts: ts(), path, depth, max: config.max });
 
     const finish = async (outcome: Outcome, iterations: number): Promise<Outcome> => {
       parent.emit({ kind: 'loop:end', ts: ts(), path, outcome, iterations });
-      if (config.onComplete) await config.onComplete(outcome, ctxAt(iterations));
+      if (config.onComplete) {
+        try {
+          await config.onComplete(outcome, ctxAt(iterations));
+        } catch (e) {
+          const error = LoopError.from(e, { code: 'BODY', phase: 'review', path, iteration: iterations });
+          parent.emit({ kind: 'error', ts: ts(), path, message: `onComplete threw: ${error.message}`, code: error.code });
+        }
+      }
       return outcome;
     };
 
-    // 1. start gate
-    if (start) {
-      const r = await start(ctxAt(0), undefined);
-      parent.emit({ kind: 'loop:condition', ts: ts(), path, which: 'start', result: r });
-      if (!r.met) return finish({ status: 'aborted', summary: `start gate not met: ${r.reason}` }, 0);
-    }
-
-    let iteration = 0;
-    let last: Outcome | undefined;
-    let consecutiveErrors = 0;
-    let consecutiveReviewFails = 0;
-
-    // 2. iterate
-    while (true) {
-      if (parent.signal.aborted) return finish({ status: 'aborted', summary: 'aborted by signal' }, iteration);
-      if (config.max != null && iteration >= config.max) {
-        return finish(
-          { status: 'exhausted', summary: last?.summary ?? `reached max iterations (${config.max})`, confidence: last?.confidence, data: last?.data },
-          iteration,
-        );
-      }
-
-      iteration += 1;
-      const ctx = ctxAt(iteration, last);
-      parent.emit({ kind: 'loop:iteration', ts: ts(), path, iteration });
-
-      // run the body (fresh context this turn)
+    // Evaluate a gate, classifying any throw with the gate's phase.
+    const gate = async (cond: NonNullable<typeof until>, which: LoopPhase, ctx: JobContext, last: Outcome | undefined) => {
       try {
-        last = await config.body(ctx);
-        consecutiveErrors = 0;
+        return await cond(ctx, last);
       } catch (e) {
-        const error = LoopError.from(e, { code: 'BODY', phase: 'body', path, iteration });
-        parent.emit({ kind: 'error', ts: ts(), path, message: error.message, code: error.code });
-        consecutiveErrors += 1;
-        const tooMany = config.retry?.maxConsecutive != null && consecutiveErrors >= config.retry.maxConsecutive;
-        if (onError === 'fail' || tooMany) return finish({ status: 'fail', summary: error.message, error }, iteration);
-        last = { status: 'fail', summary: error.message, error };
-        if (config.retry?.backoffMs) await delay(config.retry.backoffMs, parent.signal);
+        throw LoopError.from(e, { code: 'VALIDATION', phase: which, path, iteration });
       }
-      if (config.onIteration) await config.onIteration(last, ctx);
+    };
 
-      // hard early-exit
-      if (stopOn) {
-        const r = await stopOn(ctx, last);
-        parent.emit({ kind: 'loop:condition', ts: ts(), path, which: 'stopOn', result: r });
-        if (r.met) return finish({ status: 'aborted', summary: `stopOn met: ${r.reason}`, data: last?.data }, iteration);
+    try {
+      // 1. start gate
+      if (start) {
+        const r = await gate(start, 'start', ctxAt(0), undefined);
+        parent.emit({ kind: 'loop:condition', ts: ts(), path, which: 'start', result: r });
+        if (!r.met) return finish({ status: 'aborted', summary: `start gate not met: ${r.reason}` }, 0);
       }
 
-      // convergence check: explicit `until`, else "did the body pass?"
-      const conv = until
-        ? await until(ctx, last)
-        : { met: last.status === 'pass', confidence: last.confidence, reason: `body status = ${last.status}` };
-      if (until) parent.emit({ kind: 'loop:condition', ts: ts(), path, which: 'until', result: conv });
+      let last: Outcome | undefined;
+      let consecutiveErrors = 0;
+      let consecutiveReviewFails = 0;
 
-      if (conv.met) {
-        if (!config.review) {
-          return finish({ status: 'pass', confidence: conv.confidence ?? last.confidence, summary: last.summary, data: last.data }, iteration);
-        }
-        const reviewOutcome = await config.review(ctxAt(iteration, last));
-        parent.emit({ kind: 'loop:review', ts: ts(), path, outcome: reviewOutcome });
-        if (reviewOutcome.status === 'pass') {
-          consecutiveReviewFails = 0;
+      // 2. iterate
+      while (true) {
+        await yieldToLoop(); // ensure an abort/SIGINT can be delivered even with a synchronous body
+        if (parent.signal.aborted) return finish({ status: 'aborted', summary: 'aborted by signal' }, iteration);
+        if (config.max != null && iteration >= config.max) {
           return finish(
-            { status: 'pass', confidence: reviewOutcome.confidence ?? conv.confidence, summary: reviewOutcome.summary ?? last.summary, data: last.data },
+            { status: 'exhausted', summary: last?.summary ?? `reached max iterations (${config.max})`, confidence: last?.confidence, data: last?.data },
             iteration,
           );
         }
-        // review rejected — thread the verdict to the next iteration and bound the cycle
-        consecutiveReviewFails += 1;
-        lastReview = reviewOutcome;
-        parent.state.lastReview = reviewOutcome;
-        parent.log(`review did not pass (${reviewOutcome.summary ?? reviewOutcome.status}); re-entering ${config.name}`, 'warn');
-        if (config.maxReviewRestarts != null && consecutiveReviewFails >= config.maxReviewRestarts) {
-          return finish(
-            { status: 'exhausted', summary: `review rejected ${consecutiveReviewFails}× (maxReviewRestarts)`, data: last.data },
-            iteration,
-          );
-        }
-      }
 
-      if (config.delayMs) await delay(config.delayMs, parent.signal);
+        iteration += 1;
+        const ctx = ctxAt(iteration, last);
+        parent.emit({ kind: 'loop:iteration', ts: ts(), path, iteration });
+
+        // run the body (fresh context this turn)
+        let bodyThrew = false;
+        try {
+          last = await config.body(ctx);
+          consecutiveErrors = 0;
+        } catch (e) {
+          bodyThrew = true;
+          const error = LoopError.from(e, { code: 'BODY', phase: 'body', path, iteration });
+          parent.emit({ kind: 'error', ts: ts(), path, message: error.message, code: error.code });
+          consecutiveErrors += 1;
+          // A thrown body error is governed by the retry policy (default: continue).
+          const tooMany = config.retry?.maxConsecutive != null && consecutiveErrors >= config.retry.maxConsecutive;
+          if (onError === 'fail' || tooMany) return finish({ status: 'fail', summary: error.message, error }, iteration);
+          last = { status: 'fail', summary: error.message, error };
+          if (config.retry?.backoffMs) await delay(config.retry.backoffMs, parent.signal);
+        }
+
+        // a malformed Outcome (e.g. a body that forgot `status`) is a bug — fail loudly, don't spin
+        if (!last || !VALID_STATUS.has(last.status)) {
+          const error = new LoopError({ code: 'VALIDATION', phase: 'body', path, iteration, message: `body returned an Outcome with no valid "status" (got ${JSON.stringify(last?.status)})` });
+          parent.emit({ kind: 'error', ts: ts(), path, message: error.message, code: error.code });
+          return finish({ status: 'fail', summary: error.message, error }, iteration);
+        }
+        // A *returned* fail outcome carrying an unrecoverable error (e.g. an
+        // engine auth/config failure) must not loop to `exhausted`. Thrown
+        // errors are excluded — the retry policy above owns those.
+        if (!bodyThrew && last.status === 'fail' && last.error && !last.error.retryable) {
+          return finish({ status: 'fail', summary: last.summary, error: last.error }, iteration);
+        }
+
+        if (config.onIteration) {
+          try {
+            await config.onIteration(last, ctx);
+          } catch (e) {
+            throw LoopError.from(e, { code: 'VALIDATION', phase: 'body', path, iteration });
+          }
+        }
+
+        // hard early-exit
+        if (stopOn) {
+          const r = await gate(stopOn, 'stopOn', ctx, last);
+          parent.emit({ kind: 'loop:condition', ts: ts(), path, which: 'stopOn', result: r });
+          if (r.met) return finish({ status: 'aborted', summary: `stopOn met: ${r.reason}`, data: last.data }, iteration);
+        }
+
+        // convergence check: explicit `until`, else "did the body pass?"
+        const conv = until
+          ? await gate(until, 'until', ctx, last)
+          : { met: last.status === 'pass', confidence: last.confidence, reason: `body status = ${last.status}` };
+        if (until) parent.emit({ kind: 'loop:condition', ts: ts(), path, which: 'until', result: conv });
+
+        if (conv.met) {
+          if (!config.review) {
+            return finish({ status: 'pass', confidence: conv.confidence ?? last.confidence, summary: last.summary, data: last.data }, iteration);
+          }
+          let reviewOutcome: Outcome;
+          try {
+            reviewOutcome = await config.review(ctxAt(iteration, last));
+          } catch (e) {
+            throw LoopError.from(e, { code: 'VALIDATION', phase: 'review', path, iteration });
+          }
+          parent.emit({ kind: 'loop:review', ts: ts(), path, outcome: reviewOutcome });
+          if (reviewOutcome.status === 'pass') {
+            return finish(
+              { status: 'pass', confidence: reviewOutcome.confidence ?? conv.confidence, summary: reviewOutcome.summary ?? last.summary, data: last.data },
+              iteration,
+            );
+          }
+          // review rejected — thread the verdict to the next iteration (context-scoped,
+          // not run-global, so concurrent sibling loops don't cross-contaminate) and
+          // bound the restart cycle.
+          consecutiveReviewFails += 1;
+          lastReview = reviewOutcome;
+          parent.log(`review did not pass (${reviewOutcome.summary ?? reviewOutcome.status}); re-entering ${config.name}`, 'warn');
+          if (config.maxReviewRestarts != null && consecutiveReviewFails >= config.maxReviewRestarts) {
+            return finish({ status: 'exhausted', summary: `review rejected ${consecutiveReviewFails}× (maxReviewRestarts)`, data: last.data }, iteration);
+          }
+        }
+
+        if (config.delayMs) await delay(config.delayMs, parent.signal);
+      }
+    } catch (e) {
+      const error = LoopError.from(e, { code: 'UNKNOWN', path, iteration });
+      parent.emit({ kind: 'error', ts: ts(), path, message: error.message, code: error.code });
+      return finish({ status: 'fail', summary: error.message, error }, iteration);
     }
   };
 }

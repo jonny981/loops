@@ -42,12 +42,21 @@ export class AnthropicApiEngine implements Engine {
 
   private async client(): Promise<MessagesClientLike> {
     if (!this.clientPromise) {
-      this.clientPromise = import('@anthropic-ai/sdk').then((m) => {
-        const Anthropic = m.default;
-        const apiKey = this.opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+      const apiKey = this.opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        // Fail fast with an actionable, non-retryable error instead of leaking
+        // the SDK's internal "could not resolve authentication method" message.
+        throw new LoopError({
+          code: 'CONFIG',
+          phase: 'engine',
+          retryable: false,
+          message: 'the anthropic-api engine needs an API key — set ANTHROPIC_API_KEY or pass --api-key (or use the agent-sdk / claude-cli engine, which use host Claude auth)',
+        });
+      }
+      this.clientPromise = import('@anthropic-ai/sdk').then(
         // One honest cast at the boundary to the structural shape we consume.
-        return new Anthropic({ apiKey }) as unknown as MessagesClientLike;
-      });
+        (m) => new m.default({ apiKey }) as unknown as MessagesClientLike,
+      );
     }
     return this.clientPromise;
   }

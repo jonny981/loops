@@ -92,6 +92,10 @@ export default defineJob(
 );
 ```
 
+> The `agentCheck` calls above use the `anthropic-api` engine, which needs
+> `ANTHROPIC_API_KEY`. To run keyless via host Claude auth, set their
+> `engine: 'claude-cli'` (or `'agent-sdk'`) instead.
+
 ### `loop(config)`
 
 | field | meaning |

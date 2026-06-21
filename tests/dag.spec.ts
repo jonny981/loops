@@ -62,7 +62,9 @@ describe('dag', () => {
       mockOpts,
     );
     expect(ran).toEqual(['a']); // b never runs against a failed dependency
-    expect(outcome.status).toBe('aborted');
+    // a required node left undone by an upstream failure is a fail (exit 1),
+    // not a cancellation (aborted/130).
+    expect(outcome.status).toBe('fail');
   });
 
   it('skips a node whose `when` gate is unmet', async () => {

@@ -26,6 +26,7 @@ function normalize(node: DagNode | Job): DagNode {
 }
 
 export function dag(config: DagConfig): Job {
+  if (!config.name) throw new LoopError({ code: 'CONFIG', message: 'dag() requires a non-empty name' });
   const names = Object.keys(config.nodes);
   const nodes = new Map<string, DagNode>(names.map((n) => [n, normalize(config.nodes[n]!)]));
 
@@ -59,7 +60,9 @@ export function dag(config: DagConfig): Job {
     const memo = new Map<string, Promise<Outcome>>();
     let stopped = false;
 
-    const childCtx = (): JobContext => childContext(parent, { depth, path });
+    // Each node runs under its own name in the path, so a nested job (e.g. a
+    // loop) is uniquely addressable for stats/logs even across same-named siblings.
+    const nodeCtx = (name: string): JobContext => childContext(parent, { depth, path: [...path, name] });
 
     const record = (name: string, outcome: Outcome, phase: 'done' | 'skip'): Outcome => {
       results.set(name, outcome);
@@ -75,32 +78,35 @@ export function dag(config: DagConfig): Job {
       if (existing) return existing;
       const node = nodes.get(name)!;
       const promise = (async (): Promise<Outcome> => {
-        const needs = node.needs ?? [];
-        const deps = await Promise.all(needs.map(run));
-        // A non-pass dependency blocks this node — a declared `needs` is a real
-        // data dependency, so even a failed *optional* producer blocks a
-        // consumer (skipped deps come back with status 'pass', so they're green).
-        const blocked = needs.some((_, i) => deps[i]!.status !== 'pass');
-        if (blocked) return record(name, { status: 'aborted', summary: 'blocked by a failed dependency' }, 'done');
-        if (parent.signal.aborted || stopped) return record(name, { status: 'aborted', summary: 'aborted before start' }, 'done');
+        // Whole node is guarded: a throw anywhere (dep resolution, `when`, the
+        // job) becomes a recorded outcome, so the DAG always reaches `dag:end`.
+        try {
+          const needs = node.needs ?? [];
+          const deps = await Promise.all(needs.map(run));
+          // A non-pass dependency blocks this node — a declared `needs` is a real
+          // data dependency, so even a failed *optional* producer blocks a
+          // consumer (skipped deps come back with status 'pass', so they're green).
+          const blocked = needs.some((_, i) => deps[i]!.status !== 'pass');
+          if (blocked) return record(name, { status: 'aborted', summary: 'blocked by a failed dependency' }, 'done');
+          if (parent.signal.aborted || stopped) return record(name, { status: 'aborted', summary: 'aborted before start' }, 'done');
 
-        if (node.when) {
-          const r = await toCondition(node.when)(childCtx(), undefined);
-          if (!r.met) return record(name, { status: 'pass', summary: `skipped: ${r.reason}`, data: { skipped: true } }, 'skip');
+          // `when` + the job both run inside the concurrency limit, so an
+          // agentCheck gate counts against the cap (it's real backend load).
+          const result = await limit(async (): Promise<{ outcome: Outcome; phase: 'done' | 'skip' }> => {
+            if (parent.signal.aborted || stopped) return { outcome: { status: 'aborted', summary: 'aborted before start' }, phase: 'done' };
+            if (node.when) {
+              const r = await toCondition(node.when)(nodeCtx(name), undefined);
+              if (!r.met) return { outcome: { status: 'pass', summary: `skipped: ${r.reason}`, data: { skipped: true } }, phase: 'skip' };
+            }
+            parent.emit({ kind: 'dag:node', ts: ts(), path, node: name, phase: 'start' });
+            return { outcome: await node.job(nodeCtx(name)), phase: 'done' };
+          });
+          return record(name, result.outcome, result.phase);
+        } catch (e) {
+          const error = LoopError.from(e, { code: 'BODY', phase: 'body', path: [...path, name] });
+          parent.emit({ kind: 'error', ts: ts(), path: [...path, name], message: error.message, code: error.code });
+          return record(name, { status: 'fail', summary: error.message, error }, 'done');
         }
-
-        const outcome = await limit(async (): Promise<Outcome> => {
-          if (parent.signal.aborted || stopped) return { status: 'aborted', summary: 'aborted before start' };
-          parent.emit({ kind: 'dag:node', ts: ts(), path, node: name, phase: 'start' });
-          try {
-            return await node.job(childCtx());
-          } catch (e) {
-            const error = LoopError.from(e, { code: 'BODY', phase: 'body', path: [...path, name] });
-            parent.emit({ kind: 'error', ts: ts(), path: [...path, name], message: error.message, code: error.code });
-            return { status: 'fail', summary: error.message, error };
-          }
-        });
-        return record(name, outcome, 'done');
       })();
       memo.set(name, promise);
       return promise;
@@ -112,10 +118,13 @@ export function dag(config: DagConfig): Job {
     const requiredAborted = names.filter((n) => results.get(n)?.status === 'aborted' && nodes.get(n)!.optional !== true);
     const data = Object.fromEntries(results);
     let outcome: Outcome;
-    if (requiredFailed.length > 0) {
-      outcome = { status: 'fail', summary: `dag "${config.name}": ${requiredFailed.length} node(s) failed`, data };
-    } else if (parent.signal.aborted || requiredAborted.length > 0) {
-      outcome = { status: 'aborted', summary: `dag "${config.name}" did not complete`, data };
+    if (parent.signal.aborted) {
+      // a genuine user/signal cancellation
+      outcome = { status: 'aborted', summary: `dag "${config.name}" aborted`, data };
+    } else if (requiredFailed.length > 0 || requiredAborted.length > 0) {
+      // a real failure (direct, or a required node left undone by an upstream
+      // failure) is a fail (exit 1), distinct from a cancellation (exit 130).
+      outcome = { status: 'fail', summary: `dag "${config.name}": ${requiredFailed.length + requiredAborted.length} required node(s) did not complete`, data };
     } else {
       outcome = { status: 'pass', summary: `dag "${config.name}": all ${names.length} node(s) green`, data };
     }

@@ -73,7 +73,7 @@ export function buildJobFromFlags(input: z.input<typeof FlagSpec>): Job {
     : undefined;
 
   return loop({
-    name: 'loop',
+    name: 'main',
     body: worker,
     start,
     until,
