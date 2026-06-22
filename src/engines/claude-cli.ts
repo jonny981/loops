@@ -5,8 +5,13 @@
  */
 
 import { execa } from 'execa';
-
-import type { AgentRequest, AgentResult, Engine, EngineEventSink, EngineOptions } from './engine.ts';
+import type {
+  AgentRequest,
+  AgentResult,
+  Engine,
+  EngineEventSink,
+  EngineOptions,
+} from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
 import { redactSecrets } from '../core/redact.ts';
@@ -15,13 +20,18 @@ export class ClaudeCliEngine implements Engine {
   readonly name = 'claude-cli';
   constructor(private readonly opts: EngineOptions = {}) {}
 
-  async run(req: AgentRequest, onEvent: EngineEventSink, signal: AbortSignal): Promise<AgentResult> {
+  async run(
+    req: AgentRequest,
+    onEvent: EngineEventSink,
+    signal: AbortSignal,
+  ): Promise<AgentResult> {
     const bin = this.opts.cliBinary ?? 'claude';
     const model = req.model ?? this.opts.defaultModel;
     const args = ['-p', '--output-format', 'stream-json', '--verbose'];
     if (model) args.push('--model', model);
     if (req.system) args.push('--append-system-prompt', req.system);
-    if (req.allowedTools?.length) args.push('--allowedTools', req.allowedTools.join(','));
+    if (req.allowedTools?.length)
+      args.push('--allowedTools', req.allowedTools.join(','));
     if (this.opts.cliArgs?.length) args.push(...this.opts.cliArgs);
     // `--` ends option parsing so a prompt starting with `-` can't be
     // mis-interpreted by `claude` as a flag (argument smuggling).
@@ -33,6 +43,9 @@ export class ClaudeCliEngine implements Engine {
     const sub = execa(bin, args, {
       cwd: req.cwd,
       cancelSignal: signal,
+      // The prompt is passed as an argument, not piped — don't let `claude -p`
+      // stall waiting on stdin.
+      stdin: 'ignore',
       // If the child ignores the SIGTERM from an abort/timeout, escalate to
       // SIGKILL so a wedged subprocess can't make Ctrl-C hang.
       forceKillAfterDelay: 5000,
@@ -64,11 +77,19 @@ export class ClaudeCliEngine implements Engine {
     const result = await sub;
     if (buffer) flush(buffer);
 
-    if (signal.aborted) throw new LoopError({ code: 'ABORTED', phase: 'engine', message: 'claude-cli run aborted' });
+    if (signal.aborted)
+      throw new LoopError({
+        code: 'ABORTED',
+        phase: 'engine',
+        message: 'claude-cli run aborted',
+      });
     if (result.failed) {
       // The child's stderr is outside our control and may echo credentials on
       // an auth failure — redact before it lands in events/logs/the summary.
-      const stderr = typeof result.stderr === 'string' ? redactSecrets(result.stderr.slice(0, 400)) : '';
+      const stderr =
+        typeof result.stderr === 'string'
+          ? redactSecrets(result.stderr.slice(0, 400))
+          : '';
       throw new LoopError({
         code: result.timedOut ? 'TIMEOUT' : 'ENGINE',
         phase: 'engine',
@@ -77,6 +98,11 @@ export class ClaudeCliEngine implements Engine {
     }
 
     onEvent({ type: 'usage', usage: acc.usage, model: acc.model });
-    return { text: acc.text, usage: acc.usage, model: acc.model, stopReason: acc.stopReason };
+    return {
+      text: acc.text,
+      usage: acc.usage,
+      model: acc.model,
+      stopReason: acc.stopReason,
+    };
   }
 }
