@@ -25,6 +25,7 @@ import type { EngineName, EngineOptions } from './engines/engine.ts';
 
 interface RunFlags {
   prompt?: string;
+  promptFile?: string;
   engine?: string;
   defaultModel?: string;
   workerModel?: string;
@@ -40,9 +41,23 @@ interface RunFlags {
   maxTokens?: string;
   apiKey?: string;
   cliBinary?: string;
+  engineArg?: string[];
   state?: string;
   json?: boolean;
   tui?: boolean; // commander sets false for --no-tui
+}
+
+/** The worker prompt comes from --prompt OR --prompt-file (not both). */
+function resolvePrompt(flags: RunFlags): string {
+  if (flags.promptFile != null && flags.prompt != null) {
+    throw new Error('pass either --prompt or --prompt-file, not both');
+  }
+  if (flags.promptFile != null) {
+    const resolved = path.resolve(flags.promptFile);
+    if (!fs.existsSync(resolved)) throw new Error(`prompt file not found: ${flags.promptFile}`);
+    return fs.readFileSync(resolved, 'utf8');
+  }
+  return flags.prompt ?? '';
 }
 
 async function loadJob(file: string): Promise<{ job: Job; title: string }> {
@@ -60,11 +75,12 @@ async function loadJob(file: string): Promise<{ job: Job; title: string }> {
 
 function buildFromFlags(flags: RunFlags): Job {
   const num = (v: string | undefined) => (v == null ? undefined : Number(v));
+  const prompt = resolvePrompt(flags); // outside the try so its errors aren't reported as flag-validation
   try {
     // Parsing/validation lives in buildJobFromFlags (single source of truth);
     // we just shape the raw input and translate a Zod failure into a clean error.
     return buildJobFromFlags({
-      prompt: flags.prompt ?? '',
+      prompt,
       engine: flags.engine,
       workerModel: flags.workerModel,
       validatorModel: flags.validatorModel,
@@ -93,6 +109,7 @@ async function execute(file: string | undefined, flags: RunFlags): Promise<void>
   if (flags.defaultModel) engineOptions.defaultModel = flags.defaultModel;
   if (flags.apiKey) engineOptions.apiKey = flags.apiKey;
   if (flags.cliBinary) engineOptions.cliBinary = flags.cliBinary;
+  if (flags.engineArg?.length) engineOptions.cliArgs = flags.engineArg;
 
   let state: Record<string, unknown> | undefined;
   if (flags.state) {
@@ -150,6 +167,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command('run', { isDefault: true })
     .argument('[file]', 'a loop-definition file (default-exports a Job); omit to use flags')
     .option('-p, --prompt <text>', 'worker prompt (no-file mode)')
+    .option('-f, --prompt-file <path>', 'read the worker prompt from a file (no-file mode)')
     .option('-e, --engine <name>', 'default engine: agent-sdk | claude-cli | anthropic-api')
     .option('--default-model <id>', 'fallback model id for engines')
     .option('--worker-model <id>', 'model for the worker job')
@@ -165,6 +183,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--max-tokens <n>', 'max output tokens per agent turn')
     .option('--api-key <key>', 'Anthropic API key (anthropic-api engine)')
     .option('--cli-binary <path>', 'path to the claude binary (claude-cli engine)')
+    .option('--engine-arg <arg>', 'extra arg forwarded to the claude-cli engine (repeatable)', (v: string, acc: string[]) => acc.concat(v), [] as string[])
     .option('--state <json>', 'seed the shared run state (JSON)')
     .option('--json', 'emit NDJSON events to stdout (no TUI)')
     .option('--no-tui', 'plain line output instead of the Ink TUI')

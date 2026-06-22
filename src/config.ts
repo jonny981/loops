@@ -15,7 +15,7 @@ import type { Job } from './core/types.ts';
 import type { EngineName } from './engines/engine.ts';
 
 export const FlagSpec = z.object({
-  prompt: z.string().min(1, 'a --prompt is required when no definition file is given'),
+  prompt: z.string().min(1, 'a --prompt or --prompt-file is required when no definition file is given'),
   engine: z.string().optional(),
   workerModel: z.string().optional(),
   validatorModel: z.string().optional(),
