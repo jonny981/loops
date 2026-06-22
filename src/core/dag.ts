@@ -26,16 +26,25 @@ function normalize(node: DagNode | Job): DagNode {
 }
 
 export function dag(config: DagConfig): Job {
-  if (!config.name) throw new LoopError({ code: 'CONFIG', message: 'dag() requires a non-empty name' });
+  if (!config.name)
+    throw new LoopError({
+      code: 'CONFIG',
+      message: 'dag() requires a non-empty name',
+    });
   const names = Object.keys(config.nodes);
-  const nodes = new Map<string, DagNode>(names.map((n) => [n, normalize(config.nodes[n]!)]));
+  const nodes = new Map<string, DagNode>(
+    names.map((n) => [n, normalize(config.nodes[n]!)]),
+  );
 
   // Fail fast on a bad graph, before the Job is ever run.
   const edges: [string, string][] = [];
   for (const [name, node] of nodes) {
     for (const dep of node.needs ?? []) {
       if (!nodes.has(dep)) {
-        throw new LoopError({ code: 'CONFIG', message: `dag "${config.name}": node "${name}" needs unknown node "${dep}"` });
+        throw new LoopError({
+          code: 'CONFIG',
+          message: `dag "${config.name}": node "${name}" needs unknown node "${dep}"`,
+        });
       }
       edges.push([dep, name]); // dep must precede name
     }
@@ -43,11 +52,18 @@ export function dag(config: DagConfig): Job {
   try {
     toposort.array(names, edges);
   } catch (e) {
-    throw new LoopError({ code: 'CONFIG', message: `dag "${config.name}": dependency cycle detected`, cause: e });
+    throw new LoopError({
+      code: 'CONFIG',
+      message: `dag "${config.name}": dependency cycle detected`,
+      cause: e,
+    });
   }
 
   const stopOnError = config.stopOnError ?? true;
-  const limitN = config.concurrency && config.concurrency > 0 ? config.concurrency : names.length || 1;
+  const limitN =
+    config.concurrency && config.concurrency > 0
+      ? config.concurrency
+      : names.length || 1;
 
   return async (parent: JobContext): Promise<Outcome> => {
     const path = [...parent.path, config.name];
@@ -62,12 +78,29 @@ export function dag(config: DagConfig): Job {
 
     // Each node runs under its own name in the path, so a nested job (e.g. a
     // loop) is uniquely addressable for stats/logs even across same-named siblings.
-    const nodeCtx = (name: string): JobContext => childContext(parent, { depth, path: [...path, name] });
+    const nodeCtx = (name: string): JobContext =>
+      childContext(parent, { depth, path: [...path, name] });
 
-    const record = (name: string, outcome: Outcome, phase: 'done' | 'skip'): Outcome => {
+    const record = (
+      name: string,
+      outcome: Outcome,
+      phase: 'done' | 'skip',
+    ): Outcome => {
       results.set(name, outcome);
-      parent.emit({ kind: 'dag:node', ts: ts(), path, node: name, phase, outcome });
-      if (phase === 'done' && outcome.status !== 'pass' && nodes.get(name)!.optional !== true && stopOnError) {
+      parent.emit({
+        kind: 'dag:node',
+        ts: ts(),
+        path,
+        node: name,
+        phase,
+        outcome,
+      });
+      if (
+        phase === 'done' &&
+        outcome.status !== 'pass' &&
+        nodes.get(name)!.optional !== true &&
+        stopOnError
+      ) {
         stopped = true;
       }
       return outcome;
@@ -87,25 +120,75 @@ export function dag(config: DagConfig): Job {
           // data dependency, so even a failed *optional* producer blocks a
           // consumer (skipped deps come back with status 'pass', so they're green).
           const blocked = needs.some((_, i) => deps[i]!.status !== 'pass');
-          if (blocked) return record(name, { status: 'aborted', summary: 'blocked by a failed dependency' }, 'done');
-          if (parent.signal.aborted || stopped) return record(name, { status: 'aborted', summary: 'aborted before start' }, 'done');
+          if (blocked)
+            return record(
+              name,
+              { status: 'aborted', summary: 'blocked by a failed dependency' },
+              'done',
+            );
+          if (parent.signal.aborted || stopped)
+            return record(
+              name,
+              { status: 'aborted', summary: 'aborted before start' },
+              'done',
+            );
 
           // `when` + the job both run inside the concurrency limit, so an
           // agentCheck gate counts against the cap (it's real backend load).
-          const result = await limit(async (): Promise<{ outcome: Outcome; phase: 'done' | 'skip' }> => {
-            if (parent.signal.aborted || stopped) return { outcome: { status: 'aborted', summary: 'aborted before start' }, phase: 'done' };
-            if (node.when) {
-              const r = await toCondition(node.when)(nodeCtx(name), undefined);
-              if (!r.met) return { outcome: { status: 'pass', summary: `skipped: ${r.reason}`, data: { skipped: true } }, phase: 'skip' };
-            }
-            parent.emit({ kind: 'dag:node', ts: ts(), path, node: name, phase: 'start' });
-            return { outcome: await node.job(nodeCtx(name)), phase: 'done' };
-          });
+          const result = await limit(
+            async (): Promise<{ outcome: Outcome; phase: 'done' | 'skip' }> => {
+              if (parent.signal.aborted || stopped)
+                return {
+                  outcome: {
+                    status: 'aborted',
+                    summary: 'aborted before start',
+                  },
+                  phase: 'done',
+                };
+              if (node.when) {
+                const r = await toCondition(node.when)(
+                  nodeCtx(name),
+                  undefined,
+                );
+                if (!r.met)
+                  return {
+                    outcome: {
+                      status: 'pass',
+                      summary: `skipped: ${r.reason}`,
+                      data: { skipped: true },
+                    },
+                    phase: 'skip',
+                  };
+              }
+              parent.emit({
+                kind: 'dag:node',
+                ts: ts(),
+                path,
+                node: name,
+                phase: 'start',
+              });
+              return { outcome: await node.job(nodeCtx(name)), phase: 'done' };
+            },
+          );
           return record(name, result.outcome, result.phase);
         } catch (e) {
-          const error = LoopError.from(e, { code: 'BODY', phase: 'body', path: [...path, name] });
-          parent.emit({ kind: 'error', ts: ts(), path: [...path, name], message: error.message, code: error.code });
-          return record(name, { status: 'fail', summary: error.message, error }, 'done');
+          const error = LoopError.from(e, {
+            code: 'BODY',
+            phase: 'body',
+            path: [...path, name],
+          });
+          parent.emit({
+            kind: 'error',
+            ts: ts(),
+            path: [...path, name],
+            message: error.message,
+            code: error.code,
+          });
+          return record(
+            name,
+            { status: 'fail', summary: error.message, error },
+            'done',
+          );
         }
       })();
       memo.set(name, promise);
@@ -114,19 +197,37 @@ export function dag(config: DagConfig): Job {
 
     await Promise.all(names.map(run));
 
-    const requiredFailed = names.filter((n) => results.get(n)?.status === 'fail' && nodes.get(n)!.optional !== true);
-    const requiredAborted = names.filter((n) => results.get(n)?.status === 'aborted' && nodes.get(n)!.optional !== true);
+    const requiredFailed = names.filter(
+      (n) =>
+        results.get(n)?.status === 'fail' && nodes.get(n)!.optional !== true,
+    );
+    const requiredAborted = names.filter(
+      (n) =>
+        results.get(n)?.status === 'aborted' && nodes.get(n)!.optional !== true,
+    );
     const data = Object.fromEntries(results);
     let outcome: Outcome;
     if (parent.signal.aborted) {
       // a genuine user/signal cancellation
-      outcome = { status: 'aborted', summary: `dag "${config.name}" aborted`, data };
+      outcome = {
+        status: 'aborted',
+        summary: `dag "${config.name}" aborted`,
+        data,
+      };
     } else if (requiredFailed.length > 0 || requiredAborted.length > 0) {
       // a real failure (direct, or a required node left undone by an upstream
       // failure) is a fail (exit 1), distinct from a cancellation (exit 130).
-      outcome = { status: 'fail', summary: `dag "${config.name}": ${requiredFailed.length + requiredAborted.length} required node(s) did not complete`, data };
+      outcome = {
+        status: 'fail',
+        summary: `dag "${config.name}": ${requiredFailed.length + requiredAborted.length} required node(s) did not complete`,
+        data,
+      };
     } else {
-      outcome = { status: 'pass', summary: `dag "${config.name}": all ${names.length} node(s) green`, data };
+      outcome = {
+        status: 'pass',
+        summary: `dag "${config.name}": all ${names.length} node(s) green`,
+        data,
+      };
     }
     parent.emit({ kind: 'dag:end', ts: ts(), path, outcome });
     return outcome;
@@ -143,7 +244,11 @@ export function sequence(name: string, ...jobs: Job[]): Job {
 }
 
 /** Run jobs concurrently (optionally capped); all run regardless of failures. */
-export function parallel(name: string, jobs: Record<string, Job> | Job[], concurrency?: number): Job {
+export function parallel(
+  name: string,
+  jobs: Record<string, Job> | Job[],
+  concurrency?: number,
+): Job {
   const record = Array.isArray(jobs)
     ? Object.fromEntries(jobs.map((j, i) => [`task-${i}`, j] as const))
     : jobs;

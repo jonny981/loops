@@ -11,7 +11,14 @@
  * Run it:  npm run example:gate
  */
 
-import { defineJob, loop, agentJob, agentCheck, gateJob, parallel } from '../src/api.ts';
+import {
+  defineJob,
+  loop,
+  agentJob,
+  agentCheck,
+  gateJob,
+  parallel,
+} from '../src/api.ts';
 
 const SMALL = 'claude-haiku-4-5-20251001';
 
@@ -32,7 +39,8 @@ export default defineJob(
     until: agentCheck({
       engine: 'anthropic-api',
       model: SMALL,
-      question: 'Is the feature fully implemented with passing tests, per TASK.md?',
+      question:
+        'Is the feature fully implemented with passing tests, per TASK.md?',
       threshold: 0.85,
     }),
 
@@ -43,7 +51,8 @@ export default defineJob(
         agentCheck({
           engine: 'anthropic-api',
           model: SMALL,
-          question: 'Is the implementation free of security issues (authz, injection, secrets)?',
+          question:
+            'Is the implementation free of security issues (authz, injection, secrets)?',
           threshold: 0.9,
         }),
       ),
@@ -52,7 +61,8 @@ export default defineJob(
         agentCheck({
           engine: 'anthropic-api',
           model: SMALL,
-          question: 'Does the code meet a strict senior-engineer quality bar with no blockers?',
+          question:
+            'Does the code meet a strict senior-engineer quality bar with no blockers?',
           threshold: 0.85,
         }),
       ),

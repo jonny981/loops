@@ -15,7 +15,12 @@ import type { Job } from './core/types.ts';
 import type { EngineName } from './engines/engine.ts';
 
 export const FlagSpec = z.object({
-  prompt: z.string().min(1, 'a --prompt or --prompt-file is required when no definition file is given'),
+  prompt: z
+    .string()
+    .min(
+      1,
+      'a --prompt or --prompt-file is required when no definition file is given',
+    ),
   engine: z.string().optional(),
   workerModel: z.string().optional(),
   validatorModel: z.string().optional(),
@@ -61,15 +66,33 @@ export function buildJobFromFlags(input: z.input<typeof FlagSpec>): Job {
   });
 
   const until = spec.untilAgent
-    ? agentCheck({ question: spec.untilAgent, threshold: spec.threshold, model: spec.validatorModel, engine })
+    ? agentCheck({
+        question: spec.untilAgent,
+        threshold: spec.threshold,
+        model: spec.validatorModel,
+        engine,
+      })
     : bodyPassed();
 
   const start = spec.startAgent
-    ? agentCheck({ question: spec.startAgent, threshold: 0.5, model: spec.validatorModel, engine })
+    ? agentCheck({
+        question: spec.startAgent,
+        threshold: 0.5,
+        model: spec.validatorModel,
+        engine,
+      })
     : undefined;
 
   const review = spec.review
-    ? gateJob('review', agentCheck({ question: spec.review, threshold: spec.reviewThreshold, model: spec.reviewerModel, engine }))
+    ? gateJob(
+        'review',
+        agentCheck({
+          question: spec.review,
+          threshold: spec.reviewThreshold,
+          model: spec.reviewerModel,
+          engine,
+        }),
+      )
     : undefined;
 
   return loop({

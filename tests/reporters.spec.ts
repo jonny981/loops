@@ -9,13 +9,37 @@ const sample: LoopEvent[] = [
   { kind: 'job:start', ts: 0, path: ['l'], label: 'worker' },
   { kind: 'engine:text', ts: 0, path: ['l'], delta: 'streamed ' },
   { kind: 'engine:tool', ts: 0, path: ['l'], name: 'Bash', phase: 'use' },
-  { kind: 'loop:condition', ts: 0, path: ['l'], which: 'until', result: { met: true, reason: 'done' } },
-  { kind: 'loop:review', ts: 0, path: ['l'], outcome: { status: 'fail', summary: 'nope' } },
+  {
+    kind: 'loop:condition',
+    ts: 0,
+    path: ['l'],
+    which: 'until',
+    result: { met: true, reason: 'done' },
+  },
+  {
+    kind: 'loop:review',
+    ts: 0,
+    path: ['l'],
+    outcome: { status: 'fail', summary: 'nope' },
+  },
   { kind: 'dag:start', ts: 0, path: ['d'], depth: 1, nodes: ['a', 'b'] },
-  { kind: 'dag:node', ts: 0, path: ['d'], node: 'a', phase: 'done', outcome: { status: 'pass' } },
+  {
+    kind: 'dag:node',
+    ts: 0,
+    path: ['d'],
+    node: 'a',
+    phase: 'done',
+    outcome: { status: 'pass' },
+  },
   { kind: 'dag:end', ts: 0, path: ['d'], outcome: { status: 'pass' } },
   { kind: 'error', ts: 0, path: ['l'], code: 'ENGINE', message: 'bad' },
-  { kind: 'loop:end', ts: 0, path: ['l'], iterations: 1, outcome: { status: 'pass' } },
+  {
+    kind: 'loop:end',
+    ts: 0,
+    path: ['l'],
+    iterations: 1,
+    outcome: { status: 'pass' },
+  },
 ];
 
 describe('reporters', () => {
@@ -30,10 +54,12 @@ describe('reporters', () => {
 
   it('json reporter writes one NDJSON line per event', () => {
     const lines: string[] = [];
-    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
-      lines.push(String(chunk));
-      return true;
-    });
+    const write = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk) => {
+        lines.push(String(chunk));
+        return true;
+      });
     const report = jsonReporter();
     sample.forEach(report);
     write.mockRestore();
@@ -45,9 +71,11 @@ describe('reporters', () => {
   it('plain reporter prints one per-iteration report line per completed iteration', () => {
     const out: string[] = [];
     const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
-    const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
-      out.push(args.map(String).join(' '));
-    });
+    const log = vi
+      .spyOn(console, 'log')
+      .mockImplementation((...args: unknown[]) => {
+        out.push(args.map(String).join(' '));
+      });
     // Strip ANSI so assertions are colour-agnostic.
     const clean = (s: string): string => s.replace(/\[[0-9;]*m/g, '');
 
@@ -55,16 +83,63 @@ describe('reporters', () => {
       { kind: 'loop:start', ts: 0, path: ['build'], depth: 1, max: 3 },
       // iteration 1: body fail, until not met, usage 1200/300
       { kind: 'loop:iteration', ts: 0, path: ['build'], iteration: 1 },
-      { kind: 'engine:usage', ts: 0, path: ['build'], model: 'm', usage: { inputTokens: 1200, outputTokens: 300 } },
-      { kind: 'job:end', ts: 0, path: ['build'], label: 'worker', outcome: { status: 'fail' } },
-      { kind: 'loop:condition', ts: 0, path: ['build'], which: 'until', result: { met: false, reason: 'no' } },
+      {
+        kind: 'engine:usage',
+        ts: 0,
+        path: ['build'],
+        model: 'm',
+        usage: { inputTokens: 1200, outputTokens: 300 },
+      },
+      {
+        kind: 'job:end',
+        ts: 0,
+        path: ['build'],
+        label: 'worker',
+        outcome: { status: 'fail' },
+      },
+      {
+        kind: 'loop:condition',
+        ts: 0,
+        path: ['build'],
+        which: 'until',
+        result: { met: false, reason: 'no' },
+      },
       // iteration 2: body pass, until met, review fail
       { kind: 'loop:iteration', ts: 0, path: ['build'], iteration: 2 },
-      { kind: 'engine:usage', ts: 0, path: ['build'], model: 'm', usage: { inputTokens: 500, outputTokens: 50 } },
-      { kind: 'job:end', ts: 0, path: ['build'], label: 'worker', outcome: { status: 'pass' } },
-      { kind: 'loop:condition', ts: 0, path: ['build'], which: 'until', result: { met: true, reason: 'yes' } },
-      { kind: 'loop:review', ts: 0, path: ['build'], outcome: { status: 'fail', summary: 'needs X' } },
-      { kind: 'loop:end', ts: 0, path: ['build'], iterations: 2, outcome: { status: 'exhausted' } },
+      {
+        kind: 'engine:usage',
+        ts: 0,
+        path: ['build'],
+        model: 'm',
+        usage: { inputTokens: 500, outputTokens: 50 },
+      },
+      {
+        kind: 'job:end',
+        ts: 0,
+        path: ['build'],
+        label: 'worker',
+        outcome: { status: 'pass' },
+      },
+      {
+        kind: 'loop:condition',
+        ts: 0,
+        path: ['build'],
+        which: 'until',
+        result: { met: true, reason: 'yes' },
+      },
+      {
+        kind: 'loop:review',
+        ts: 0,
+        path: ['build'],
+        outcome: { status: 'fail', summary: 'needs X' },
+      },
+      {
+        kind: 'loop:end',
+        ts: 0,
+        path: ['build'],
+        iterations: 2,
+        outcome: { status: 'exhausted' },
+      },
     ];
     const report = plainReporter();
     events.forEach(report);
@@ -95,7 +170,15 @@ describe('reporters', () => {
         stats: {
           startedAt: 0,
           elapsedMs: 1234,
-          loops: [{ path: 'l', iterations: 2, reviewsPassed: 1, reviewsFailed: 1, lastStatus: 'pass' }],
+          loops: [
+            {
+              path: 'l',
+              iterations: 2,
+              reviewsPassed: 1,
+              reviewsFailed: 1,
+              lastStatus: 'pass',
+            },
+          ],
           models: [{ model: 'm', calls: 2, inputTokens: 10, outputTokens: 20 }],
           totalInputTokens: 10,
           totalOutputTokens: 20,

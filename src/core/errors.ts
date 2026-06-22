@@ -12,7 +12,13 @@ export type LoopErrorCode =
   | 'BODY' // the step body threw
   | 'UNKNOWN';
 
-export type LoopPhase = 'start' | 'body' | 'until' | 'stopOn' | 'review' | 'engine';
+export type LoopPhase =
+  | 'start'
+  | 'body'
+  | 'until'
+  | 'stopOn'
+  | 'review'
+  | 'engine';
 
 export interface LoopErrorInit {
   code: LoopErrorCode;
@@ -32,17 +38,24 @@ export class LoopError extends Error {
   readonly retryable: boolean;
 
   constructor(init: LoopErrorInit) {
-    super(init.message, init.cause !== undefined ? { cause: init.cause } : undefined);
+    super(
+      init.message,
+      init.cause !== undefined ? { cause: init.cause } : undefined,
+    );
     this.name = 'LoopError';
     this.code = init.code;
     this.phase = init.phase;
     this.path = init.path;
     this.iteration = init.iteration;
-    this.retryable = init.retryable ?? (init.code === 'ENGINE' || init.code === 'TIMEOUT');
+    this.retryable =
+      init.retryable ?? (init.code === 'ENGINE' || init.code === 'TIMEOUT');
   }
 
   /** Wrap an arbitrary thrown value, preserving a `LoopError` as-is. */
-  static from(value: unknown, fallback: Omit<LoopErrorInit, 'message' | 'cause'>): LoopError {
+  static from(
+    value: unknown,
+    fallback: Omit<LoopErrorInit, 'message' | 'cause'>,
+  ): LoopError {
     if (value instanceof LoopError) return value;
     const message = value instanceof Error ? value.message : String(value);
     return new LoopError({ ...fallback, message, cause: value });

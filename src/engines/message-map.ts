@@ -19,7 +19,12 @@ export interface Accumulator {
 }
 
 export function newAccumulator(model: string): Accumulator {
-  return { text: '', usage: { inputTokens: 0, outputTokens: 0 }, model, sawDelta: false };
+  return {
+    text: '',
+    usage: { inputTokens: 0, outputTokens: 0 },
+    model,
+    sawDelta: false,
+  };
 }
 
 type AnyRecord = Record<string, unknown>;
@@ -28,20 +33,32 @@ function asArray(value: unknown): AnyRecord[] {
   return Array.isArray(value) ? (value as AnyRecord[]) : [];
 }
 
-export function mapMessage(message: unknown, acc: Accumulator, onEvent: EngineEventSink): void {
+export function mapMessage(
+  message: unknown,
+  acc: Accumulator,
+  onEvent: EngineEventSink,
+): void {
   const msg = (message ?? {}) as AnyRecord;
   switch (msg.type) {
     case 'assistant': {
       const inner = (msg.message ?? {}) as AnyRecord;
       if (typeof inner.model === 'string') acc.model = inner.model;
-      if (typeof inner.stop_reason === 'string') acc.stopReason = inner.stop_reason;
+      if (typeof inner.stop_reason === 'string')
+        acc.stopReason = inner.stop_reason;
       for (const block of asArray(inner.content)) {
         if (block.type === 'text' && typeof block.text === 'string') {
           acc.text += block.text;
           if (!acc.sawDelta) onEvent({ type: 'text', delta: block.text });
-        } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
-          if (!acc.sawDelta) onEvent({ type: 'thinking', delta: block.thinking });
-        } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+        } else if (
+          block.type === 'thinking' &&
+          typeof block.thinking === 'string'
+        ) {
+          if (!acc.sawDelta)
+            onEvent({ type: 'thinking', delta: block.thinking });
+        } else if (
+          block.type === 'tool_use' &&
+          typeof block.name === 'string'
+        ) {
           onEvent({ type: 'tool', name: block.name, phase: 'use' });
         }
       }
@@ -56,7 +73,11 @@ export function mapMessage(message: unknown, acc: Accumulator, onEvent: EngineEv
       const inner = (msg.message ?? {}) as AnyRecord;
       for (const block of asArray(inner.content)) {
         if (block.type === 'tool_result') {
-          onEvent({ type: 'tool', name: typeof block.name === 'string' ? block.name : 'tool', phase: 'result' });
+          onEvent({
+            type: 'tool',
+            name: typeof block.name === 'string' ? block.name : 'tool',
+            phase: 'result',
+          });
         }
       }
       break;
@@ -68,7 +89,10 @@ export function mapMessage(message: unknown, acc: Accumulator, onEvent: EngineEv
         if (delta.type === 'text_delta' && typeof delta.text === 'string') {
           acc.sawDelta = true;
           onEvent({ type: 'text', delta: delta.text });
-        } else if (delta.type === 'thinking_delta' && typeof delta.thinking === 'string') {
+        } else if (
+          delta.type === 'thinking_delta' &&
+          typeof delta.thinking === 'string'
+        ) {
           acc.sawDelta = true;
           onEvent({ type: 'thinking', delta: delta.thinking });
         }

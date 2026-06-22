@@ -186,7 +186,13 @@ export type NodePhase = 'start' | 'skip' | 'done';
 export type ConditionKind = 'start' | 'until' | 'stopOn';
 
 export type LoopEvent =
-  | { kind: 'loop:start'; ts: number; path: string[]; depth: number; max?: number }
+  | {
+      kind: 'loop:start';
+      ts: number;
+      path: string[];
+      depth: number;
+      max?: number;
+    }
   | { kind: 'loop:iteration'; ts: number; path: string[]; iteration: number }
   | {
       kind: 'loop:condition';
@@ -203,7 +209,13 @@ export type LoopEvent =
       outcome: Outcome;
       iterations: number;
     }
-  | { kind: 'dag:start'; ts: number; path: string[]; depth: number; nodes: string[] }
+  | {
+      kind: 'dag:start';
+      ts: number;
+      path: string[];
+      depth: number;
+      nodes: string[];
+    }
   | {
       kind: 'dag:node';
       ts: number;
@@ -214,7 +226,13 @@ export type LoopEvent =
     }
   | { kind: 'dag:end'; ts: number; path: string[]; outcome: Outcome }
   | { kind: 'job:start'; ts: number; path: string[]; label: string }
-  | { kind: 'job:end'; ts: number; path: string[]; label: string; outcome: Outcome }
+  | {
+      kind: 'job:end';
+      ts: number;
+      path: string[];
+      label: string;
+      outcome: Outcome;
+    }
   | { kind: 'engine:text'; ts: number; path: string[]; delta: string }
   | { kind: 'engine:thinking'; ts: number; path: string[]; delta: string }
   | {
@@ -224,8 +242,26 @@ export type LoopEvent =
       name: string;
       phase: 'use' | 'result';
     }
-  | { kind: 'engine:usage'; ts: number; path: string[]; model: string; usage: Usage }
-  | { kind: 'log'; ts: number; path: string[]; level: LogLevel; message: string }
-  | { kind: 'error'; ts: number; path: string[]; message: string; code: string };
+  | {
+      kind: 'engine:usage';
+      ts: number;
+      path: string[];
+      model: string;
+      usage: Usage;
+    }
+  | {
+      kind: 'log';
+      ts: number;
+      path: string[];
+      level: LogLevel;
+      message: string;
+    }
+  | {
+      kind: 'error';
+      ts: number;
+      path: string[];
+      message: string;
+      code: string;
+    };
 
 export type LoopEventKind = LoopEvent['kind'];

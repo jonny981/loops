@@ -16,7 +16,13 @@ import { Box, Text, useInput } from 'ink';
 
 import type { Hub } from '../runtime/hub.ts';
 import { statusColor, statusGlyph, glyph } from './theme.ts';
-import { emptyVM, reduce, type ViewModel, type NodeView, type IterationRecord } from './model.ts';
+import {
+  emptyVM,
+  reduce,
+  type ViewModel,
+  type NodeView,
+  type IterationRecord,
+} from './model.ts';
 
 export interface AppProps {
   hub: Hub;
@@ -50,7 +56,10 @@ function newestLoopKey(m: ViewModel): string | undefined {
  * to the newest loop + its newest iteration. Otherwise clamp the existing
  * selection so it stays valid as iterations stream in.
  */
-function resolveSelection(m: ViewModel, sel: Selection): { node?: NodeView; index: number } {
+function resolveSelection(
+  m: ViewModel,
+  sel: Selection,
+): { node?: NodeView; index: number } {
   const keys = loopKeys(m);
   let key = sel.loopKey;
   if (sel.followLive || !key || !m.nodes.has(key)) key = newestLoopKey(m);
@@ -136,14 +145,20 @@ export function App({ hub, title, onAbort }: AppProps): React.ReactElement {
 
   const m = vm.current;
   const elapsed = ((Date.now() - m.startedAt) / 1000).toFixed(1);
-  const { node: selectedNode, index: selectedIndex } = resolveSelection(m, sel.current);
-  const selectedRecord: IterationRecord | undefined = selectedNode?.iterations[selectedIndex];
+  const { node: selectedNode, index: selectedIndex } = resolveSelection(
+    m,
+    sel.current,
+  );
+  const selectedRecord: IterationRecord | undefined =
+    selectedNode?.iterations[selectedIndex];
   const following = sel.current.followLive;
 
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box justifyContent="space-between">
-        <Text bold color="cyan">{glyph.loop} {title}</Text>
+        <Text bold color="cyan">
+          {glyph.loop} {title}
+        </Text>
         <Text color="gray">{elapsed}s · q to stop</Text>
       </Box>
 
@@ -157,30 +172,67 @@ export function App({ hub, title, onAbort }: AppProps): React.ReactElement {
           return (
             <Text key={key}>
               {'  '.repeat(Math.max(0, n.depth - 1))}
-              <Text color={isSelected ? 'cyan' : 'gray'}>{isSelected ? '▶ ' : '  '}</Text>
-              <Text color={statusColor(n.status)}>{n.status ? statusGlyph(n.status) : g} </Text>
-              <Text bold underline={isSelected}>{n.name}</Text>
-              {n.type === 'loop' && <Text color="gray"> iter {n.iteration}{n.max ? `/${n.max}` : ''}</Text>}
-              {reviews > 0 && <Text color="gray"> · review {n.reviewPass}✔/{n.reviewFail}✘</Text>}
+              <Text color={isSelected ? 'cyan' : 'gray'}>
+                {isSelected ? '▶ ' : '  '}
+              </Text>
+              <Text color={statusColor(n.status)}>
+                {n.status ? statusGlyph(n.status) : g}{' '}
+              </Text>
+              <Text bold underline={isSelected}>
+                {n.name}
+              </Text>
+              {n.type === 'loop' && (
+                <Text color="gray">
+                  {' '}
+                  iter {n.iteration}
+                  {n.max ? `/${n.max}` : ''}
+                </Text>
+              )}
+              {reviews > 0 && (
+                <Text color="gray">
+                  {' '}
+                  · review {n.reviewPass}✔/{n.reviewFail}✘
+                </Text>
+              )}
             </Text>
           );
         })}
       </Box>
 
       {selectedNode && (
-        <Box flexDirection="column" marginTop={1} borderStyle="round" borderColor="cyan" paddingX={1}>
-          <IterationDetail node={selectedNode} record={selectedRecord} index={selectedIndex} />
+        <Box
+          flexDirection="column"
+          marginTop={1}
+          borderStyle="round"
+          borderColor="cyan"
+          paddingX={1}
+        >
+          <IterationDetail
+            node={selectedNode}
+            record={selectedRecord}
+            index={selectedIndex}
+          />
         </Box>
       )}
 
       <Box marginTop={1} justifyContent="space-between">
-        <Text color="gray">{m.calls} call(s) · {m.tokensIn} in / {m.tokensOut} out tok</Text>
-        {m.errors.length > 0 ? <Text color="red">{m.errors.length} error(s)</Text> : <Text color="green"> </Text>}
+        <Text color="gray">
+          {m.calls} call(s) · {m.tokensIn} in / {m.tokensOut} out tok
+        </Text>
+        {m.errors.length > 0 ? (
+          <Text color="red">{m.errors.length} error(s)</Text>
+        ) : (
+          <Text color="green"> </Text>
+        )}
       </Box>
 
       <Box justifyContent="space-between">
-        <Text color="gray">↑↓/jk loop · ←→/hl iter · f/space follow · q stop</Text>
-        <Text color={following ? 'green' : 'yellow'}>{following ? '● LIVE' : '⏸ BROWSE'}</Text>
+        <Text color="gray">
+          ↑↓/jk loop · ←→/hl iter · f/space follow · q stop
+        </Text>
+        <Text color={following ? 'green' : 'yellow'}>
+          {following ? '● LIVE' : '⏸ BROWSE'}
+        </Text>
       </Box>
     </Box>
   );
@@ -197,11 +249,12 @@ function IterationDetail({
 }): React.ReactElement {
   const total = node.iterations.length;
   if (!record) {
-    return (
-      <Text color="gray">loop {node.name} — no iterations yet</Text>
-    );
+    return <Text color="gray">loop {node.name} — no iterations yet</Text>;
   }
-  const durMs = record.endedAt != null ? record.endedAt - record.startedAt : Date.now() - record.startedAt;
+  const durMs =
+    record.endedAt != null
+      ? record.endedAt - record.startedAt
+      : Date.now() - record.startedAt;
   const dur = `${(durMs / 1000).toFixed(1)}s`;
   const transcriptLines = record.transcript.split('\n').slice(-10);
 
@@ -209,8 +262,16 @@ function IterationDetail({
     <>
       <Text>
         <Text bold>loop {node.name}</Text>
-        <Text color="gray"> — iteration {index + 1}/{total} </Text>
-        <Text color={statusColor(record.status === 'running' ? undefined : record.status)} bold>
+        <Text color="gray">
+          {' '}
+          — iteration {index + 1}/{total}{' '}
+        </Text>
+        <Text
+          color={statusColor(
+            record.status === 'running' ? undefined : record.status,
+          )}
+          bold
+        >
           [{record.status}]
         </Text>
       </Text>
@@ -218,24 +279,38 @@ function IterationDetail({
       {record.bodyStatus && (
         <Text>
           <Text color="gray">body </Text>
-          <Text color={statusColor(record.bodyStatus)}>{record.bodyStatus}</Text>
-          {record.bodySummary ? <Text color="gray"> — {record.bodySummary}</Text> : null}
+          <Text color={statusColor(record.bodyStatus)}>
+            {record.bodyStatus}
+          </Text>
+          {record.bodySummary ? (
+            <Text color="gray"> — {record.bodySummary}</Text>
+          ) : null}
         </Text>
       )}
 
       {record.until && (
         <Text>
           <Text color="magenta">until </Text>
-          {record.until.met ? <Text color="green">met</Text> : <Text color="gray">not met</Text>}
+          {record.until.met ? (
+            <Text color="green">met</Text>
+          ) : (
+            <Text color="gray">not met</Text>
+          )}
           <Text color="gray"> — {record.until.reason}</Text>
-          {record.until.confidence != null ? <Text color="gray"> ({record.until.confidence.toFixed(2)})</Text> : null}
+          {record.until.confidence != null ? (
+            <Text color="gray"> ({record.until.confidence.toFixed(2)})</Text>
+          ) : null}
         </Text>
       )}
 
       {record.stopOn && (
         <Text>
           <Text color="magenta">stopOn </Text>
-          {record.stopOn.met ? <Text color="red">met</Text> : <Text color="gray">not met</Text>}
+          {record.stopOn.met ? (
+            <Text color="red">met</Text>
+          ) : (
+            <Text color="gray">not met</Text>
+          )}
           <Text color="gray"> — {record.stopOn.reason}</Text>
         </Text>
       )}
@@ -243,19 +318,26 @@ function IterationDetail({
       {record.review && (
         <Text>
           <Text color="blue">review </Text>
-          <Text color={statusColor(record.review.status)}>{record.review.status}</Text>
-          {record.review.summary ? <Text color="gray"> — {record.review.summary}</Text> : null}
+          <Text color={statusColor(record.review.status)}>
+            {record.review.status}
+          </Text>
+          {record.review.summary ? (
+            <Text color="gray"> — {record.review.summary}</Text>
+          ) : null}
         </Text>
       )}
 
       <Text color="gray">
-        {record.tokensIn} in / {record.tokensOut} out tok · {record.calls} call(s) · {dur}
+        {record.tokensIn} in / {record.tokensOut} out tok · {record.calls}{' '}
+        call(s) · {dur}
       </Text>
 
       {transcriptLines.length > 0 && record.transcript.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           {transcriptLines.map((l, i) => (
-            <Text key={i} color="white" wrap="truncate-end">{l || ' '}</Text>
+            <Text key={i} color="white" wrap="truncate-end">
+              {l || ' '}
+            </Text>
           ))}
         </Box>
       )}

@@ -30,7 +30,10 @@ import { LoopError } from './errors.ts';
  *
  * Arrays default to `all` (every item must hold); pass `'any'` for or-semantics.
  */
-export function toCondition(input: ConditionInput, combine: 'all' | 'any' = 'all'): Condition {
+export function toCondition(
+  input: ConditionInput,
+  combine: 'all' | 'any' = 'all',
+): Condition {
   if (Array.isArray(input)) {
     const conds = input.map((i) => toCondition(i, combine));
     return combine === 'any' ? any(...conds) : all(...conds);
@@ -46,14 +49,20 @@ export function toCondition(input: ConditionInput, combine: 'all' | 'any' = 'all
  */
 function coerceOne(fn: Condition | RawPredicate): Condition {
   return async (ctx, last) => {
-    const r = await (fn as (c: JobContext, l: Outcome | undefined) => unknown)(ctx, last);
+    const r = await (fn as (c: JobContext, l: Outcome | undefined) => unknown)(
+      ctx,
+      last,
+    );
     if (typeof r === 'boolean') {
       return { met: r, reason: `predicate: ${r}` };
     }
     if (r && typeof r === 'object' && 'met' in r) {
       const res = r as { met: unknown };
       if (typeof res.met !== 'boolean') {
-        throw new LoopError({ code: 'VALIDATION', message: `condition returned a non-boolean "met": ${String(res.met)}` });
+        throw new LoopError({
+          code: 'VALIDATION',
+          message: `condition returned a non-boolean "met": ${String(res.met)}`,
+        });
       }
       return r as ConditionResult;
     }
@@ -63,7 +72,10 @@ function coerceOne(fn: Condition | RawPredicate): Condition {
 
 /** Deterministic predicate over context + last outcome. */
 export function predicate(
-  fn: (ctx: JobContext, last: Outcome | undefined) => boolean | Promise<boolean>,
+  fn: (
+    ctx: JobContext,
+    last: Outcome | undefined,
+  ) => boolean | Promise<boolean>,
   reason = 'predicate',
 ): Condition {
   return async (ctx, last) => {
@@ -102,7 +114,11 @@ export function not(c: ConditionInput): Condition {
   const cond = toCondition(c);
   return async (ctx, last) => {
     const r = await cond(ctx, last);
-    return { met: !r.met, confidence: r.confidence, reason: `not(${r.reason})` };
+    return {
+      met: !r.met,
+      confidence: r.confidence,
+      reason: `not(${r.reason})`,
+    };
   };
 }
 
@@ -116,7 +132,10 @@ export function all(...inputs: ConditionInput[]): Condition {
       results.push(r);
       if (!r.met) return { met: false, reason: `all -> failed: ${r.reason}` };
     }
-    return { met: true, reason: `all(${results.map((r) => r.reason).join(' & ')})` };
+    return {
+      met: true,
+      reason: `all(${results.map((r) => r.reason).join(' & ')})`,
+    };
   };
 }
 
@@ -128,7 +147,12 @@ export function any(...inputs: ConditionInput[]): Condition {
     for (const c of conds) {
       const r = await c(ctx, last);
       reasons.push(r.reason);
-      if (r.met) return { met: true, confidence: r.confidence, reason: `any -> ${r.reason}` };
+      if (r.met)
+        return {
+          met: true,
+          confidence: r.confidence,
+          reason: `any -> ${r.reason}`,
+        };
     }
     return { met: false, reason: `any(${reasons.join(' | ')})` };
   };
@@ -163,7 +187,8 @@ function defaultContext(ctx: JobContext, last: Outcome | undefined): string {
   const parts: string[] = [];
   if (last?.summary) parts.push(`Last outcome summary: ${last.summary}`);
   if (last?.status) parts.push(`Last outcome status: ${last.status}`);
-  if (last?.data !== undefined) parts.push(`Last outcome data: ${safeJson(last.data)}`);
+  if (last?.data !== undefined)
+    parts.push(`Last outcome data: ${safeJson(last.data)}`);
   const stateKeys = Object.keys(ctx.state);
   if (stateKeys.length) parts.push(`Shared state: ${safeJson(ctx.state)}`);
   return parts.join('\n') || '(no prior context)';
@@ -214,8 +239,14 @@ function toVerdict(obj: Record<string, unknown>): Verdict {
   // A "yes" with no numeric confidence means the model affirmed without scoring;
   // treat that as confident rather than letting confidence default to 0 (which
   // would make the gate silently never open).
-  const confidence = typeof obj.confidence === 'number' ? clamp01(obj.confidence) : verdict === 'yes' ? 1 : 0;
-  const reason = typeof obj.reason === 'string' ? obj.reason : '(no reason given)';
+  const confidence =
+    typeof obj.confidence === 'number'
+      ? clamp01(obj.confidence)
+      : verdict === 'yes'
+        ? 1
+        : 0;
+  const reason =
+    typeof obj.reason === 'string' ? obj.reason : '(no reason given)';
   return { verdict, confidence, reason };
 }
 
@@ -233,13 +264,17 @@ function parseVerdict(text: string): Verdict {
     } catch {
       continue;
     }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      continue;
     const obj = parsed as Record<string, unknown>;
     if ('verdict' in obj) return toVerdict(obj);
     fallback ??= obj;
   }
   if (fallback) return toVerdict(fallback);
-  throw new LoopError({ code: 'VALIDATION', message: `validator returned no JSON verdict: ${text.slice(0, 200)}` });
+  throw new LoopError({
+    code: 'VALIDATION',
+    message: `validator returned no JSON verdict: ${text.slice(0, 200)}`,
+  });
 }
 
 function clamp01(n: number): number {
@@ -259,7 +294,9 @@ const VALIDATOR_SYSTEM =
 export function agentCheck(config: AgentCheckConfig): Condition {
   const threshold = config.threshold ?? 0.8;
   return async (ctx, last) => {
-    const engine = config.engine ? ctx.resolveEngine(config.engine) : ctx.engine;
+    const engine = config.engine
+      ? ctx.resolveEngine(config.engine)
+      : ctx.engine;
     const contextText = (config.context ?? defaultContext)(ctx, last);
     const prompt =
       `CONDITION TO EVALUATE:\n${config.question}\n\n` +
@@ -277,7 +314,13 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         },
         (e) => {
           if (e.type === 'usage') {
-            ctx.emit({ kind: 'engine:usage', ts: Date.now(), path: [...ctx.path], model: e.model, usage: e.usage });
+            ctx.emit({
+              kind: 'engine:usage',
+              ts: Date.now(),
+              path: [...ctx.path],
+              model: e.model,
+              usage: e.usage,
+            });
           }
         },
         ctx.signal,
@@ -294,7 +337,11 @@ export function agentCheck(config: AgentCheckConfig): Condition {
     } catch {
       // A flaky or malformed verdict must not crash the whole run; fail
       // sceptically (gate stays closed) and let the loop continue/exhaust.
-      return { met: false, confidence: 0, reason: `unparseable verdict: ${result.text.slice(0, 120)}` };
+      return {
+        met: false,
+        confidence: 0,
+        reason: `unparseable verdict: ${result.text.slice(0, 120)}`,
+      };
     }
     const met = v.verdict === 'yes' && v.confidence >= threshold;
     return {
@@ -320,7 +367,13 @@ export function gateJob(label: string, condition: ConditionInput): Job {
       confidence: r.confidence,
       summary: r.reason,
     };
-    ctx.emit({ kind: 'job:end', ts: Date.now(), path: [...ctx.path], label, outcome });
+    ctx.emit({
+      kind: 'job:end',
+      ts: Date.now(),
+      path: [...ctx.path],
+      label,
+      outcome,
+    });
     return outcome;
   };
 }

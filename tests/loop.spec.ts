@@ -3,12 +3,19 @@ import { describe, it, expect } from 'vitest';
 import { run, loop, fnJob, predicate, MockEngine } from '../src/api.ts';
 import type { RunOptions } from '../src/api.ts';
 
-const mockOpts: RunOptions = { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } };
+const mockOpts: RunOptions = {
+  engine: 'mock',
+  engines: { mock: () => new MockEngine(() => '') },
+};
 
 describe('loop primitive', () => {
   it('aborts when the start gate is not met', async () => {
     const { outcome } = await run(
-      loop({ name: 'x', body: fnJob('b', async () => ({ status: 'pass' })), start: predicate(() => false) }),
+      loop({
+        name: 'x',
+        body: fnJob('b', async () => ({ status: 'pass' })),
+        start: predicate(() => false),
+      }),
       mockOpts,
     );
     expect(outcome.status).toBe('aborted');
@@ -34,7 +41,11 @@ describe('loop primitive', () => {
 
   it('exhausts at max when nothing converges', async () => {
     const { outcome } = await run(
-      loop({ name: 'x', body: fnJob('b', async () => ({ status: 'fail' })), max: 4 }),
+      loop({
+        name: 'x',
+        body: fnJob('b', async () => ({ status: 'fail' })),
+        max: 4,
+      }),
       mockOpts,
     );
     expect(outcome.status).toBe('exhausted');
@@ -68,10 +79,25 @@ describe('loop primitive', () => {
 
   it('nests loops within loops', async () => {
     let innerRuns = 0;
-    const inner = loop({ name: 'inner', body: fnJob('i', async () => { innerRuns += 1; return { status: 'pass' }; }), max: 1 });
+    const inner = loop({
+      name: 'inner',
+      body: fnJob('i', async () => {
+        innerRuns += 1;
+        return { status: 'pass' };
+      }),
+      max: 1,
+    });
     let outerIter = 0;
     const { outcome, stats } = await run(
-      loop({ name: 'outer', body: inner, until: predicate(() => { outerIter += 1; return outerIter >= 3; }), max: 10 }),
+      loop({
+        name: 'outer',
+        body: inner,
+        until: predicate(() => {
+          outerIter += 1;
+          return outerIter >= 3;
+        }),
+        max: 10,
+      }),
       mockOpts,
     );
     expect(outcome.status).toBe('pass');
@@ -84,7 +110,14 @@ describe('loop primitive', () => {
   it('aborts on signal', async () => {
     const ac = new AbortController();
     const { outcome } = await run(
-      loop({ name: 'x', body: fnJob('b', async () => { ac.abort(); return { status: 'fail' }; }), max: 100 }),
+      loop({
+        name: 'x',
+        body: fnJob('b', async () => {
+          ac.abort();
+          return { status: 'fail' };
+        }),
+        max: 100,
+      }),
       { ...mockOpts, signal: ac.signal },
     );
     expect(outcome.status).toBe('aborted');
@@ -93,7 +126,13 @@ describe('loop primitive', () => {
   it('runs onComplete exactly once', async () => {
     let calls = 0;
     await run(
-      loop({ name: 'x', body: fnJob('b', async () => ({ status: 'pass' })), onComplete: () => { calls += 1; } }),
+      loop({
+        name: 'x',
+        body: fnJob('b', async () => ({ status: 'pass' })),
+        onComplete: () => {
+          calls += 1;
+        },
+      }),
       mockOpts,
     );
     expect(calls).toBe(1);

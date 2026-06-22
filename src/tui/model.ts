@@ -13,7 +13,12 @@
 
 import type { LoopEvent, Outcome } from '../core/types.ts';
 
-export type IterationStatus = 'running' | 'pass' | 'fail' | 'aborted' | 'exhausted';
+export type IterationStatus =
+  | 'running'
+  | 'pass'
+  | 'fail'
+  | 'aborted'
+  | 'exhausted';
 
 export interface IterationRecord {
   iteration: number;
@@ -61,7 +66,16 @@ export const STREAM_CAP = 1600;
 export const TRANSCRIPT_CAP = 2000;
 
 export function emptyVM(): ViewModel {
-  return { nodes: new Map(), order: [], stream: '', tokensIn: 0, tokensOut: 0, calls: 0, errors: [], startedAt: Date.now() };
+  return {
+    nodes: new Map(),
+    order: [],
+    stream: '',
+    tokensIn: 0,
+    tokensOut: 0,
+    calls: 0,
+    errors: [],
+    startedAt: Date.now(),
+  };
 }
 
 /** The latest (current) iteration record of a loop node, if any. */
@@ -75,7 +89,16 @@ export function reduce(vm: ViewModel, e: LoopEvent): void {
   const ensure = (type: 'loop' | 'dag'): NodeView => {
     let n = vm.nodes.get(key);
     if (!n) {
-      n = { key, name: e.path[e.path.length - 1] ?? '(root)', depth: e.path.length, type, iteration: 0, reviewPass: 0, reviewFail: 0, iterations: [] };
+      n = {
+        key,
+        name: e.path[e.path.length - 1] ?? '(root)',
+        depth: e.path.length,
+        type,
+        iteration: 0,
+        reviewPass: 0,
+        reviewFail: 0,
+        iterations: [],
+      };
       vm.nodes.set(key, n);
       vm.order.push(key);
     }
@@ -114,8 +137,14 @@ export function reduce(vm: ViewModel, e: LoopEvent): void {
     case 'loop:condition': {
       const cur = loopAt() && currentIteration(loopAt()!);
       if (cur) {
-        if (e.which === 'until') cur.until = { met: e.result.met, reason: e.result.reason, confidence: e.result.confidence };
-        else if (e.which === 'stopOn') cur.stopOn = { met: e.result.met, reason: e.result.reason };
+        if (e.which === 'until')
+          cur.until = {
+            met: e.result.met,
+            reason: e.result.reason,
+            confidence: e.result.confidence,
+          };
+        else if (e.which === 'stopOn')
+          cur.stopOn = { met: e.result.met, reason: e.result.reason };
       }
       break;
     }
@@ -167,7 +196,8 @@ export function reduce(vm: ViewModel, e: LoopEvent): void {
     case 'engine:text': {
       vm.stream = (vm.stream + e.delta).slice(-STREAM_CAP);
       const cur = loopAt() && currentIteration(loopAt()!);
-      if (cur) cur.transcript = (cur.transcript + e.delta).slice(-TRANSCRIPT_CAP);
+      if (cur)
+        cur.transcript = (cur.transcript + e.delta).slice(-TRANSCRIPT_CAP);
       break;
     }
     case 'engine:usage': {

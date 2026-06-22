@@ -1,9 +1,19 @@
 import { describe, it, expect } from 'vitest';
 
-import { run, exitCodeFor, fnJob, loop, LoopError, MockEngine } from '../src/api.ts';
+import {
+  run,
+  exitCodeFor,
+  fnJob,
+  loop,
+  LoopError,
+  MockEngine,
+} from '../src/api.ts';
 import type { Engine, RunOptions } from '../src/api.ts';
 
-const mockOpts: RunOptions = { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } };
+const mockOpts: RunOptions = {
+  engine: 'mock',
+  engines: { mock: () => new MockEngine(() => '') },
+};
 
 describe('exitCodeFor', () => {
   it('maps every status', () => {
@@ -45,14 +55,26 @@ describe('run', () => {
       name: 'spy',
       async run(req, onEvent) {
         calledWith = req.prompt;
-        onEvent({ type: 'usage', usage: { inputTokens: 1, outputTokens: 1 }, model: 'spy' });
-        return { text: 'ok', usage: { inputTokens: 1, outputTokens: 1 }, model: 'spy' };
+        onEvent({
+          type: 'usage',
+          usage: { inputTokens: 1, outputTokens: 1 },
+          model: 'spy',
+        });
+        return {
+          text: 'ok',
+          usage: { inputTokens: 1, outputTokens: 1 },
+          model: 'spy',
+        };
       },
     };
     const { outcome } = await run(
       loop({
         name: 'x',
-        body: (await import('../src/api.ts')).agentJob({ label: 'w', engine: 'spy', prompt: 'hello-engine' }),
+        body: (await import('../src/api.ts')).agentJob({
+          label: 'w',
+          engine: 'spy',
+          prompt: 'hello-engine',
+        }),
         max: 1,
       }),
       { engine: 'spy', engines: { spy } },
@@ -71,6 +93,8 @@ describe('LoopError', () => {
     const wrapped = LoopError.from(new Error('net'), { code: 'ENGINE' });
     expect(wrapped.code).toBe('ENGINE');
     expect(wrapped.retryable).toBe(true);
-    expect(LoopError.from(new Error('x'), { code: 'CONFIG' }).retryable).toBe(false);
+    expect(LoopError.from(new Error('x'), { code: 'CONFIG' }).retryable).toBe(
+      false,
+    );
   });
 });

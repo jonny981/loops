@@ -10,7 +10,11 @@
  * fixed provider set. (`mock` is constructed directly in tests/examples, not
  * registered by name, so it is intentionally not listed here.)
  */
-export type EngineName = 'agent-sdk' | 'claude-cli' | 'anthropic-api' | (string & {});
+export type EngineName =
+  | 'agent-sdk'
+  | 'claude-cli'
+  | 'anthropic-api'
+  | (string & {});
 
 export interface Usage {
   inputTokens: number;
@@ -69,7 +73,11 @@ export interface Engine {
 export type EngineRef = EngineName | Engine;
 
 export function isEngine(ref: EngineRef | undefined): ref is Engine {
-  return typeof ref === 'object' && ref !== null && typeof (ref as Engine).run === 'function';
+  return (
+    typeof ref === 'object' &&
+    ref !== null &&
+    typeof (ref as Engine).run === 'function'
+  );
 }
 
 /** Per-run options that the registry uses to construct engines. */

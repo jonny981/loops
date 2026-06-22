@@ -10,7 +10,13 @@
 
 import pRetry, { AbortError } from 'p-retry';
 
-import type { AgentRequest, AgentResult, Engine, EngineEventSink, EngineOptions } from './engine.ts';
+import type {
+  AgentRequest,
+  AgentResult,
+  Engine,
+  EngineEventSink,
+  EngineOptions,
+} from './engine.ts';
 import { LoopError } from '../core/errors.ts';
 
 function isRetryable(error: unknown): boolean {
@@ -31,7 +37,9 @@ interface MessageStreamLike {
   finalMessage(): Promise<FinalMessage>;
 }
 interface MessagesClientLike {
-  messages: { stream(body: unknown, opts?: { signal?: AbortSignal }): MessageStreamLike };
+  messages: {
+    stream(body: unknown, opts?: { signal?: AbortSignal }): MessageStreamLike;
+  };
 }
 
 export class AnthropicApiEngine implements Engine {
@@ -50,7 +58,8 @@ export class AnthropicApiEngine implements Engine {
           code: 'CONFIG',
           phase: 'engine',
           retryable: false,
-          message: 'the anthropic-api engine needs an API key — set ANTHROPIC_API_KEY or pass --api-key (or use the agent-sdk / claude-cli engine, which use host Claude auth)',
+          message:
+            'the anthropic-api engine needs an API key — set ANTHROPIC_API_KEY or pass --api-key (or use the agent-sdk / claude-cli engine, which use host Claude auth)',
         });
       }
       this.clientPromise = import('@anthropic-ai/sdk').then(
@@ -61,9 +70,14 @@ export class AnthropicApiEngine implements Engine {
     return this.clientPromise;
   }
 
-  async run(req: AgentRequest, onEvent: EngineEventSink, signal: AbortSignal): Promise<AgentResult> {
+  async run(
+    req: AgentRequest,
+    onEvent: EngineEventSink,
+    signal: AbortSignal,
+  ): Promise<AgentResult> {
     const client = await this.client();
-    const model = req.model ?? this.opts.defaultModel ?? 'claude-haiku-4-5-20251001';
+    const model =
+      req.model ?? this.opts.defaultModel ?? 'claude-haiku-4-5-20251001';
     const maxTokens = req.maxTokens ?? 1024;
 
     const attempt = async (): Promise<FinalMessage> => {
@@ -89,9 +103,18 @@ export class AnthropicApiEngine implements Engine {
 
     let message;
     try {
-      message = await pRetry(attempt, { retries: 2, minTimeout: 500, factor: 2 });
+      message = await pRetry(attempt, {
+        retries: 2,
+        minTimeout: 500,
+        factor: 2,
+      });
     } catch (e) {
-      if (signal.aborted) throw new LoopError({ code: 'ABORTED', phase: 'engine', message: 'anthropic-api run aborted' });
+      if (signal.aborted)
+        throw new LoopError({
+          code: 'ABORTED',
+          phase: 'engine',
+          message: 'anthropic-api run aborted',
+        });
       throw LoopError.from(e, { code: 'ENGINE', phase: 'engine' });
     }
 
@@ -99,8 +122,17 @@ export class AnthropicApiEngine implements Engine {
       .filter((b) => b.type === 'text')
       .map((b) => b.text ?? '')
       .join('');
-    const usage = { inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens };
+    const usage = {
+      inputTokens: message.usage.input_tokens,
+      outputTokens: message.usage.output_tokens,
+    };
     onEvent({ type: 'usage', usage, model });
-    return { text, usage, model, stopReason: message.stop_reason ?? undefined, raw: message };
+    return {
+      text,
+      usage,
+      model,
+      stopReason: message.stop_reason ?? undefined,
+      raw: message,
+    };
   }
 }

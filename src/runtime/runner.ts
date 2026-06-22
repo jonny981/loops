@@ -4,7 +4,12 @@
  * state, and the stats collector. Reporters/TUI observe via `onEvent`.
  */
 
-import type { Engine, EngineName, EngineOptions, EngineRef } from '../engines/engine.ts';
+import type {
+  Engine,
+  EngineName,
+  EngineOptions,
+  EngineRef,
+} from '../engines/engine.ts';
 import { EngineRegistry, type EngineFactory } from '../engines/registry.ts';
 import { Stats, type StatsSnapshot } from '../core/stats.ts';
 import { LoopError } from '../core/errors.ts';
@@ -28,7 +33,10 @@ export interface RunResult {
   stats: StatsSnapshot;
 }
 
-export async function run(job: Job, options: RunOptions = {}): Promise<RunResult> {
+export async function run(
+  job: Job,
+  options: RunOptions = {},
+): Promise<RunResult> {
   const registry = new EngineRegistry(options.engineOptions ?? {});
   for (const [name, value] of Object.entries(options.engines ?? {})) {
     registry.register(name, typeof value === 'function' ? value : () => value);
@@ -39,14 +47,18 @@ export async function run(job: Job, options: RunOptions = {}): Promise<RunResult
   const controller = new AbortController();
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
-    else options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    else
+      options.signal.addEventListener('abort', () => controller.abort(), {
+        once: true,
+      });
   }
 
   const emit = (event: LoopEvent) => {
     stats.record(event);
     options.onEvent?.(event);
   };
-  const resolveEngine = (ref?: EngineRef): Engine => registry.create(ref, defaultEngine);
+  const resolveEngine = (ref?: EngineRef): Engine =>
+    registry.create(ref, defaultEngine);
 
   const rootCtx: JobContext = {
     engine: resolveEngine(defaultEngine),
@@ -57,7 +69,8 @@ export async function run(job: Job, options: RunOptions = {}): Promise<RunResult
     iteration: 0,
     depth: 0,
     path: [],
-    log: (message, level = 'info') => emit({ kind: 'log', ts: Date.now(), path: [], level, message }),
+    log: (message, level = 'info') =>
+      emit({ kind: 'log', ts: Date.now(), path: [], level, message }),
   };
 
   let outcome: Outcome;
@@ -65,7 +78,13 @@ export async function run(job: Job, options: RunOptions = {}): Promise<RunResult
     outcome = await job(rootCtx);
   } catch (e) {
     const error = LoopError.from(e, { code: 'UNKNOWN' });
-    emit({ kind: 'error', ts: Date.now(), path: [], message: error.message, code: error.code });
+    emit({
+      kind: 'error',
+      ts: Date.now(),
+      path: [],
+      message: error.message,
+      code: error.code,
+    });
     outcome = { status: 'fail', summary: error.message, error };
   }
 

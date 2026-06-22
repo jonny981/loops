@@ -14,7 +14,10 @@ export interface ContextOverride {
   lastReview?: Outcome;
 }
 
-export function childContext(parent: JobContext, over: ContextOverride): JobContext {
+export function childContext(
+  parent: JobContext,
+  over: ContextOverride,
+): JobContext {
   return {
     engine: parent.engine,
     resolveEngine: parent.resolveEngine,

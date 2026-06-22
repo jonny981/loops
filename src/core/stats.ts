@@ -71,7 +71,12 @@ export class Stats {
         break;
       }
       case 'error':
-        this.errors.push({ path: key, code: event.code, message: event.message, ts: event.ts });
+        this.errors.push({
+          path: key,
+          code: event.code,
+          message: event.message,
+          ts: event.ts,
+        });
         break;
     }
   }

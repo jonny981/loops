@@ -5,15 +5,27 @@
  * all it takes to add a provider: implement `run`, register a name.
  */
 
-import type { AgentRequest, AgentResult, Engine, EngineEventSink, Usage } from './engine.ts';
+import type {
+  AgentRequest,
+  AgentResult,
+  Engine,
+  EngineEventSink,
+  Usage,
+} from './engine.ts';
 
-export type MockResponder = (req: AgentRequest) => string | { text: string; usage?: Usage; model?: string };
+export type MockResponder = (
+  req: AgentRequest,
+) => string | { text: string; usage?: Usage; model?: string };
 
 export class MockEngine implements Engine {
   readonly name = 'mock';
   constructor(private readonly responder: MockResponder) {}
 
-  async run(req: AgentRequest, onEvent: EngineEventSink, signal: AbortSignal): Promise<AgentResult> {
+  async run(
+    req: AgentRequest,
+    onEvent: EngineEventSink,
+    signal: AbortSignal,
+  ): Promise<AgentResult> {
     if (signal.aborted) {
       throw Object.assign(new Error('aborted'), { name: 'AbortError' });
     }
@@ -28,6 +40,10 @@ export class MockEngine implements Engine {
 }
 
 /** Convenience: always reply with a verdict JSON (handy for validator tests). */
-export function mockVerdict(verdict: 'yes' | 'no', confidence: number, reason = 'mock'): MockEngine {
+export function mockVerdict(
+  verdict: 'yes' | 'no',
+  confidence: number,
+  reason = 'mock',
+): MockEngine {
   return new MockEngine(() => JSON.stringify({ verdict, confidence, reason }));
 }

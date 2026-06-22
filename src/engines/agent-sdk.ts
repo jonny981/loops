@@ -6,7 +6,13 @@
 
 import pTimeout from 'p-timeout';
 
-import type { AgentRequest, AgentResult, Engine, EngineEventSink, EngineOptions } from './engine.ts';
+import type {
+  AgentRequest,
+  AgentResult,
+  Engine,
+  EngineEventSink,
+  EngineOptions,
+} from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
 
@@ -14,11 +20,17 @@ export class AgentSdkEngine implements Engine {
   readonly name = 'agent-sdk';
   constructor(private readonly opts: EngineOptions = {}) {}
 
-  async run(req: AgentRequest, onEvent: EngineEventSink, signal: AbortSignal): Promise<AgentResult> {
+  async run(
+    req: AgentRequest,
+    onEvent: EngineEventSink,
+    signal: AbortSignal,
+  ): Promise<AgentResult> {
     // Lazy import so installs/runs that never touch this engine don't pay for it.
     const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
-    const acc = newAccumulator(req.model ?? this.opts.defaultModel ?? 'unknown');
+    const acc = newAccumulator(
+      req.model ?? this.opts.defaultModel ?? 'unknown',
+    );
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     if (signal.aborted) abort.abort();
@@ -35,19 +47,34 @@ export class AgentSdkEngine implements Engine {
     } as Record<string, unknown>;
 
     try {
-      const response = query({ prompt: req.prompt, options } as never) as AsyncIterable<unknown>;
+      const response = query({
+        prompt: req.prompt,
+        options,
+      } as never) as AsyncIterable<unknown>;
       const consume = (async () => {
         for await (const message of response) mapMessage(message, acc, onEvent);
       })();
-      await (req.timeoutMs ? pTimeout(consume, { milliseconds: req.timeoutMs }) : consume);
+      await (req.timeoutMs
+        ? pTimeout(consume, { milliseconds: req.timeoutMs })
+        : consume);
     } catch (e) {
-      if (signal.aborted) throw new LoopError({ code: 'ABORTED', phase: 'engine', message: 'agent-sdk run aborted' });
+      if (signal.aborted)
+        throw new LoopError({
+          code: 'ABORTED',
+          phase: 'engine',
+          message: 'agent-sdk run aborted',
+        });
       throw LoopError.from(e, { code: 'ENGINE', phase: 'engine' });
     } finally {
       signal.removeEventListener('abort', onAbort);
     }
 
     onEvent({ type: 'usage', usage: acc.usage, model: acc.model });
-    return { text: acc.text, usage: acc.usage, model: acc.model, stopReason: acc.stopReason };
+    return {
+      text: acc.text,
+      usage: acc.usage,
+      model: acc.model,
+      stopReason: acc.stopReason,
+    };
   }
 }

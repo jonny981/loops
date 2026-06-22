@@ -3,7 +3,10 @@ import { describe, it, expect } from 'vitest';
 import { run, loop, fnJob, predicate, MockEngine } from '../src/api.ts';
 import type { Job, RunOptions } from '../src/api.ts';
 
-const mockOpts: RunOptions = { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } };
+const mockOpts: RunOptions = {
+  engine: 'mock',
+  engines: { mock: () => new MockEngine(() => '') },
+};
 
 describe('loop extras', () => {
   it('stopOn aborts the loop early', async () => {
@@ -28,7 +31,10 @@ describe('loop extras', () => {
     const throwing: Job = async () => {
       throw new Error('boom');
     };
-    const { outcome } = await run(loop({ name: 'x', body: throwing, retry: { onError: 'fail' }, max: 5 }), mockOpts);
+    const { outcome } = await run(
+      loop({ name: 'x', body: throwing, retry: { onError: 'fail' }, max: 5 }),
+      mockOpts,
+    );
     expect(outcome.status).toBe('fail');
   });
 
@@ -39,7 +45,12 @@ describe('loop extras', () => {
       throw new Error('e');
     };
     const { outcome } = await run(
-      loop({ name: 'x', body: throwing, retry: { onError: 'continue', maxConsecutive: 3 }, max: 100 }),
+      loop({
+        name: 'x',
+        body: throwing,
+        retry: { onError: 'continue', maxConsecutive: 3 },
+        max: 100,
+      }),
       mockOpts,
     );
     expect(outcome.status).toBe('fail');

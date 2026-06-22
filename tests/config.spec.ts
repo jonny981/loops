@@ -4,7 +4,10 @@ import { parseDuration, buildJobFromFlags, FlagSpec } from '../src/config.ts';
 import { run, MockEngine } from '../src/api.ts';
 import type { RunOptions } from '../src/api.ts';
 
-const mockOpts: RunOptions = { engine: 'mock', engines: { mock: () => new MockEngine(() => 'work done') } };
+const mockOpts: RunOptions = {
+  engine: 'mock',
+  engines: { mock: () => new MockEngine(() => 'work done') },
+};
 
 describe('parseDuration', () => {
   it('parses suffixed durations', () => {

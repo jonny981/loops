@@ -4,21 +4,38 @@ import { run, dag, sequence, parallel, fnJob } from '../src/api.ts';
 import type { Outcome, RunOptions } from '../src/api.ts';
 import { MockEngine } from '../src/api.ts';
 
-const mockOpts: RunOptions = { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } };
-const pass = (rec: string[], name: string) => fnJob(name, async () => { rec.push(name); return { status: 'pass' as const }; });
-const fail = (rec: string[], name: string) => fnJob(name, async () => { rec.push(name); return { status: 'fail' as const }; });
+const mockOpts: RunOptions = {
+  engine: 'mock',
+  engines: { mock: () => new MockEngine(() => '') },
+};
+const pass = (rec: string[], name: string) =>
+  fnJob(name, async () => {
+    rec.push(name);
+    return { status: 'pass' as const };
+  });
+const fail = (rec: string[], name: string) =>
+  fnJob(name, async () => {
+    rec.push(name);
+    return { status: 'fail' as const };
+  });
 
 describe('dag', () => {
   it('sequence runs in order and stops at the first failure', async () => {
     const order: string[] = [];
-    const { outcome } = await run(sequence('seq', pass(order, 'a'), pass(order, 'b'), pass(order, 'c')), mockOpts);
+    const { outcome } = await run(
+      sequence('seq', pass(order, 'a'), pass(order, 'b'), pass(order, 'c')),
+      mockOpts,
+    );
     expect(outcome.status).toBe('pass');
     expect(order).toEqual(['a', 'b', 'c']);
   });
 
   it('parallel runs every node regardless of failures', async () => {
     const ran: string[] = [];
-    const { outcome } = await run(parallel('par', { a: fail(ran, 'a'), b: pass(ran, 'b') }), mockOpts);
+    const { outcome } = await run(
+      parallel('par', { a: fail(ran, 'a'), b: pass(ran, 'b') }),
+      mockOpts,
+    );
     expect(ran.sort()).toEqual(['a', 'b']);
     expect(outcome.status).toBe('fail');
   });
@@ -26,7 +43,10 @@ describe('dag', () => {
   it('blocks dependents of a failed required node', async () => {
     const ran: string[] = [];
     const { outcome } = await run(
-      dag({ name: 'd', nodes: { a: fail(ran, 'a'), b: { job: pass(ran, 'b'), needs: ['a'] } } }),
+      dag({
+        name: 'd',
+        nodes: { a: fail(ran, 'a'), b: { job: pass(ran, 'b'), needs: ['a'] } },
+      }),
       mockOpts,
     );
     expect(ran).toEqual(['a']);
@@ -38,8 +58,14 @@ describe('dag', () => {
       dag({
         name: 'c',
         nodes: {
-          a: { job: fnJob('a', async () => ({ status: 'pass' })), needs: ['b'] },
-          b: { job: fnJob('b', async () => ({ status: 'pass' })), needs: ['a'] },
+          a: {
+            job: fnJob('a', async () => ({ status: 'pass' })),
+            needs: ['b'],
+          },
+          b: {
+            job: fnJob('b', async () => ({ status: 'pass' })),
+            needs: ['a'],
+          },
         },
       }),
     ).toThrow(/cycle/);
@@ -48,7 +74,13 @@ describe('dag', () => {
   it('an optional leaf failure does not fail the DAG', async () => {
     const ran: string[] = [];
     const { outcome } = await run(
-      dag({ name: 'o', nodes: { a: pass(ran, 'a'), notify: { job: fail(ran, 'notify'), optional: true } } }),
+      dag({
+        name: 'o',
+        nodes: {
+          a: pass(ran, 'a'),
+          notify: { job: fail(ran, 'notify'), optional: true },
+        },
+      }),
       mockOpts,
     );
     expect(ran.sort()).toEqual(['a', 'notify']);
@@ -58,7 +90,13 @@ describe('dag', () => {
   it('a failed dependency blocks a required dependent even when the dep is optional', async () => {
     const ran: string[] = [];
     const { outcome } = await run(
-      dag({ name: 'o', nodes: { a: { job: fail(ran, 'a'), optional: true }, b: { job: pass(ran, 'b'), needs: ['a'] } } }),
+      dag({
+        name: 'o',
+        nodes: {
+          a: { job: fail(ran, 'a'), optional: true },
+          b: { job: pass(ran, 'b'), needs: ['a'] },
+        },
+      }),
       mockOpts,
     );
     expect(ran).toEqual(['a']); // b never runs against a failed dependency
@@ -70,7 +108,13 @@ describe('dag', () => {
   it('skips a node whose `when` gate is unmet', async () => {
     const ran: string[] = [];
     const { outcome } = await run(
-      dag({ name: 'w', nodes: { a: pass(ran, 'a'), b: { job: pass(ran, 'b'), needs: ['a'], when: () => false } } }),
+      dag({
+        name: 'w',
+        nodes: {
+          a: pass(ran, 'a'),
+          b: { job: pass(ran, 'b'), needs: ['a'], when: () => false },
+        },
+      }),
       mockOpts,
     );
     expect(ran).toEqual(['a']);
@@ -88,7 +132,14 @@ describe('dag', () => {
         active -= 1;
         return { status: 'pass' } as Outcome;
       });
-    await run(parallel('p', { a: make('a'), b: make('b'), c: make('c'), d: make('d') }, 2), mockOpts);
+    await run(
+      parallel(
+        'p',
+        { a: make('a'), b: make('b'), c: make('c'), d: make('d') },
+        2,
+      ),
+      mockOpts,
+    );
     expect(peak).toBeLessThanOrEqual(2);
   });
 });

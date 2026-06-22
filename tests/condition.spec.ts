@@ -8,12 +8,18 @@ const withVerdict = (v: 'yes' | 'no', c: number): RunOptions => ({
   engines: { mock: () => mockVerdict(v, c) },
 });
 
-const failingBody = () => fnJob('b', async () => ({ status: 'fail' as const, summary: 'work' }));
+const failingBody = () =>
+  fnJob('b', async () => ({ status: 'fail' as const, summary: 'work' }));
 
 describe('conditions', () => {
   it('agentCheck opens the gate above threshold', async () => {
     const { outcome } = await run(
-      loop({ name: 'x', body: failingBody(), until: agentCheck({ question: 'done?', threshold: 0.8 }), max: 5 }),
+      loop({
+        name: 'x',
+        body: failingBody(),
+        until: agentCheck({ question: 'done?', threshold: 0.8 }),
+        max: 5,
+      }),
       withVerdict('yes', 0.9),
     );
     expect(outcome.status).toBe('pass');
@@ -21,7 +27,12 @@ describe('conditions', () => {
 
   it('agentCheck keeps looping below threshold', async () => {
     const { outcome } = await run(
-      loop({ name: 'x', body: failingBody(), until: agentCheck({ question: 'done?', threshold: 0.8 }), max: 3 }),
+      loop({
+        name: 'x',
+        body: failingBody(),
+        until: agentCheck({ question: 'done?', threshold: 0.8 }),
+        max: 3,
+      }),
       withVerdict('yes', 0.5),
     );
     expect(outcome.status).toBe('exhausted');

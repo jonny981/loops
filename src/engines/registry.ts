@@ -43,7 +43,10 @@ export class EngineRegistry {
     if (cached) return cached;
     const factory = this.factories.get(name);
     if (!factory) {
-      throw new LoopError({ code: 'CONFIG', message: `unknown engine "${name}" (have: ${this.names().join(', ')})` });
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `unknown engine "${name}" (have: ${this.names().join(', ')})`,
+      });
     }
     const engine = factory(this.opts);
     this.cache.set(name, engine);
@@ -53,9 +56,25 @@ export class EngineRegistry {
   private registerBuiltins(): void {
     // Adapter modules are imported lazily inside the factory so that selecting,
     // say, claude-cli never loads the Anthropic API SDK and vice versa.
-    this.register('agent-sdk', (o) => lazy(() => import('./agent-sdk.ts').then((m) => new m.AgentSdkEngine(o)), 'agent-sdk'));
-    this.register('claude-cli', (o) => lazy(() => import('./claude-cli.ts').then((m) => new m.ClaudeCliEngine(o)), 'claude-cli'));
-    this.register('anthropic-api', (o) => lazy(() => import('./anthropic-api.ts').then((m) => new m.AnthropicApiEngine(o)), 'anthropic-api'));
+    this.register('agent-sdk', (o) =>
+      lazy(
+        () => import('./agent-sdk.ts').then((m) => new m.AgentSdkEngine(o)),
+        'agent-sdk',
+      ),
+    );
+    this.register('claude-cli', (o) =>
+      lazy(
+        () => import('./claude-cli.ts').then((m) => new m.ClaudeCliEngine(o)),
+        'claude-cli',
+      ),
+    );
+    this.register('anthropic-api', (o) =>
+      lazy(
+        () =>
+          import('./anthropic-api.ts').then((m) => new m.AnthropicApiEngine(o)),
+        'anthropic-api',
+      ),
+    );
   }
 }
 

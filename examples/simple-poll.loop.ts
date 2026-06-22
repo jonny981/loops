@@ -14,7 +14,10 @@ export default defineJob(
     name: 'poll',
     body: fnJob('check', async () => {
       ticks += 1;
-      return { status: ticks >= 3 ? 'pass' : 'fail', summary: `tick ${ticks}/3` };
+      return {
+        status: ticks >= 3 ? 'pass' : 'fail',
+        summary: `tick ${ticks}/3`,
+      };
     }),
     until: predicate(() => ticks >= 3, 'three ticks observed'),
     max: 10,

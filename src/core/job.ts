@@ -42,8 +42,12 @@ export function agentJob(config: AgentJobConfig): Job {
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label: config.label });
 
     const engine = ctx.resolveEngine(config.engine);
-    const prompt = typeof config.prompt === 'function' ? await config.prompt(ctx) : config.prompt;
-    const system = typeof config.system === 'function' ? config.system(ctx) : config.system;
+    const prompt =
+      typeof config.prompt === 'function'
+        ? await config.prompt(ctx)
+        : config.prompt;
+    const system =
+      typeof config.system === 'function' ? config.system(ctx) : config.system;
 
     let result;
     try {
@@ -67,25 +71,66 @@ export function agentJob(config: AgentJobConfig): Job {
               ctx.emit({ kind: 'engine:thinking', ts, path, delta: e.delta });
               break;
             case 'tool':
-              ctx.emit({ kind: 'engine:tool', ts, path, name: e.name, phase: e.phase });
+              ctx.emit({
+                kind: 'engine:tool',
+                ts,
+                path,
+                name: e.name,
+                phase: e.phase,
+              });
               break;
             case 'usage':
-              ctx.emit({ kind: 'engine:usage', ts, path, model: e.model, usage: e.usage });
+              ctx.emit({
+                kind: 'engine:usage',
+                ts,
+                path,
+                model: e.model,
+                usage: e.usage,
+              });
               break;
           }
         },
         ctx.signal,
       );
     } catch (e) {
-      const error = LoopError.from(e, { code: ctx.signal.aborted ? 'ABORTED' : 'ENGINE', phase: 'body', path: ctx.path, iteration: ctx.iteration });
-      ctx.emit({ kind: 'error', ts: Date.now(), path, message: error.message, code: error.code });
-      const outcome: Outcome = { status: ctx.signal.aborted ? 'aborted' : 'fail', summary: error.message, error };
-      ctx.emit({ kind: 'job:end', ts: Date.now(), path, label: config.label, outcome });
+      const error = LoopError.from(e, {
+        code: ctx.signal.aborted ? 'ABORTED' : 'ENGINE',
+        phase: 'body',
+        path: ctx.path,
+        iteration: ctx.iteration,
+      });
+      ctx.emit({
+        kind: 'error',
+        ts: Date.now(),
+        path,
+        message: error.message,
+        code: error.code,
+      });
+      const outcome: Outcome = {
+        status: ctx.signal.aborted ? 'aborted' : 'fail',
+        summary: error.message,
+        error,
+      };
+      ctx.emit({
+        kind: 'job:end',
+        ts: Date.now(),
+        path,
+        label: config.label,
+        outcome,
+      });
       return outcome;
     }
 
-    const outcome = config.outcome ? await config.outcome(result.text, ctx) : TERMINAL(result.text);
-    ctx.emit({ kind: 'job:end', ts: Date.now(), path, label: config.label, outcome });
+    const outcome = config.outcome
+      ? await config.outcome(result.text, ctx)
+      : TERMINAL(result.text);
+    ctx.emit({
+      kind: 'job:end',
+      ts: Date.now(),
+      path,
+      label: config.label,
+      outcome,
+    });
     return outcome;
   };
 }
@@ -102,9 +147,20 @@ export function fnJob(
     try {
       outcome = await fn(ctx);
     } catch (e) {
-      const error = LoopError.from(e, { code: 'BODY', phase: 'body', path: ctx.path, iteration: ctx.iteration });
+      const error = LoopError.from(e, {
+        code: 'BODY',
+        phase: 'body',
+        path: ctx.path,
+        iteration: ctx.iteration,
+      });
       outcome = { status: 'fail', summary: error.message, error };
-      ctx.emit({ kind: 'error', ts: Date.now(), path, message: error.message, code: error.code });
+      ctx.emit({
+        kind: 'error',
+        ts: Date.now(),
+        path,
+        message: error.message,
+        code: error.code,
+      });
     }
     ctx.emit({ kind: 'job:end', ts: Date.now(), path, label, outcome });
     return outcome;

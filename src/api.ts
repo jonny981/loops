@@ -60,7 +60,12 @@ export { EngineRegistry, type EngineFactory } from './engines/registry.ts';
 export { MockEngine, mockVerdict, type MockResponder } from './engines/mock.ts';
 
 // Runtime
-export { run, exitCodeFor, type RunOptions, type RunResult } from './runtime/runner.ts';
+export {
+  run,
+  exitCodeFor,
+  type RunOptions,
+  type RunResult,
+} from './runtime/runner.ts';
 export { Stats, type StatsSnapshot } from './core/stats.ts';
 
 import type { Job } from './core/types.ts';

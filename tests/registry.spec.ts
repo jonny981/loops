@@ -14,7 +14,9 @@ describe('EngineRegistry', () => {
 
   it('caches the instance per name', () => {
     const reg = new EngineRegistry();
-    expect(reg.create('claude-cli', 'claude-cli')).toBe(reg.create('claude-cli', 'claude-cli'));
+    expect(reg.create('claude-cli', 'claude-cli')).toBe(
+      reg.create('claude-cli', 'claude-cli'),
+    );
   });
 
   it('throws a CONFIG error for an unknown engine', () => {
