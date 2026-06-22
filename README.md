@@ -187,13 +187,30 @@ framework; a managed/durable runner could later be a drop-in engine too.
 
 ## Output
 
-- **Ink TUI** (default on a TTY): live loop/dag tree, streaming pane, stats footer; `q`/Esc/Ctrl-C aborts. Abort is cooperative — it cancels via `AbortController`/`cancelSignal`, so a clean stop depends on the engine honouring it promptly (the CLI engine escalates to SIGKILL after 5s; a second Ctrl-C force-exits).
-- **`--no-tui`**: streamed line logs.
+- **Ink TUI** (default on a TTY): live loop/dag tree, a per-iteration detail panel, and a stats footer; `q`/Esc/Ctrl-C aborts. Abort is cooperative — it cancels via `AbortController`/`cancelSignal`, so a clean stop depends on the engine honouring it promptly (the CLI engine escalates to SIGKILL after 5s; a second Ctrl-C force-exits).
+- **`--no-tui`**: streamed line logs. After each iteration of a loop completes, a one-line report is printed, e.g. `↳ iter 2: body=fail · until=not met · review=fail (needs X) · 1.2k/0.3k tok`.
 - **`--json`**: NDJSON event stream on stdout.
 
 Every mode prints an exit summary (result, per-loop iterations, review tallies,
 token usage by model, errors). Exit codes: `pass=0`, `fail=1`, `exhausted=2`,
 `aborted=130`.
+
+### TUI navigation
+
+The TUI retains the full per-iteration history of every loop, so you can browse
+the result of each iteration while the run continues. The detail panel shows the
+selected iteration's body status + summary, the `until`/`stopOn`/`review`
+verdicts, token usage and duration, and the last few transcript lines.
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` or `k` / `j` | Move the selection across loop nodes (tree order) |
+| `←` / `→` or `h` / `l` | Step to the previous / next iteration of the selected loop |
+| `f` or `space` | Toggle follow-live (auto-track the newest loop + iteration) |
+| `q` / `Esc` / `Ctrl-C` | Abort the run |
+
+The footer shows `● LIVE` while following and `⏸ BROWSE` once you navigate away;
+any navigation key turns following off, and `f`/`space` turns it back on.
 
 ## Develop
 

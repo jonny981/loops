@@ -22,6 +22,20 @@ export function jsonReporter(): Listener {
   return (event: LoopEvent) => process.stdout.write(`${JSON.stringify(event)}\n`);
 }
 
+/** Per-loop-path accumulator, so we can print one report line per iteration. */
+interface IterAccum {
+  iteration: number;
+  bodyStatus?: Outcome['status'];
+  until?: { met: boolean; reason: string };
+  stopOn?: { met: boolean; reason: string };
+  review?: { status: Outcome['status']; summary?: string };
+  tokensIn: number;
+  tokensOut: number;
+}
+
+/** Compact a token count, e.g. 1234 → "1.2k". */
+const tok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
 /** Human-readable streaming output. Agent text streams inline; events labelled. */
 export function plainReporter(): Listener {
   let streaming = false;
@@ -31,7 +45,28 @@ export function plainReporter(): Listener {
       streaming = false;
     }
   };
+
+  // Per loop path: the in-flight iteration's accumulating facts. A new
+  // `loop:iteration` (or `loop:end`) for that path flushes the previous one.
+  const accums = new Map<string, IterAccum>();
+  const reportIteration = (key: string, indentPath: string[]): void => {
+    const a = accums.get(key);
+    if (!a) return;
+    accums.delete(key);
+    const parts: string[] = [];
+    if (a.bodyStatus) parts.push(`body=${statusColor(a.bodyStatus, a.bodyStatus)}`);
+    if (a.until) parts.push(`until=${a.until.met ? pc.green('met') : pc.gray('not met')}`);
+    if (a.stopOn?.met) parts.push(`stopOn=${pc.red('met')}`);
+    if (a.review) {
+      const rv = `review=${statusColor(a.review.status, a.review.status)}`;
+      parts.push(a.review.summary ? `${rv} ${pc.dim(`(${a.review.summary})`)}` : rv);
+    }
+    parts.push(`${tok(a.tokensIn)}/${tok(a.tokensOut)} tok`);
+    console.log(`${indent(indentPath)}  ${pc.gray(`↳ iter ${a.iteration}:`)} ${parts.join(pc.gray(' · '))}`);
+  };
+
   return (event: LoopEvent) => {
+    const key = event.path.join(' / ');
     switch (event.kind) {
       case 'engine:text':
         process.stdout.write(event.delta);
@@ -43,18 +78,45 @@ export function plainReporter(): Listener {
         return;
       case 'loop:iteration':
         endStream();
+        reportIteration(key, event.path); // flush the previous iteration's report
+        accums.set(key, { iteration: event.iteration, tokensIn: 0, tokensOut: 0 });
         console.log(`${indent(event.path)}${pc.gray(`  iteration ${event.iteration}`)}`);
         return;
-      case 'loop:condition':
+      case 'loop:condition': {
         endStream();
+        const a = accums.get(key);
+        if (a) {
+          if (event.which === 'until') a.until = { met: event.result.met, reason: event.result.reason };
+          else if (event.which === 'stopOn') a.stopOn = { met: event.result.met, reason: event.result.reason };
+        }
         console.log(`${indent(event.path)}  ${pc.magenta(event.which)}: ${event.result.met ? pc.green('met') : pc.gray('not met')} — ${pc.dim(event.result.reason)}`);
         return;
-      case 'loop:review':
+      }
+      case 'loop:review': {
         endStream();
+        const a = accums.get(key);
+        if (a) a.review = { status: event.outcome.status, summary: event.outcome.summary };
         console.log(`${indent(event.path)}  ${pc.blue('review')}: ${statusColor(event.outcome.status, event.outcome.status)}${event.outcome.summary ? pc.dim(` — ${event.outcome.summary}`) : ''}`);
         return;
+      }
+      case 'job:end': {
+        // The loop body runs at the loop's own path; record its outcome on the
+        // current iteration accumulator for that path.
+        const a = accums.get(key);
+        if (a) a.bodyStatus = event.outcome.status;
+        return;
+      }
+      case 'engine:usage': {
+        const a = accums.get(key);
+        if (a) {
+          a.tokensIn += event.usage.inputTokens;
+          a.tokensOut += event.usage.outputTokens;
+        }
+        return;
+      }
       case 'loop:end':
         endStream();
+        reportIteration(key, event.path); // flush the final iteration's report
         console.log(`${indent(event.path)}${pc.cyan('◂ loop')} ${pc.bold(last(event.path))} → ${statusColor(event.outcome.status, event.outcome.status)} ${pc.gray(`(${event.iterations} iter)`)}`);
         return;
       case 'dag:start':

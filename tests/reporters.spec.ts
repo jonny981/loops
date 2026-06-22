@@ -42,6 +42,51 @@ describe('reporters', () => {
     expect(lines.every((l) => l.endsWith('\n'))).toBe(true);
   });
 
+  it('plain reporter prints one per-iteration report line per completed iteration', () => {
+    const out: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+    const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      out.push(args.map(String).join(' '));
+    });
+    // Strip ANSI so assertions are colour-agnostic.
+    const clean = (s: string): string => s.replace(/\[[0-9;]*m/g, '');
+
+    const events: LoopEvent[] = [
+      { kind: 'loop:start', ts: 0, path: ['build'], depth: 1, max: 3 },
+      // iteration 1: body fail, until not met, usage 1200/300
+      { kind: 'loop:iteration', ts: 0, path: ['build'], iteration: 1 },
+      { kind: 'engine:usage', ts: 0, path: ['build'], model: 'm', usage: { inputTokens: 1200, outputTokens: 300 } },
+      { kind: 'job:end', ts: 0, path: ['build'], label: 'worker', outcome: { status: 'fail' } },
+      { kind: 'loop:condition', ts: 0, path: ['build'], which: 'until', result: { met: false, reason: 'no' } },
+      // iteration 2: body pass, until met, review fail
+      { kind: 'loop:iteration', ts: 0, path: ['build'], iteration: 2 },
+      { kind: 'engine:usage', ts: 0, path: ['build'], model: 'm', usage: { inputTokens: 500, outputTokens: 50 } },
+      { kind: 'job:end', ts: 0, path: ['build'], label: 'worker', outcome: { status: 'pass' } },
+      { kind: 'loop:condition', ts: 0, path: ['build'], which: 'until', result: { met: true, reason: 'yes' } },
+      { kind: 'loop:review', ts: 0, path: ['build'], outcome: { status: 'fail', summary: 'needs X' } },
+      { kind: 'loop:end', ts: 0, path: ['build'], iterations: 2, outcome: { status: 'exhausted' } },
+    ];
+    const report = plainReporter();
+    events.forEach(report);
+    write.mockRestore();
+    log.mockRestore();
+
+    const lines = out.map(clean);
+    const iter1 = lines.find((l) => l.includes('↳ iter 1:'));
+    const iter2 = lines.find((l) => l.includes('↳ iter 2:'));
+    expect(iter1).toBeDefined();
+    expect(iter1).toContain('body=fail');
+    expect(iter1).toContain('until=not met');
+    expect(iter1).toContain('1.2k/300 tok');
+
+    expect(iter2).toBeDefined();
+    expect(iter2).toContain('body=pass');
+    expect(iter2).toContain('until=met');
+    expect(iter2).toContain('review=fail');
+    expect(iter2).toContain('(needs X)');
+    expect(iter2).toContain('500/50 tok');
+  });
+
   it('printSummary renders without throwing', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     expect(() =>
