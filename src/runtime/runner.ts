@@ -13,6 +13,8 @@ import type {
 import { EngineRegistry, type EngineFactory } from '../engines/registry.ts';
 import { Stats, type StatsSnapshot } from '../core/stats.ts';
 import { LoopError } from '../core/errors.ts';
+import { Budget, type BudgetConfig } from '../core/budget.ts';
+import { makeRecorder, makeCheckpointer, loadCheckpoint } from './persist.ts';
 import type { Job, JobContext, LoopEvent, Outcome } from '../core/types.ts';
 
 export interface RunOptions {
@@ -26,11 +28,25 @@ export interface RunOptions {
   onEvent?: (event: LoopEvent) => void;
   /** Seed the shared, mutable run state. */
   state?: Record<string, unknown>;
+  /**
+   * Cap total tokens (input + output) for the run. A bare number is the limit;
+   * pass `{ limit, headroom?, soft? }` for headroom or warn-don't-refuse mode.
+   * Engine call sites refuse to spend past it (see `Budget`).
+   */
+  budget?: number | BudgetConfig;
+  /** Append every structured event as JSONL here — a readable run record. */
+  recordTo?: string;
+  /** Snapshot the shared run state here at each loop/dag/job boundary. */
+  checkpoint?: string;
+  /** Restore shared run state written by a prior `checkpoint` before starting. */
+  resumeFrom?: string;
 }
 
 export interface RunResult {
   outcome: Outcome;
   stats: StatsSnapshot;
+  /** Final token accounting, when a budget was set. */
+  budget?: { limit: number; spent: number; remaining: number };
 }
 
 export async function run(
@@ -53,9 +69,43 @@ export async function run(
       });
   }
 
+  const budget =
+    options.budget != null
+      ? new Budget(
+          typeof options.budget === 'number'
+            ? { limit: options.budget }
+            : options.budget,
+        )
+      : undefined;
+
+  // Resume restores the shared scratchpad a prior checkpoint wrote; an explicit
+  // `state` seed wins over the restored values.
+  let initialState: Record<string, unknown> = options.state ?? {};
+  if (options.resumeFrom) {
+    try {
+      initialState = { ...loadCheckpoint(options.resumeFrom), ...initialState };
+    } catch (e) {
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `cannot resume from "${options.resumeFrom}": ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+
+  // Persistence sinks observe the same event stream as reporters. The
+  // checkpointer closes over `initialState`, which is `rootCtx.state` — so it
+  // always snapshots the live, mutated scratchpad.
+  const sinks: Array<(event: LoopEvent) => void> = [];
+  if (options.recordTo) sinks.push(makeRecorder(options.recordTo));
+  if (options.checkpoint)
+    sinks.push(makeCheckpointer(options.checkpoint, initialState));
+
   const emit = (event: LoopEvent) => {
     stats.record(event);
+    if (budget && event.kind === 'engine:usage')
+      budget.add(event.usage.inputTokens + event.usage.outputTokens);
     options.onEvent?.(event);
+    for (const sink of sinks) sink(event);
   };
   const resolveEngine = (ref?: EngineRef): Engine =>
     registry.create(ref, defaultEngine);
@@ -65,7 +115,8 @@ export async function run(
     resolveEngine,
     signal: controller.signal,
     emit,
-    state: options.state ?? {},
+    state: initialState,
+    budget,
     iteration: 0,
     depth: 0,
     path: [],
@@ -88,7 +139,17 @@ export async function run(
     outcome = { status: 'fail', summary: error.message, error };
   }
 
-  return { outcome, stats: stats.snapshot() };
+  return {
+    outcome,
+    stats: stats.snapshot(),
+    budget: budget
+      ? {
+          limit: budget.limit,
+          spent: budget.spent(),
+          remaining: budget.remaining(),
+        }
+      : undefined,
+  };
 }
 
 /** Process exit code mapped from a terminal outcome. */

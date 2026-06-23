@@ -18,6 +18,7 @@
 
 import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
 import type { LoopError } from './errors.ts';
+import type { Budget } from './budget.ts';
 
 /** Terminal disposition of a `Job`. */
 export type OutcomeStatus =
@@ -67,6 +68,8 @@ export interface JobContext {
   readonly lastOutcome?: Outcome;
   /** The most recent failed-review outcome, so a restart can act on it. */
   readonly lastReview?: Outcome;
+  /** The run's token budget, when one is set; engine call sites guard on it. */
+  readonly budget?: Budget;
   log(message: string, level?: LogLevel): void;
 }
 

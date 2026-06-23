@@ -29,12 +29,16 @@ with a clean context and progress accumulates on disk (files, git commits, a
 you re-run the loop against the same repo and continue from where the files are —
 you lose the bookkeeping, not the work.
 
-What it deliberately does **not** do: durable checkpoint/resume across crashes,
-persisted run history, or human-in-the-loop suspension. That is an
-_orchestration_ concern (the iteration/state lives in the runner, so it can't be
-bolted on through the `Engine` seam — it would be a runner change). If you need
-those, reach for Mastra, LangGraph, or Temporal. The trade is intentional: this
-stays a small primitive you can read in an afternoon.
+What it deliberately does **not** do: durable mid-run replay (re-running a
+half-finished job graph and skipping the steps that already completed). That is
+an _orchestration_ concern; if you need it, reach for Mastra, LangGraph, or
+Temporal. What it **does** offer is the thin version that fits the
+workspace-is-state model: an optional JSONL **run record**, a **checkpoint** of
+the shared `ctx.state` scratchpad at each boundary, and **resume** that restores
+that scratchpad so a re-run continues warm rather than cold; plus a token
+**budget** that caps spend (see [Budget, records, resume](#budget-records-and-resume)).
+These stay small on purpose — the primitive is still one you can read in an
+afternoon.
 
 A second honesty note on convergence: an `agentCheck` is a model's
 _self-reported_ confidence, which is a weak, poorly-calibrated signal on its own.
@@ -172,6 +176,18 @@ Prefer this mixed form over a lone `agentCheck`: the deterministic check is the
 truth, the judge guards intent. For a high-stakes gate, wrap several judges in
 `quorum(k, ...)` so consensus, not one self-reported number, opens the gate.
 
+For a single judge that still resists a one-number self-report, give `agentCheck`
+a `dimensions` list. The model scores each dimension 0..1 and the gate opens on
+their **geometric mean**, so one weak dimension drags the verdict down:
+
+```ts
+until: agentCheck({
+  question: 'Is this ready to ship?',
+  threshold: 0.8,
+  dimensions: ['intent match', 'evidence quality', 'outcome coherence'],
+});
+```
+
 Builders: `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds`
 (deterministic: a shell command exits 0), `all`, `any`, `not`, `quorum`
 (k-of-n consensus), `always`, `never`, `agentCheck`, and `gateJob` (lift a
@@ -280,6 +296,40 @@ verdicts, token usage and duration, and the last few transcript lines.
 
 The footer shows `● LIVE` while following and `⏸ BROWSE` once you navigate away;
 any navigation key turns following off, and `f`/`space` turns it back on.
+
+## Budget, records, and resume
+
+Four opt-in `RunOptions` (and matching CLI flags). All default off, so the core
+path is unchanged.
+
+| Option       | CLI flag           | Effect                                                                                       |
+| ------------ | ------------------ | -------------------------------------------------------------------------------------------- |
+| `budget`     | `--budget <n>`     | Cap total tokens (input + output) for the run. Engine calls refuse once the cap is hit.      |
+| `recordTo`   | `--record <path>`  | Append every structured event as JSONL — a readable run record (token-delta noise excluded). |
+| `checkpoint` | `--checkpoint <p>` | Snapshot the shared `ctx.state` at each loop/dag/job boundary (latest-wins).                 |
+| `resumeFrom` | `--resume <path>`  | Restore the `ctx.state` a prior `--checkpoint` wrote, so a re-run continues warm.            |
+
+```ts
+await run(job, {
+  budget: 2_000_000, // or { limit, headroom?, soft? }
+  recordTo: '.loops/run.jsonl',
+  checkpoint: '.loops/state.json',
+});
+// later, after a crash or a deliberate stop:
+await run(job, { resumeFrom: '.loops/state.json' });
+```
+
+`budget` is the cost guard for a loop that fires a worker plus several judges per
+iteration: `max` bounds the call _count_, `budget` bounds their _cost_. A bare
+number is the token limit; pass `{ limit, headroom, soft }` to stop with room to
+spare (`headroom`) or to warn-and-continue instead of refusing (`soft`). The exit
+summary reports spend against the cap.
+
+Checkpoint/resume is deliberately thin and honours the workspace-is-state model:
+it persists the loop's shared scratchpad, not a replayable execution graph. Your
+body records its own progress in `ctx.state` and reads it back on resume; the
+real work (files, git) is already on disk. This is not durable mid-graph replay —
+for that, embed the loop as a step inside a durable runner (Mastra/Temporal).
 
 ## Develop
 

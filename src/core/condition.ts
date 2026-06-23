@@ -24,6 +24,7 @@ import { execa } from 'execa';
 
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
+import { assertBudget } from './budget.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -252,6 +253,14 @@ export interface AgentCheckConfig {
    */
   context?: (ctx: JobContext, last: Outcome | undefined) => string;
   maxTokens?: number;
+  /**
+   * Score these named dimensions (0..1 each) instead of a single yes/no
+   * confidence. The gate opens when the GEOMETRIC MEAN of the scores is
+   * >= `threshold`, so one weak dimension drags the whole verdict down. A more
+   * honest judge than a lone self-reported number, e.g.
+   * `['intent match', 'evidence quality', 'outcome coherence']`.
+   */
+  dimensions?: string[];
 }
 
 interface Verdict {
@@ -365,12 +374,72 @@ const VALIDATOR_SYSTEM =
   'as zero). Respond with ONLY a single JSON object and no other text:\n' +
   '{"verdict":"yes"|"no","confidence":<number 0..1>,"reason":"<one sentence>"}';
 
+/** System prompt for the multi-dimension scoring variant of `agentCheck`. */
+function validatorScoreSystem(dimensions: string[]): string {
+  return (
+    'You are a strict, sceptical evaluator. Score how well the condition is met ' +
+    'on EACH named dimension, from 0 (not at all) to 1 (fully). Do not be ' +
+    'generous; when in doubt score low. Respond with ONLY a single JSON object ' +
+    'and no other text:\n' +
+    `{"scores":{${dimensions.map((d) => `"${d}":<0..1>`).join(',')}},"reason":"<one sentence>"}`
+  );
+}
+
+/** Geometric mean — any zero (a fully-failed dimension) drags the result to 0. */
+function geometricMean(values: number[]): number {
+  if (!values.length) return 0;
+  if (values.some((v) => v <= 0)) return 0;
+  return Math.exp(values.reduce((a, b) => a + Math.log(b), 0) / values.length);
+}
+
+interface ScoreVerdict {
+  score: number;
+  scores: Record<string, number>;
+  reason: string;
+}
+
+/** Pull per-dimension scores from a model reply; any missing dimension is 0. */
+function parseScores(text: string, dimensions: string[]): ScoreVerdict {
+  for (const candidate of balancedObjects(text)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+      continue;
+    const raw = (parsed as Record<string, unknown>).scores;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const scoreObj = raw as Record<string, unknown>;
+    const scores: Record<string, number> = {};
+    for (const d of dimensions) {
+      const val = scoreObj[d];
+      scores[d] = typeof val === 'number' ? clamp01(val) : 0;
+    }
+    const reasonField = (parsed as Record<string, unknown>).reason;
+    return {
+      score: geometricMean(dimensions.map((d) => scores[d]!)),
+      scores,
+      reason:
+        typeof reasonField === 'string' ? reasonField : '(no reason given)',
+    };
+  }
+  throw new LoopError({
+    code: 'VALIDATION',
+    message: `validator returned no JSON scores: ${text.slice(0, 200)}`,
+  });
+}
+
 /**
- * A Condition decided by a (preferably small) model. The gate opens only when
- * the verdict is "yes" AND confidence >= threshold.
+ * A Condition decided by a (preferably small) model. With a single yes/no
+ * question the gate opens when the verdict is "yes" AND confidence >= threshold.
+ * With `dimensions`, the model scores each dimension 0..1 and the gate opens
+ * when their geometric mean >= threshold — a more honest judge than one number.
  */
 export function agentCheck(config: AgentCheckConfig): Condition {
   const threshold = config.threshold ?? 0.8;
+  const dimensions = config.dimensions?.length ? config.dimensions : undefined;
   return async (ctx, last) => {
     const engine = config.engine
       ? ctx.resolveEngine(config.engine)
@@ -379,14 +448,17 @@ export function agentCheck(config: AgentCheckConfig): Condition {
     const prompt =
       `CONDITION TO EVALUATE:\n${config.question}\n\n` +
       `EVIDENCE:\n${contextText}\n\n` +
-      'Return the JSON verdict now.';
+      `Return the JSON ${dimensions ? 'scores' : 'verdict'} now.`;
 
     let result;
     try {
+      assertBudget(ctx); // count validator calls against the run's token budget
       result = await engine.run(
         {
           prompt,
-          system: VALIDATOR_SYSTEM,
+          system: dimensions
+            ? validatorScoreSystem(dimensions)
+            : VALIDATOR_SYSTEM,
           model: config.model,
           maxTokens: config.maxTokens ?? 512,
         },
@@ -407,6 +479,27 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       // phase is left to the caller (loop.ts) — this condition may be a
       // start/until/stopOn/review gate and cannot know which.
       throw LoopError.from(e, { code: 'ENGINE', path: ctx.path });
+    }
+
+    if (dimensions) {
+      let sv: ScoreVerdict;
+      try {
+        sv = parseScores(result.text, dimensions);
+      } catch {
+        return {
+          met: false,
+          confidence: 0,
+          reason: `unparseable scores: ${result.text.slice(0, 120)}`,
+        };
+      }
+      const detail = dimensions
+        .map((d) => `${d}=${sv.scores[d]!.toFixed(2)}`)
+        .join(', ');
+      return {
+        met: sv.score >= threshold,
+        confidence: sv.score,
+        reason: `geo ${sv.score.toFixed(2)} (need ${threshold}) [${detail}] — ${sv.reason}`,
+      };
     }
 
     let v: Verdict;

@@ -45,6 +45,7 @@ export {
   type AgentCheckConfig,
 } from './core/condition.ts';
 export { LoopError, type LoopErrorCode } from './core/errors.ts';
+export { Budget, type BudgetConfig } from './core/budget.ts';
 
 // Engines (the drop-in seam)
 export type {

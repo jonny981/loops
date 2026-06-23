@@ -8,6 +8,7 @@
 import type { Outcome, Job, JobContext } from './types.ts';
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
+import { assertBudget } from './budget.ts';
 
 export interface AgentJobConfig {
   label: string;
@@ -51,6 +52,7 @@ export function agentJob(config: AgentJobConfig): Job {
 
     let result;
     try {
+      assertBudget(ctx); // refuse to spend past the run's token budget
       result = await engine.run(
         {
           prompt,

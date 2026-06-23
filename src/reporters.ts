@@ -237,6 +237,15 @@ export function printSummary(result: RunResult): void {
     );
   }
 
+  if (result.budget) {
+    const b = result.budget;
+    const spent =
+      b.remaining === 0 ? pc.red(String(b.spent)) : pc.cyan(String(b.spent));
+    console.log(
+      `${pc.bold('Budget')} ${spent} / ${b.limit} tokens ${pc.gray(`(${b.remaining} remaining)`)}`,
+    );
+  }
+
   if (stats.errors.length) {
     console.log(line);
     console.log(`${pc.bold(pc.red('Errors'))} (${stats.errors.length})`);

@@ -9,6 +9,7 @@ export type LoopErrorCode =
   | 'ABORTED' // an early-exit signal interrupted the work
   | 'VALIDATION' // a condition/validator could not produce a verdict
   | 'CONFIG' // the loop definition or CLI input was invalid
+  | 'BUDGET' // the run's token budget was exhausted
   | 'BODY' // the step body threw
   | 'UNKNOWN';
 

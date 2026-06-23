@@ -43,6 +43,10 @@ interface RunFlags {
   cliBinary?: string;
   engineArg?: string[];
   state?: string;
+  budget?: string;
+  record?: string;
+  checkpoint?: string;
+  resume?: string;
   json?: boolean;
   tui?: boolean; // commander sets false for --no-tui
 }
@@ -145,6 +149,17 @@ async function execute(
     }
     state = parsed as Record<string, unknown>;
   }
+
+  let budget: number | undefined;
+  if (flags.budget != null) {
+    budget = Number(flags.budget);
+    if (!Number.isFinite(budget) || budget <= 0) {
+      throw new Error(
+        `--budget must be a positive number of tokens, got "${flags.budget}"`,
+      );
+    }
+  }
+
   const mode: 'json' | 'plain' | 'tui' = flags.json
     ? 'json'
     : flags.tui === false || !process.stdout.isTTY
@@ -159,6 +174,10 @@ async function execute(
     signal: signals.controller.signal,
     onEvent: hub.emit,
     state,
+    budget,
+    recordTo: flags.record,
+    checkpoint: flags.checkpoint,
+    resumeFrom: flags.resume,
   };
 
   let result;
@@ -247,6 +266,16 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       [] as string[],
     )
     .option('--state <json>', 'seed the shared run state (JSON)')
+    .option('--budget <tokens>', 'cap total tokens (input+output) for the run')
+    .option('--record <path>', 'append a JSONL run record to this path')
+    .option(
+      '--checkpoint <path>',
+      'snapshot run state to this path at each loop/dag/job boundary',
+    )
+    .option(
+      '--resume <path>',
+      'restore run state from a prior --checkpoint file',
+    )
     .option('--json', 'emit NDJSON events to stdout (no TUI)')
     .option('--no-tui', 'plain line output instead of the Ink TUI')
     .action((file: string | undefined, flags: RunFlags) =>

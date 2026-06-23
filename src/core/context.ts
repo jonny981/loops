@@ -24,6 +24,7 @@ export function childContext(
     signal: parent.signal,
     emit: parent.emit,
     state: parent.state,
+    budget: parent.budget,
     log: parent.log,
     depth: over.depth,
     path: over.path,
