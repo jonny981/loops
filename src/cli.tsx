@@ -48,9 +48,14 @@ interface RunFlags {
   record?: string;
   checkpoint?: string;
   resume?: string;
+  onLimit?: string;
+  maxWait?: string;
   json?: boolean;
   tui?: boolean; // commander sets false for --no-tui
 }
+
+const ON_LIMIT_VALUES = ['auto', 'wait', 'exit-resume', 'fail'] as const;
+type OnLimitValue = (typeof ON_LIMIT_VALUES)[number];
 
 /** The worker prompt comes from --prompt OR --prompt-file (not both). */
 function resolvePrompt(flags: RunFlags): string {
@@ -164,11 +169,26 @@ async function execute(
     }
   }
 
+  let onLimit: OnLimitValue | undefined;
+  if (flags.onLimit != null) {
+    if (!ON_LIMIT_VALUES.includes(flags.onLimit as OnLimitValue)) {
+      throw new Error(
+        `--on-limit must be one of ${ON_LIMIT_VALUES.join(' | ')}, got "${flags.onLimit}"`,
+      );
+    }
+    onLimit = flags.onLimit as OnLimitValue;
+  }
+
+  const maxWaitMs =
+    flags.maxWait != null ? parseDuration(flags.maxWait) : undefined;
+
   const mode: 'json' | 'plain' | 'tui' = flags.json
     ? 'json'
     : flags.tui === false || !process.stdout.isTTY
       ? 'plain'
       : 'tui';
+
+  const resumeCommand = buildResumeCommand(file, flags);
 
   const hub = createHub();
   const signals = installSignalHandlers();
@@ -182,6 +202,9 @@ async function execute(
     recordTo: flags.record,
     checkpoint: flags.checkpoint,
     resumeFrom: flags.resume,
+    onLimit,
+    maxWaitMs,
+    resumeCommand,
   };
 
   let result;
@@ -198,18 +221,66 @@ async function execute(
     result = await run(job, runOptions);
     instance.unmount();
     await instance.waitUntilExit().catch(() => {});
-    printSummary(result);
+    printSummary(result, resumeCommand);
   } else {
     const unsubscribe = hub.subscribe(
       mode === 'json' ? jsonReporter() : plainReporter(),
     );
     result = await run(job, runOptions);
     unsubscribe();
-    if (mode !== 'json') printSummary(result);
+    if (mode !== 'json') printSummary(result, resumeCommand);
   }
+
+  if (result.outcome.status === 'paused') printResumeGuidance(file, flags);
 
   signals.dispose();
   process.exitCode = exitCodeFor(result.outcome);
+}
+
+/**
+ * Reconstruct a ready-to-paste resume command from the invocation, when there is
+ * something to resume from: a checkpoint path. The resumed run reads warm state
+ * from the checkpoint, so it picks up where the limit stopped it. Returns
+ * `undefined` when no checkpoint is configured — a run with no checkpoint can
+ * still pause cleanly, but it has no warm state to resume.
+ */
+function buildResumeCommand(
+  file: string | undefined,
+  flags: RunFlags,
+): string | undefined {
+  if (!flags.checkpoint) return undefined;
+  const parts = ['loops', 'run'];
+  if (file) parts.push(quoteArg(file));
+  parts.push('--resume', quoteArg(flags.checkpoint));
+  // Carry the flags that shape the run so the resume is the same job.
+  if (flags.engine) parts.push('--engine', flags.engine);
+  if (flags.budget) parts.push('--budget', flags.budget);
+  if (flags.onLimit) parts.push('--on-limit', flags.onLimit);
+  if (flags.maxWait) parts.push('--max-wait', flags.maxWait);
+  if (flags.record) parts.push('--record', quoteArg(flags.record));
+  if (flags.checkpoint) parts.push('--checkpoint', quoteArg(flags.checkpoint));
+  if (flags.tui === false) parts.push('--no-tui');
+  if (flags.json) parts.push('--json');
+  return parts.join(' ');
+}
+
+/** Shell-quote an argument only when it contains whitespace or quotes. */
+function quoteArg(value: string): string {
+  return /[\s'"]/.test(value) ? `'${value.replace(/'/g, `'\\''`)}'` : value;
+}
+
+/** Print resume guidance to stderr on a paused run (a TUI-safe channel). */
+function printResumeGuidance(file: string | undefined, flags: RunFlags): void {
+  const cmd = buildResumeCommand(file, flags);
+  if (cmd) {
+    process.stderr.write(`\nPaused at a limit. Resume with:\n  ${cmd}\n`);
+  } else {
+    process.stderr.write(
+      '\nPaused at a limit. No checkpoint was configured, so there is no warm ' +
+        'state to resume.\nRe-run with --checkpoint <path> to make a pause ' +
+        'resumable.\n',
+    );
+  }
 }
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -283,6 +354,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option(
       '--resume <path>',
       'restore run state from a prior --checkpoint file',
+    )
+    .option(
+      '--on-limit <policy>',
+      'on a rate/quota/budget limit: auto | wait | exit-resume | fail (default auto)',
+    )
+    .option(
+      '--max-wait <dur>',
+      'cap an auto/wait limit-wait (e.g. 5m, 30s); default 5m',
     )
     .option('--json', 'emit NDJSON events to stdout (no TUI)')
     .option('--no-tui', 'plain line output instead of the Ink TUI')

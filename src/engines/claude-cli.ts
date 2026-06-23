@@ -17,6 +17,61 @@ import { LoopError } from '../core/errors.ts';
 import { redactSecrets } from '../core/redact.ts';
 
 /**
+ * Classify a failed `claude` subprocess into a provider-limit `LoopError`, or
+ * return `undefined` to fall through to the generic ENGINE/TIMEOUT mapping. The
+ * CLI has no structured limit channel on a hard failure, so we read its
+ * (already-redacted) output text:
+ *   - a usage/quota limit ("usage limit reached", "out of credits") → QUOTA.
+ *     A reset time, when the message states one (epoch seconds or an absolute
+ *     time the CLI prints), makes it auto-waitable; otherwise QUOTA has no
+ *     reset and the loop policy checkpoints-and-pauses.
+ *   - a plain "rate limit" → RATE_LIMIT (resets on its own).
+ * Order matters: usage/quota is checked first so a usage message that also
+ * contains the words "rate limit" is not mis-tagged as a transient throttle.
+ *
+ * Exported for unit testing without spawning a subprocess (mirrors
+ * `buildClaudeArgs`).
+ */
+export function classifyCliLimit(text: string): LoopError | undefined {
+  const lower = text.toLowerCase();
+  const isUsage =
+    /usage limit|out of credits|insufficient credits|quota|billing/.test(lower);
+  const isRate = /rate limit|rate-limit|too many requests|429/.test(lower);
+  if (!isUsage && !isRate) return undefined;
+
+  const resetAt = parseResetAt(text);
+  if (isUsage) {
+    return new LoopError({
+      code: 'QUOTA',
+      phase: 'engine',
+      message: `claude usage limit: ${text}`,
+      resetAt,
+    });
+  }
+  return new LoopError({
+    code: 'RATE_LIMIT',
+    phase: 'engine',
+    message: `claude rate limited: ${text}`,
+    resetAt,
+  });
+}
+
+/**
+ * Pull a reset time (epoch ms) out of CLI limit text. The CLI states a reset as
+ * an epoch-seconds value (e.g. `resets at 1700000000`); convert to ms. Returns
+ * `undefined` when no reset is stated — a quota with no parseable reset is not
+ * auto-waitable.
+ */
+function parseResetAt(text: string): number | undefined {
+  const m = /(?:reset|resets|retry|available)\D{0,20}(\d{10,13})/i.exec(text);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return undefined;
+  // 10-digit values are epoch seconds; 13-digit are already ms.
+  return m[1]!.length <= 10 ? n * 1000 : n;
+}
+
+/**
  * Build the `claude` argv for one run. Extracted (and exported) so the flag
  * wiring — model, system prompt, tool allowlist, permission mode, the `--`
  * argument-smuggling guard — is unit-testable without spawning a process.
@@ -105,6 +160,16 @@ export class ClaudeCliEngine implements Engine {
         typeof result.stderr === 'string'
           ? redactSecrets(result.stderr.slice(0, 400))
           : '';
+      // A rate/usage limit can land on either stream; check both (redacted)
+      // before falling through to the generic exit-code error.
+      if (!result.timedOut) {
+        const stdout =
+          typeof result.stdout === 'string'
+            ? redactSecrets(result.stdout.slice(0, 400))
+            : '';
+        const limit = classifyCliLimit(`${stderr}\n${stdout}`);
+        if (limit) throw limit;
+      }
       throw new LoopError({
         code: result.timedOut ? 'TIMEOUT' : 'ENGINE',
         phase: 'engine',

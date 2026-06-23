@@ -65,9 +65,12 @@ describe('Budget', () => {
       prompt: 'go',
       outcome: () => ({ status: 'fail' as const }),
     });
+    // onLimit:'fail' keeps the old fatal contract — a budget hit terminates
+    // the run as `fail` rather than the default `auto`'s pause-to-resume.
     const { outcome, budget } = await run(loop({ name: 'x', body, max: 10 }), {
       ...usageOpts(200),
       budget: 500,
+      onLimit: 'fail',
     });
     expect(outcome.status).toBe('fail');
     expect(outcome.error?.code).toBe('BUDGET');

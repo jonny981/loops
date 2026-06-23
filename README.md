@@ -115,7 +115,7 @@ loop({
 });
 ```
 
-With no `until`, a `pass` body ends the loop. Terminal status is one of `pass · fail · exhausted · aborted` (CLI exit codes `0 · 1 · 2 · 130`).
+With no `until`, a `pass` body ends the loop. Terminal status is one of `pass · fail · exhausted · aborted · paused` (CLI exit codes `0 · 1 · 2 · 130 · 75`). `paused` is a limit-driven, resumable stop — see [Rate limits, quotas, and budgets](#rate-limits-quotas-and-budgets--wait-or-resume).
 
 ## Conditions — honest convergence
 
@@ -211,6 +211,19 @@ await run(job, { resumeFrom: '.loops/state.json' });
 ```
 
 `budget` is the cost guard for a loop that fires a worker plus several judges per iteration: `max` bounds the call _count_, `budget` bounds their _cost_ (`{ limit, headroom, soft }` for a soft warn-don't-refuse mode).
+
+### Rate limits, quotas, and budgets — wait or resume
+
+When a run hits a provider **rate limit**, an account **usage allowance**, or its own **token budget**, the `onLimit` policy decides what happens. The default, `auto`, **waits** when the reset is known and within a cap, otherwise **checkpoints and exits** with a ready-to-paste resume command.
+
+| Option      | CLI flag                | Default | Effect                                                                                              |
+| ----------- | ----------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `onLimit`   | `--on-limit <policy>`   | `auto`  | `auto` waits a known reset ≤ `maxWaitMs`, else pauses · `wait` always waits a known reset · `exit-resume` never waits · `fail` is the old fatal behaviour |
+| `maxWaitMs` | `--max-wait <dur>`      | `300000` (5m) | Ceiling on a single interruptible limit-wait under `auto`/`wait`. |
+
+A wait is **interruptible** (Ctrl-C unwinds it). When the policy gives up — the reset is unknown, the wait exceeds `maxWaitMs`, or the policy is `exit-resume` (and always for a `budget`, which never refreshes mid-run) — the run ends with the terminal status **`paused`** (exit code **75**, `EX_TEMPFAIL`, distinct from `fail`'s `1`) so a wrapper/cron can tell "paused, resumable" from "failed". With `--checkpoint` set, the resume command is printed ready to paste; without one, the guidance says to re-run with `--checkpoint` to make a pause resumable.
+
+The error taxonomy backs this: an engine classifies a throttle into a `RATE_LIMIT` or `QUOTA` `LoopError` carrying the reset hint (`retryAfterMs` / `resetAt`) it could read. `RATE_LIMIT` is retryable; `QUOTA` is retryable only when a reset is known; `BUDGET` never is.
 
 ## Output — TUI, plain, JSON
 

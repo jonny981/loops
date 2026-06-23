@@ -12,6 +12,7 @@ export type {
   JobContext,
   Outcome,
   OutcomeStatus,
+  LimitPolicy,
   Condition,
   ConditionInput,
   ConditionResult,
@@ -66,6 +67,7 @@ export { MockEngine, mockVerdict, type MockResponder } from './engines/mock.ts';
 export {
   run,
   exitCodeFor,
+  EXIT_PAUSED,
   type RunOptions,
   type RunResult,
 } from './runtime/runner.ts';

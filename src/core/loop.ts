@@ -25,13 +25,42 @@ import type { JobContext, LoopConfig, Outcome, Job } from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
 import { LoopError, type LoopPhase } from './errors.ts';
+import { isLimitError, waitMsFor } from './limits.ts';
 
 const VALID_STATUS = new Set<Outcome['status']>([
   'pass',
   'fail',
   'aborted',
   'exhausted',
+  'paused',
 ]);
+
+/** A limit policy's verdict for one limited iteration. */
+type LimitAction =
+  | { kind: 'wait'; waitMs: number }
+  | { kind: 'pause'; reason: string };
+
+/**
+ * Decide what to do about a limit error under the run's `onLimit` policy.
+ *   - `fail`         → never handled here (caller treats it as fatal).
+ *   - `auto`         → wait when the reset is known AND within `maxWaitMs`
+ *                      (BUDGET never refreshes, so it always pauses).
+ *   - `wait`         → wait whenever the reset is known (no ceiling).
+ *   - `exit-resume`  → never wait; always pause.
+ */
+function decideLimit(error: LoopError, ctx: JobContext): LimitAction {
+  const reason = error.message;
+  if (ctx.onLimit === 'exit-resume') return { kind: 'pause', reason };
+  const waitMs = waitMsFor(error);
+  if (waitMs == null) return { kind: 'pause', reason };
+  if (ctx.onLimit === 'wait') return { kind: 'wait', waitMs };
+  // auto: wait only within the ceiling.
+  if (waitMs <= ctx.maxWaitMs) return { kind: 'wait', waitMs };
+  return {
+    kind: 'pause',
+    reason: `${reason} (reset in ${Math.round(waitMs / 1000)}s exceeds maxWait ${Math.round(ctx.maxWaitMs / 1000)}s)`,
+  };
+}
 const yieldToLoop = (): Promise<void> => new Promise((r) => setImmediate(r));
 
 export function loop(config: LoopConfig): Job {
@@ -212,6 +241,51 @@ export function loop(config: LoopConfig): Job {
             iteration,
           );
         }
+        // A rate limit / quota / budget hit is governed by the `onLimit` policy
+        // (default `auto`): wait out a known, bounded reset and retry the same
+        // step, else checkpoint-and-pause with a resume command. `fail` opts out
+        // and lets the generic fatal handling below treat it as terminal.
+        if (
+          last.status === 'fail' &&
+          isLimitError(last.error) &&
+          ctx.onLimit !== 'fail'
+        ) {
+          const action = decideLimit(last.error, ctx);
+          if (action.kind === 'wait') {
+            const now = ts();
+            parent.emit({
+              kind: 'limit:wait',
+              ts: now,
+              path,
+              code: last.error.code,
+              waitMs: action.waitMs,
+              resumeAt: now + action.waitMs,
+            });
+            await delay(action.waitMs, parent.signal);
+            // Don't burn an iteration on a throttled attempt: re-run this step.
+            iteration -= 1;
+            last = undefined;
+            continue;
+          }
+          parent.emit({
+            kind: 'limit:pause',
+            ts: ts(),
+            path,
+            code: last.error.code,
+            reason: action.reason,
+            resumeCommand: ctx.resumeCommand,
+          });
+          return finish(
+            {
+              status: 'paused',
+              summary: action.reason,
+              error: last.error,
+              data: last.data,
+            },
+            iteration,
+          );
+        }
+
         // A *returned* fail outcome carrying an unrecoverable error (e.g. an
         // engine auth/config failure) must not loop to `exhausted`. Thrown
         // errors are excluded — the retry policy above owns those.

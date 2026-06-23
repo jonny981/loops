@@ -25,7 +25,15 @@ export type OutcomeStatus =
   | 'pass' // the step achieved its goal
   | 'fail' // the step ran but did not achieve its goal (loops keep going)
   | 'aborted' // an early-exit signal or `stopOn` cut the work short
-  | 'exhausted'; // a loop hit `max` iterations without passing
+  | 'exhausted' // a loop hit `max` iterations without passing
+  | 'paused'; // a limit (rate/quota/budget) stopped the run, resumable
+
+/**
+ * How the run reacts to a provider rate limit, account/usage allowance, or its
+ * own token budget. `auto` (the default) waits when the reset is known and
+ * within `maxWaitMs`, else checkpoints and exits with a resume command.
+ */
+export type LimitPolicy = 'auto' | 'wait' | 'exit-resume' | 'fail';
 
 export interface Outcome {
   status: OutcomeStatus;
@@ -70,6 +78,12 @@ export interface JobContext {
   readonly lastReview?: Outcome;
   /** The run's token budget, when one is set; engine call sites guard on it. */
   readonly budget?: Budget;
+  /** How a loop reacts to a rate/quota/budget limit. Default `auto`. */
+  readonly onLimit: LimitPolicy;
+  /** Cap on an interruptible limit-wait under `auto`/`wait`. */
+  readonly maxWaitMs: number;
+  /** Ready-to-paste command to resume a paused run, when reconstructable. */
+  readonly resumeCommand?: string;
   log(message: string, level?: LogLevel): void;
 }
 
@@ -211,6 +225,25 @@ export type LoopEvent =
       path: string[];
       outcome: Outcome;
       iterations: number;
+    }
+  | {
+      // A limit was hit and the policy is waiting out its reset before retrying.
+      kind: 'limit:wait';
+      ts: number;
+      path: string[];
+      code: string;
+      waitMs: number;
+      /** Wall-clock epoch ms the wait ends at (ts + waitMs). */
+      resumeAt: number;
+    }
+  | {
+      // A limit stopped the run; it is resumable via `resumeCommand`.
+      kind: 'limit:pause';
+      ts: number;
+      path: string[];
+      code: string;
+      reason: string;
+      resumeCommand?: string;
     }
   | {
       kind: 'dag:start';

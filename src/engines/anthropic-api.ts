@@ -18,12 +18,71 @@ import type {
   EngineOptions,
 } from './engine.ts';
 import { LoopError } from '../core/errors.ts';
+import { retryAfterHeaderToMs } from '../core/limits.ts';
 
-function isRetryable(error: unknown): boolean {
+/**
+ * Transient backend errors that warrant p-retry's blind backoff: 5xx (incl.
+ * 529 overloaded) and connection/timeout. A 429 is NOT here — a rate limit is
+ * classified to a typed `RATE_LIMIT` and handed to the loop's `onLimit` policy,
+ * which waits the provider's actual reset rather than a generic backoff.
+ */
+function isTransient(error: unknown): boolean {
   const status = (error as { status?: number })?.status;
-  if (typeof status === 'number') return status === 429 || status >= 500;
+  if (typeof status === 'number') return status >= 500;
   const name = (error as { name?: string })?.name ?? '';
   return /connection|timeout|socket|network/i.test(name);
+}
+
+/**
+ * Best-effort `.get()` off the SDK error's `headers` (a web `Headers`). The SDK
+ * attaches the response headers on `APIError`; read defensively in case a
+ * version exposes them as a plain object instead.
+ */
+function headerValue(error: unknown, name: string): string | undefined {
+  const headers = (error as { headers?: unknown }).headers;
+  if (headers && typeof (headers as Headers).get === 'function') {
+    return (headers as Headers).get(name) ?? undefined;
+  }
+  if (headers && typeof headers === 'object') {
+    const v = (headers as Record<string, unknown>)[name];
+    if (typeof v === 'string') return v;
+  }
+  return undefined;
+}
+
+/**
+ * Classify an Anthropic SDK error into a provider-limit `LoopError`, or return
+ * `undefined` to let the generic handling take over. The SDK throws an
+ * `APIError` with `.status` (HTTP), `.headers` (web `Headers`), and `.type`
+ * (the body `error.type`, e.g. `rate_limit_error` / `billing_error`).
+ *   - 429 → RATE_LIMIT, reading `retry-after` (seconds) into `retryAfterMs`.
+ *   - a billing/quota error → QUOTA with no reset (not auto-waitable).
+ * 529 / overloaded is deliberately NOT a limit — it is a transient ENGINE error
+ * and stays on p-retry's backoff path.
+ */
+function classifyLimit(error: unknown): LoopError | undefined {
+  const status = (error as { status?: number })?.status;
+  const type = (error as { type?: string })?.type;
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (status === 429 || type === 'rate_limit_error') {
+    return new LoopError({
+      code: 'RATE_LIMIT',
+      phase: 'engine',
+      message: `anthropic-api rate limited: ${message}`,
+      cause: error,
+      retryAfterMs: retryAfterHeaderToMs(headerValue(error, 'retry-after')),
+    });
+  }
+  if (type === 'billing_error') {
+    return new LoopError({
+      code: 'QUOTA',
+      phase: 'engine',
+      message: `anthropic-api usage/billing limit: ${message}`,
+      cause: error,
+    });
+  }
+  return undefined;
 }
 
 /** The slice of the Anthropic SDK this adapter actually consumes. */
@@ -94,7 +153,12 @@ export class AnthropicApiEngine implements Engine {
         stream.on('text', (delta) => onEvent({ type: 'text', delta }));
         return await stream.finalMessage();
       } catch (e) {
-        if (signal.aborted || !isRetryable(e)) {
+        // A provider limit is not for p-retry's blind backoff — stop retrying
+        // and let the loop's onLimit policy wait the actual reset. Wrap the
+        // typed LoopError as the AbortError cause so it survives to the catch.
+        const limit = classifyLimit(e);
+        if (limit) throw new AbortError(limit);
+        if (signal.aborted || !isTransient(e)) {
           throw new AbortError(e instanceof Error ? e : new Error(String(e)));
         }
         throw e;
@@ -115,6 +179,8 @@ export class AnthropicApiEngine implements Engine {
           phase: 'engine',
           message: 'anthropic-api run aborted',
         });
+      // p-retry unwraps AbortError to its cause; surface a typed limit as-is.
+      if (e instanceof LoopError) throw e;
       throw LoopError.from(e, { code: 'ENGINE', phase: 'engine' });
     }
 

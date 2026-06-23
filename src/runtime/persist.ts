@@ -66,12 +66,25 @@ export function makeCheckpointer(
   ensureDir(path);
   return (event) => {
     if (!CHECKPOINT_AT.has(event.kind)) return;
-    try {
-      writeFileSync(path, JSON.stringify({ ts: event.ts, state }, null, 2));
-    } catch {
-      /* best-effort */
-    }
+    flushCheckpoint(path, state);
   };
+}
+
+/**
+ * Write the shared run state to a checkpoint file immediately, outside the event
+ * stream. Used to guarantee a paused run's state is durable before exit, even if
+ * no boundary event flushed it. Best-effort — never throws.
+ */
+export function flushCheckpoint(
+  path: string,
+  state: Record<string, unknown>,
+): void {
+  ensureDir(path);
+  try {
+    writeFileSync(path, JSON.stringify({ ts: Date.now(), state }, null, 2));
+  } catch {
+    /* best-effort */
+  }
 }
 
 /** Restore the shared run state written by a prior `makeCheckpointer`. */

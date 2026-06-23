@@ -34,11 +34,27 @@ const sample: LoopEvent[] = [
   { kind: 'dag:end', ts: 0, path: ['d'], outcome: { status: 'pass' } },
   { kind: 'error', ts: 0, path: ['l'], code: 'ENGINE', message: 'bad' },
   {
+    kind: 'limit:wait',
+    ts: 0,
+    path: ['l'],
+    code: 'RATE_LIMIT',
+    waitMs: 5000,
+    resumeAt: 5000,
+  },
+  {
+    kind: 'limit:pause',
+    ts: 0,
+    path: ['l'],
+    code: 'QUOTA',
+    reason: 'usage limit',
+    resumeCommand: 'loops run x --resume ckpt.json',
+  },
+  {
     kind: 'loop:end',
     ts: 0,
     path: ['l'],
     iterations: 1,
-    outcome: { status: 'pass' },
+    outcome: { status: 'paused' },
   },
 ];
 
@@ -188,5 +204,34 @@ describe('reporters', () => {
       }),
     ).not.toThrow();
     log.mockRestore();
+  });
+
+  it('printSummary surfaces the resume command for a paused outcome', () => {
+    const out: string[] = [];
+    const log = vi
+      .spyOn(console, 'log')
+      .mockImplementation((...args: unknown[]) => {
+        out.push(args.map(String).join(' '));
+      });
+    const emptyStats = {
+      startedAt: 0,
+      elapsedMs: 0,
+      loops: [],
+      models: [],
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      agentCalls: 0,
+      errors: [],
+    };
+    printSummary(
+      { outcome: { status: 'paused', summary: 'rate limited' }, stats: emptyStats },
+      'loops run x --resume ckpt.json',
+    );
+    log.mockRestore();
+    const clean = out.map((s) => s.replace(/\[[0-9;]*m/g, ''));
+    expect(clean.some((l) => l.includes('PAUSED'))).toBe(true);
+    expect(
+      clean.some((l) => l.includes('Resume') && l.includes('--resume ckpt.json')),
+    ).toBe(true);
   });
 });
