@@ -15,7 +15,14 @@ import { Stats, type StatsSnapshot } from '../core/stats.ts';
 import { LoopError } from '../core/errors.ts';
 import { Budget, type BudgetConfig } from '../core/budget.ts';
 import { makeRecorder, makeCheckpointer, loadCheckpoint } from './persist.ts';
-import type { Job, JobContext, LoopEvent, Outcome } from '../core/types.ts';
+import { currentBranch } from '../core/git.ts';
+import type {
+  Job,
+  JobContext,
+  LoopEvent,
+  Outcome,
+  Workspace,
+} from '../core/types.ts';
 
 export interface RunOptions {
   /** Default engine selected when a job/condition names none. Default agent-sdk. */
@@ -25,6 +32,8 @@ export interface RunOptions {
   engines?: Record<string, EngineFactory | Engine>;
   /** External abort signal (the CLI wires SIGINT + keypress here). */
   signal?: AbortSignal;
+  /** Root working directory the run operates in. Default: process.cwd(). */
+  cwd?: string;
   onEvent?: (event: LoopEvent) => void;
   /** Seed the shared, mutable run state. */
   state?: Record<string, unknown>;
@@ -110,12 +119,21 @@ export async function run(
   const resolveEngine = (ref?: EngineRef): Engine =>
     registry.create(ref, defaultEngine);
 
+  // The root workspace is the substrate the whole run reads and writes. Branch
+  // resolution is best-effort: a non-git cwd just leaves `branch` undefined.
+  const dir = options.cwd ?? process.cwd();
+  const workspace: Workspace = {
+    dir,
+    branch: await currentBranch({ cwd: dir, signal: controller.signal }),
+  };
+
   const rootCtx: JobContext = {
     engine: resolveEngine(defaultEngine),
     resolveEngine,
     signal: controller.signal,
     emit,
     state: initialState,
+    workspace,
     budget,
     iteration: 0,
     depth: 0,

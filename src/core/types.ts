@@ -42,9 +42,23 @@ export interface Outcome {
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 /**
+ * Where a job's code lives: a working directory and (when it is a git repo) the
+ * branch checked out there. This is the substrate the commit ledger is written
+ * to and read back from. A sequential loop's iterations share one `Workspace`
+ * (the ledger accumulates on one branch); concurrency is where workspaces fork
+ * into isolated worktrees. Default: the process working directory.
+ */
+export interface Workspace {
+  /** Absolute path to the working tree this job operates in. */
+  readonly dir: string;
+  /** The branch checked out in `dir`, when known (undefined on detached HEAD). */
+  readonly branch?: string;
+}
+
+/**
  * Threaded into every `Job`. Carries the engine, the abort signal, the event
- * sink, a mutable scratchpad shared across the run, and the position in the
- * loop tree (used by the TUI and the stats collector).
+ * sink, a mutable scratchpad shared across the run, the workspace the work
+ * happens in, and the position in the loop tree (used by the TUI and stats).
  */
 export interface JobContext {
   /** Default engine for this run; overridable per-step via `resolveEngine`. */
@@ -58,6 +72,8 @@ export interface JobContext {
   emit(event: LoopEvent): void;
   /** Shared mutable state for the whole run (e.g. accumulating notes). */
   readonly state: Record<string, unknown>;
+  /** Where this job's code lives — the working dir and branch (the substrate). */
+  readonly workspace: Workspace;
   /** 1-based iteration index within the enclosing loop; 0 outside a loop. */
   readonly iteration: number;
   /** Nesting depth (root steps are 0). */

@@ -22,12 +22,34 @@ export type {
   DagNode,
   LoopEvent,
   LogLevel,
+  Workspace,
 } from './core/types.ts';
 
 // Primitives
 export { loop } from './core/loop.ts';
 export { dag, sequence, parallel } from './core/dag.ts';
-export { agentJob, fnJob, type AgentJobConfig } from './core/job.ts';
+export {
+  agentJob,
+  fnJob,
+  commitJob,
+  type AgentJobConfig,
+  type CommitJobConfig,
+} from './core/job.ts';
+
+// Git substrate (the convergence ledger)
+export {
+  isRepo,
+  currentBranch,
+  headSha,
+  stageAll,
+  hasStagedChanges,
+  isDirty,
+  commit,
+  log,
+  type CommitRecord,
+  type CommitInput,
+  type LogQuery,
+} from './core/git.ts';
 export {
   toCondition,
   predicate,
