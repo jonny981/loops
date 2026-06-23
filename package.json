@@ -2,6 +2,7 @@
   "name": "loops",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Run a prompt/agent in a loop with a fresh context every iteration. A single nestable loop primitive with start/stop/agent-validated conditions, review-restart, max iterations, streaming, an Ink TUI, and an exit summary.",
   "type": "module",
   "bin": {
