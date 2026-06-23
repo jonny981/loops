@@ -10,6 +10,8 @@ import {
   loop,
   agentJob,
   agentCheck,
+  commandSucceeds,
+  quorum,
   gateJob,
 } from '../src/api.ts';
 
@@ -33,12 +35,16 @@ export default defineJob(
             label: 'code',
             prompt: (c) => `Implement increment ${c.iteration} from NOTES.md.`,
           }),
-          until: agentCheck({
-            engine: 'anthropic-api',
-            model: SMALL,
-            question: 'Implementation complete?',
-            threshold: 0.85,
-          }),
+          // Tests are the ground truth; the judge guards "complete vs compiles".
+          until: [
+            commandSucceeds('npm', ['test']),
+            agentCheck({
+              engine: 'anthropic-api',
+              model: SMALL,
+              question: 'Is every increment in NOTES.md implemented?',
+              threshold: 0.85,
+            }),
+          ],
         }),
       },
 
@@ -50,16 +56,23 @@ export default defineJob(
         }),
       },
 
+      // Ship is high-stakes, so don't trust one judge: require 2 of 3
+      // independent verdicts to clear the bar (a quorum over the weak signal).
       review: {
         needs: ['test'],
         job: gateJob(
           'review',
-          agentCheck({
-            engine: 'anthropic-api',
-            model: SMALL,
-            question: 'Ready to ship with no blockers?',
-            threshold: 0.9,
-          }),
+          quorum(
+            2,
+            ...Array.from({ length: 3 }, () =>
+              agentCheck({
+                engine: 'anthropic-api',
+                model: SMALL,
+                question: 'Ready to ship with no blockers?',
+                threshold: 0.9,
+              }),
+            ),
+          ),
         ),
       },
     },

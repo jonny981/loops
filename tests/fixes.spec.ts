@@ -126,7 +126,7 @@ describe('agentCheck robustness', () => {
     expect(outcome.status).toBe('pass');
   });
 
-  it('treats a "yes" with no confidence as confident', async () => {
+  it('treats a "yes" with no numeric confidence as NOT met (fail-closed)', async () => {
     const { outcome } = await run(
       loop({
         name: 'x',
@@ -136,6 +136,8 @@ describe('agentCheck robustness', () => {
       }),
       replying(JSON.stringify({ verdict: 'yes' })),
     );
-    expect(outcome.status).toBe('pass');
+    // Missing confidence defaults to 0, so a thresholded gate never opens: a
+    // quality gate must not be talked open by an unscored "yes".
+    expect(outcome.status).toBe('exhausted');
   });
 });

@@ -20,6 +20,8 @@ import type {
   Job,
   JobContext,
 } from './types.ts';
+import { execa } from 'execa';
+
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
 
@@ -105,6 +107,41 @@ export function minConfidence(threshold: number): Condition {
   };
 }
 
+/**
+ * Deterministic gate that runs a shell command and is met on exit code 0. This
+ * is the honest convergence signal for coding loops: pair it with an `agentCheck`
+ * in an `until` array so the loop stops only when the tests ACTUALLY pass AND a
+ * judge agrees the work matches intent — never on a model's self-report alone.
+ * Runs in `cwd` (default: the process working dir), inherits the run's abort
+ * signal, and never throws (a spawn failure counts as "not met").
+ */
+export function commandSucceeds(
+  command: string,
+  args: string[] = [],
+  opts: { cwd?: string; timeoutMs?: number } = {},
+): Condition {
+  return async (ctx) => {
+    try {
+      const r = await execa(command, args, {
+        cwd: opts.cwd,
+        timeout: opts.timeoutMs,
+        cancelSignal: ctx.signal,
+        reject: false,
+        stdin: 'ignore',
+      });
+      return {
+        met: r.exitCode === 0,
+        reason: `\`${command}\` exited ${r.exitCode ?? '?'}`,
+      };
+    } catch (e) {
+      return {
+        met: false,
+        reason: `\`${command}\` failed to run: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+  };
+}
+
 export const always: Condition = async () => ({ met: true, reason: 'always' });
 export const never: Condition = async () => ({ met: false, reason: 'never' });
 
@@ -155,6 +192,46 @@ export function any(...inputs: ConditionInput[]): Condition {
         };
     }
     return { met: false, reason: `any(${reasons.join(' | ')})` };
+  };
+}
+
+/**
+ * Met when at least `k` of the inputs hold. The honest hedge against a single
+ * agent judge's self-reported confidence: ask N independent judges and require a
+ * quorum (e.g. `quorum(2, j, j, j)`). All inputs run in parallel; a judge that
+ * throws counts as a "no" vote rather than sinking the whole gate. Each input
+ * may hit a model, so size N with cost in mind. Reported confidence is the mean
+ * of the holding inputs' confidences.
+ */
+export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
+  if (k < 1 || k > inputs.length)
+    throw new LoopError({
+      code: 'CONFIG',
+      message: `quorum requires 1 <= k <= inputs (got k=${k}, n=${inputs.length})`,
+    });
+  const conds = inputs.map((i) => toCondition(i));
+  return async (ctx, last) => {
+    const settled = await Promise.allSettled(conds.map((c) => c(ctx, last)));
+    const results: ConditionResult[] = settled.map((s) =>
+      s.status === 'fulfilled'
+        ? s.value
+        : {
+            met: false,
+            reason: `judge errored: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`,
+          },
+    );
+    const held = results.filter((r) => r.met);
+    const confs = held
+      .map((r) => r.confidence)
+      .filter((c): c is number => typeof c === 'number');
+    const confidence = confs.length
+      ? confs.reduce((a, b) => a + b, 0) / confs.length
+      : undefined;
+    return {
+      met: held.length >= k,
+      confidence,
+      reason: `quorum ${held.length}/${inputs.length} held (need ${k})`,
+    };
   };
 }
 
@@ -236,15 +313,14 @@ function* balancedObjects(text: string): Generator<string> {
 
 function toVerdict(obj: Record<string, unknown>): Verdict {
   const verdict = obj.verdict === 'yes' ? 'yes' : 'no';
-  // A "yes" with no numeric confidence means the model affirmed without scoring;
-  // treat that as confident rather than letting confidence default to 0 (which
-  // would make the gate silently never open).
+  // Confidence is mandatory (the validator system prompt demands it). A missing
+  // or non-numeric confidence is a low-quality verdict, NOT an implicit "fully
+  // confident" — so it defaults to 0 and a thresholded gate fails closed. For a
+  // convergence/quality gate a false "done" (opening when the work isn't really
+  // finished) is worse than one more iteration, so the sceptical default is the
+  // correct one; the strengthened prompt keeps a genuine omission rare.
   const confidence =
-    typeof obj.confidence === 'number'
-      ? clamp01(obj.confidence)
-      : verdict === 'yes'
-        ? 1
-        : 0;
+    typeof obj.confidence === 'number' ? clamp01(obj.confidence) : 0;
   const reason =
     typeof obj.reason === 'string' ? obj.reason : '(no reason given)';
   return { verdict, confidence, reason };
@@ -283,8 +359,10 @@ function clamp01(n: number): number {
 
 const VALIDATOR_SYSTEM =
   'You are a strict, sceptical evaluator. You judge whether a stated condition ' +
-  'is truly met given the evidence. Do not be generous. Respond with ONLY a ' +
-  'single JSON object and no other text:\n' +
+  'is truly met given the evidence. Do not be generous. The `confidence` field ' +
+  'is MANDATORY: always include a number in 0..1 for how sure you are, and when ' +
+  'in doubt give a LOW number — never omit it (an omitted confidence is treated ' +
+  'as zero). Respond with ONLY a single JSON object and no other text:\n' +
   '{"verdict":"yes"|"no","confidence":<number 0..1>,"reason":"<one sentence>"}';
 
 /**

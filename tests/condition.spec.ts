@@ -1,7 +1,23 @@
 import { describe, it, expect } from 'vitest';
 
-import { run, loop, fnJob, agentCheck, mockVerdict } from '../src/api.ts';
+import {
+  run,
+  loop,
+  fnJob,
+  agentCheck,
+  mockVerdict,
+  quorum,
+  commandSucceeds,
+} from '../src/api.ts';
 import type { RunOptions } from '../src/api.ts';
+
+// A mock engine that is never expected to be called — lets engine-free
+// conditions (predicates, quorum-of-predicates, commandSucceeds) run without
+// constructing a real backend.
+const noEngine: RunOptions = {
+  engine: 'mock',
+  engines: { mock: () => mockVerdict('no', 0) },
+};
 
 const withVerdict = (v: 'yes' | 'no', c: number): RunOptions => ({
   engine: 'mock',
@@ -61,6 +77,96 @@ describe('conditions', () => {
         max: 2,
       }),
       withVerdict('yes', 0.99),
+    );
+    expect(outcome.status).toBe('exhausted');
+  });
+});
+
+describe('quorum', () => {
+  it('opens when at least k of n hold', async () => {
+    const { outcome } = await run(
+      loop({
+        name: 'x',
+        body: failingBody(),
+        until: quorum(
+          2,
+          () => true,
+          () => true,
+          () => false,
+        ),
+        max: 5,
+      }),
+      noEngine,
+    );
+    expect(outcome.status).toBe('pass');
+  });
+
+  it('keeps looping below k', async () => {
+    const { outcome } = await run(
+      loop({
+        name: 'x',
+        body: failingBody(),
+        until: quorum(
+          2,
+          () => true,
+          () => false,
+          () => false,
+        ),
+        max: 2,
+      }),
+      noEngine,
+    );
+    expect(outcome.status).toBe('exhausted');
+  });
+
+  it('counts a throwing judge as a "no" vote rather than crashing', async () => {
+    const { outcome } = await run(
+      loop({
+        name: 'x',
+        body: failingBody(),
+        until: quorum(
+          1,
+          () => {
+            throw new Error('boom');
+          },
+          () => true,
+        ),
+        max: 5,
+      }),
+      noEngine,
+    );
+    expect(outcome.status).toBe('pass');
+  });
+
+  it('rejects an out-of-range k at definition time', () => {
+    expect(() => quorum(3, () => true)).toThrow(/quorum requires/);
+    expect(() => quorum(0, () => true)).toThrow(/quorum requires/);
+  });
+});
+
+describe('commandSucceeds', () => {
+  it('is met when the command exits 0', async () => {
+    const { outcome } = await run(
+      loop({
+        name: 'x',
+        body: failingBody(),
+        until: commandSucceeds('node', ['-e', 'process.exit(0)']),
+        max: 3,
+      }),
+      noEngine,
+    );
+    expect(outcome.status).toBe('pass');
+  });
+
+  it('is not met when the command exits non-zero', async () => {
+    const { outcome } = await run(
+      loop({
+        name: 'x',
+        body: failingBody(),
+        until: commandSucceeds('node', ['-e', 'process.exit(1)']),
+        max: 2,
+      }),
+      noEngine,
     );
     expect(outcome.status).toBe('exhausted');
   });

@@ -10,7 +10,7 @@ One nestable primitive, borrowing the Jenkins instinct — **everything is a job
   size: a single agent turn, or a whole nested loop.
 - **`loop()`** returns a `Job`, so loops nest by passing one as another's `body`
   or `review`.
-- **`dag()`** (stages) returns a `Job` too, so loops and DAGs nest *both ways*.
+- **`dag()`** (stages) returns a `Job` too, so loops and DAGs nest _both ways_.
 - **`Condition`** is the gate type (a Jenkins `when`); `agentCheck()` is a
   Condition decided by a small validator model.
 - **`Engine`** is the pluggable, drop-in backend (a Jenkins agent/node) — the
@@ -18,6 +18,30 @@ One nestable primitive, borrowing the Jenkins instinct — **everything is a job
 
 It is a self-contained npm island (not part of the pnpm workspace), like
 `tools/oem-reverse-engineer`.
+
+## What this is (and isn't)
+
+This is a **fresh-context coding-loop primitive**, not a durable workflow engine.
+The design assumption is that the **workspace is the state**: each iteration runs
+with a clean context and progress accumulates on disk (files, git commits, a
+`NOTES.md`), not in loop memory. The loop carries only thin bookkeeping
+(iteration count, `ctx.state`, the last review). So if the process dies mid-run
+you re-run the loop against the same repo and continue from where the files are —
+you lose the bookkeeping, not the work.
+
+What it deliberately does **not** do: durable checkpoint/resume across crashes,
+persisted run history, or human-in-the-loop suspension. That is an
+_orchestration_ concern (the iteration/state lives in the runner, so it can't be
+bolted on through the `Engine` seam — it would be a runner change). If you need
+those, reach for Mastra, LangGraph, or Temporal. The trade is intentional: this
+stays a small primitive you can read in an afternoon.
+
+A second honesty note on convergence: an `agentCheck` is a model's
+_self-reported_ confidence, which is a weak, poorly-calibrated signal on its own.
+Treat it as a guard on intent, not ground truth. For anything that matters, gate
+`until` on a **deterministic** check too (tests pass via `commandSucceeds`) and,
+for high-stakes gates, use `quorum(...)` to require several independent judges
+rather than trusting one number.
 
 ## Install
 
@@ -60,7 +84,15 @@ npm run example:poll
 ## The primitive
 
 ```ts
-import { defineJob, loop, agentJob, agentCheck, gateJob, parallel } from 'loops';
+import {
+  defineJob,
+  loop,
+  agentJob,
+  agentCheck,
+  commandSucceeds,
+  gateJob,
+  parallel,
+} from 'loops';
 
 export default defineJob(
   loop({
@@ -74,19 +106,30 @@ export default defineJob(
       prompt: (ctx) => `Iteration ${ctx.iteration}: make concrete progress.`,
     }),
 
-    // stop only when a small model is confident — an agent-validated condition
-    until: agentCheck({
-      engine: 'anthropic-api',
-      model: 'claude-haiku-4-5-20251001',
-      question: 'Is the feature fully implemented with passing tests?',
-      threshold: 0.85,
-    }),
+    // stop only when the tests ACTUALLY pass (ground truth) AND a small model
+    // agrees the work matches intent. An array `until` is `all`, so both hold.
+    // Never gate on the judge alone — its confidence is a self-report.
+    until: [
+      commandSucceeds('npm', ['test']),
+      agentCheck({
+        engine: 'anthropic-api',
+        model: 'claude-haiku-4-5-20251001',
+        question: 'Does the feature match what was asked (not just compile)?',
+        threshold: 0.85,
+      }),
+    ],
 
     // when `until` is met, run a review; if it does NOT pass, the loop runs again.
     // here the review is two reviewers in PARALLEL (a dag) — loops within loops.
     review: parallel('reviewers', {
-      security: gateJob('security', agentCheck({ question: 'No security issues?', threshold: 0.9 })),
-      quality: gateJob('quality', agentCheck({ question: 'Meets the quality bar?', threshold: 0.85 })),
+      security: gateJob(
+        'security',
+        agentCheck({ question: 'No security issues?', threshold: 0.9 }),
+      ),
+      quality: gateJob(
+        'quality',
+        agentCheck({ question: 'Meets the quality bar?', threshold: 0.85 }),
+      ),
     }),
   }),
 );
@@ -98,18 +141,18 @@ export default defineJob(
 
 ### `loop(config)`
 
-| field | meaning |
-|---|---|
-| `body` | the job run each iteration (a `Job` — pass a `loop()`/`dag()` to nest) |
-| `start` | gate before iterating; unmet ⇒ `aborted` |
-| `until` | checked after each body run; met ⇒ stop (then `review`) |
-| `stopOn` | hard early-exit checked each iteration; met ⇒ `aborted` |
-| `max` | iteration cap; reached without passing ⇒ `exhausted` |
-| `review` | runs when `until` is met; non-`pass` re-enters the loop (its outcome is exposed to the next iteration as `ctx.lastReview`) |
-| `maxReviewRestarts` | cap on consecutive failed reviews before `exhausted` — bounds the worker/reviewer standoff independently of `max`; set this whenever `review` is used without a `max` |
-| `delayMs` | delay between iterations (polling); interruptible by abort |
-| `retry` | `{ onError: 'continue' \| 'fail', maxConsecutive?, backoffMs? }` |
-| `onIteration` / `onComplete` | hooks (`onComplete` ≈ Jenkins `post { always }`) |
+| field                        | meaning                                                                                                                                                               |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `body`                       | the job run each iteration (a `Job` — pass a `loop()`/`dag()` to nest)                                                                                                |
+| `start`                      | gate before iterating; unmet ⇒ `aborted`                                                                                                                              |
+| `until`                      | checked after each body run; met ⇒ stop (then `review`)                                                                                                               |
+| `stopOn`                     | hard early-exit checked each iteration; met ⇒ `aborted`                                                                                                               |
+| `max`                        | iteration cap; reached without passing ⇒ `exhausted`                                                                                                                  |
+| `review`                     | runs when `until` is met; non-`pass` re-enters the loop (its outcome is exposed to the next iteration as `ctx.lastReview`)                                            |
+| `maxReviewRestarts`          | cap on consecutive failed reviews before `exhausted` — bounds the worker/reviewer standoff independently of `max`; set this whenever `review` is used without a `max` |
+| `delayMs`                    | delay between iterations (polling); interruptible by abort                                                                                                            |
+| `retry`                      | `{ onError: 'continue' \| 'fail', maxConsecutive?, backoffMs? }`                                                                                                      |
+| `onIteration` / `onComplete` | hooks (`onComplete` ≈ Jenkins `post { always }`)                                                                                                                      |
 
 With no `until`, a `pass` body ends the loop.
 
@@ -120,14 +163,19 @@ predicate and an agent check. Arrays default to `all` (wrap in `any(...)` for or
 
 ```ts
 until: [
-  (ctx, last) => last?.data != null,                  // deterministic
-  agentCheck({ question: 'Good enough to ship?', threshold: 0.9 }),  // agent-validated
-]
+  commandSucceeds('npm', ['test']), // deterministic ground truth
+  agentCheck({ question: 'Good enough to ship?', threshold: 0.9 }), // agent-validated intent
+];
 ```
 
-Builders: `predicate`, `bodyPassed`, `minConfidence`, `all`, `any`, `not`,
-`always`, `never`, `agentCheck`, and `gateJob` (lift a Condition into a `Job`,
-e.g. a reviewer).
+Prefer this mixed form over a lone `agentCheck`: the deterministic check is the
+truth, the judge guards intent. For a high-stakes gate, wrap several judges in
+`quorum(k, ...)` so consensus, not one self-reported number, opens the gate.
+
+Builders: `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds`
+(deterministic: a shell command exits 0), `all`, `any`, `not`, `quorum`
+(k-of-n consensus), `always`, `never`, `agentCheck`, and `gateJob` (lift a
+Condition into a `Job`, e.g. a reviewer).
 
 ### Stages / DAG
 
@@ -138,9 +186,26 @@ dag({
   name: 'ship',
   nodes: {
     research: agentJob({ label: 'research', prompt: '…' }),
-    implement: { needs: ['research'], job: loop({ /* … */ }) },   // a loop as a node
-    test:      { needs: ['implement'], job: agentJob({ label: 'test', prompt: '…' }) },
-    review:    { needs: ['test'], when: () => true, job: gateJob('review', agentCheck({ /* … */ })) },
+    implement: {
+      needs: ['research'],
+      job: loop({
+        /* … */
+      }),
+    }, // a loop as a node
+    test: {
+      needs: ['implement'],
+      job: agentJob({ label: 'test', prompt: '…' }),
+    },
+    review: {
+      needs: ['test'],
+      when: () => true,
+      job: gateJob(
+        'review',
+        agentCheck({
+          /* … */
+        }),
+      ),
+    },
   },
   concurrency: 2,
 });
@@ -154,12 +219,12 @@ dag({
 
 The agent launch only ever touches the `Engine` interface. Built-ins:
 
-| name | backend | notes |
-|---|---|---|
-| `agent-sdk` | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call; uses host Claude auth |
-| `claude-cli` | `claude` subprocess (`execa`) | fresh process per call |
-| `anthropic-api` | `@anthropic-ai/sdk` | token-level streaming; cheapest for validators; needs a key |
-| `mock` | scripted, offline | for tests/examples |
+| name            | backend                          | notes                                                       |
+| --------------- | -------------------------------- | ----------------------------------------------------------- |
+| `agent-sdk`     | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call; uses host Claude auth             |
+| `claude-cli`    | `claude` subprocess (`execa`)    | fresh process per call                                      |
+| `anthropic-api` | `@anthropic-ai/sdk`              | token-level streaming; cheapest for validators; needs a key |
+| `mock`          | scripted, offline                | for tests/examples                                          |
 
 > Prefer the `ANTHROPIC_API_KEY` env var over `--api-key` for the `anthropic-api`
 > engine — a flag value is recorded in your shell history and visible in the
@@ -175,7 +240,11 @@ const myEngine: Engine = {
   name: 'my-provider',
   async run(req, onEvent, signal) {
     // call any provider/framework; stream via onEvent({ type: 'text', delta })
-    return { text, usage: { inputTokens, outputTokens }, model: req.model ?? 'x' };
+    return {
+      text,
+      usage: { inputTokens, outputTokens },
+      model: req.model ?? 'x',
+    };
   },
 };
 
@@ -202,12 +271,12 @@ the result of each iteration while the run continues. The detail panel shows the
 selected iteration's body status + summary, the `until`/`stopOn`/`review`
 verdicts, token usage and duration, and the last few transcript lines.
 
-| Key | Action |
-| --- | --- |
-| `↑` / `↓` or `k` / `j` | Move the selection across loop nodes (tree order) |
-| `←` / `→` or `h` / `l` | Step to the previous / next iteration of the selected loop |
-| `f` or `space` | Toggle follow-live (auto-track the newest loop + iteration) |
-| `q` / `Esc` / `Ctrl-C` | Abort the run |
+| Key                    | Action                                                      |
+| ---------------------- | ----------------------------------------------------------- |
+| `↑` / `↓` or `k` / `j` | Move the selection across loop nodes (tree order)           |
+| `←` / `→` or `h` / `l` | Step to the previous / next iteration of the selected loop  |
+| `f` or `space`         | Toggle follow-live (auto-track the newest loop + iteration) |
+| `q` / `Esc` / `Ctrl-C` | Abort the run                                               |
 
 The footer shows `● LIVE` while following and `⏸ BROWSE` once you navigate away;
 any navigation key turns following off, and `f`/`space` turns it back on.
