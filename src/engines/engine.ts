@@ -80,6 +80,20 @@ export function isEngine(ref: EngineRef | undefined): ref is Engine {
   );
 }
 
+/**
+ * How a tool-using engine (claude-cli / agent-sdk) treats permission prompts.
+ * Mirrors the Claude Code values. `bypassPermissions` lets a headless worker
+ * read/write/run without prompting — required for an unattended agent that must
+ * touch the filesystem or shell, and to be set deliberately.
+ */
+export type PermissionMode =
+  | 'default'
+  | 'acceptEdits'
+  | 'bypassPermissions'
+  | 'plan'
+  | 'dontAsk'
+  | 'auto';
+
 /** Per-run options that the registry uses to construct engines. */
 export interface EngineOptions {
   /** Default model when a request/step does not name one. */
@@ -89,4 +103,9 @@ export interface EngineOptions {
   cliBinary?: string;
   /** Extra args appended to the `claude` invocation. */
   cliArgs?: string[];
+  /**
+   * Permission mode for tool-using engines (claude-cli `--permission-mode`,
+   * agent-sdk `permissionMode`). Unset = the engine/CLI default (prompts).
+   */
+  permissionMode?: PermissionMode;
 }

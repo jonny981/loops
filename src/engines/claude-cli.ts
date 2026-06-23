@@ -16,6 +16,29 @@ import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
 import { redactSecrets } from '../core/redact.ts';
 
+/**
+ * Build the `claude` argv for one run. Extracted (and exported) so the flag
+ * wiring — model, system prompt, tool allowlist, permission mode, the `--`
+ * argument-smuggling guard — is unit-testable without spawning a process.
+ */
+export function buildClaudeArgs(
+  req: AgentRequest,
+  opts: EngineOptions,
+): string[] {
+  const model = req.model ?? opts.defaultModel;
+  const args = ['-p', '--output-format', 'stream-json', '--verbose'];
+  if (model) args.push('--model', model);
+  if (req.system) args.push('--append-system-prompt', req.system);
+  if (req.allowedTools?.length)
+    args.push('--allowedTools', req.allowedTools.join(','));
+  if (opts.permissionMode) args.push('--permission-mode', opts.permissionMode);
+  if (opts.cliArgs?.length) args.push(...opts.cliArgs);
+  // `--` ends option parsing so a prompt starting with `-` can't be
+  // mis-interpreted by `claude` as a flag (argument smuggling).
+  args.push('--', req.prompt);
+  return args;
+}
+
 export class ClaudeCliEngine implements Engine {
   readonly name = 'claude-cli';
   constructor(private readonly opts: EngineOptions = {}) {}
@@ -27,15 +50,7 @@ export class ClaudeCliEngine implements Engine {
   ): Promise<AgentResult> {
     const bin = this.opts.cliBinary ?? 'claude';
     const model = req.model ?? this.opts.defaultModel;
-    const args = ['-p', '--output-format', 'stream-json', '--verbose'];
-    if (model) args.push('--model', model);
-    if (req.system) args.push('--append-system-prompt', req.system);
-    if (req.allowedTools?.length)
-      args.push('--allowedTools', req.allowedTools.join(','));
-    if (this.opts.cliArgs?.length) args.push(...this.opts.cliArgs);
-    // `--` ends option parsing so a prompt starting with `-` can't be
-    // mis-interpreted by `claude` as a flag (argument smuggling).
-    args.push('--', req.prompt);
+    const args = buildClaudeArgs(req, this.opts);
 
     const acc = newAccumulator(model ?? 'claude-cli');
     // Buffered (default) so `stderr` is a string for error messages; we still

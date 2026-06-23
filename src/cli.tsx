@@ -41,6 +41,7 @@ interface RunFlags {
   maxTokens?: string;
   apiKey?: string;
   cliBinary?: string;
+  permissionMode?: string;
   engineArg?: string[];
   state?: string;
   budget?: string;
@@ -130,6 +131,9 @@ async function execute(
   if (flags.defaultModel) engineOptions.defaultModel = flags.defaultModel;
   if (flags.apiKey) engineOptions.apiKey = flags.apiKey;
   if (flags.cliBinary) engineOptions.cliBinary = flags.cliBinary;
+  if (flags.permissionMode)
+    engineOptions.permissionMode =
+      flags.permissionMode as EngineOptions['permissionMode'];
   if (flags.engineArg?.length) engineOptions.cliArgs = flags.engineArg;
 
   let state: Record<string, unknown> | undefined;
@@ -258,6 +262,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option(
       '--cli-binary <path>',
       'path to the claude binary (claude-cli engine)',
+    )
+    .option(
+      '--permission-mode <mode>',
+      'tool permission mode for claude-cli/agent-sdk (default | acceptEdits | bypassPermissions | plan | dontAsk | auto)',
     )
     .option(
       '--engine-arg <arg>',

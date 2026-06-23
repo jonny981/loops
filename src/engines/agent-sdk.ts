@@ -42,6 +42,7 @@ export class AgentSdkEngine implements Engine {
       systemPrompt: req.system,
       cwd: req.cwd,
       allowedTools: req.allowedTools,
+      permissionMode: this.opts.permissionMode,
       includePartialMessages: true,
       abortController: abort,
     } as Record<string, unknown>;
