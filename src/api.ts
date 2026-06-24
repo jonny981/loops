@@ -60,6 +60,9 @@ export {
   ensureIgnored,
   type DraftNote,
 } from './core/draft.ts';
+
+// The read side — grounding the next fresh context in the branch-local ledger
+export { groundingText, type GroundOptions } from './core/ground.ts';
 export {
   toCondition,
   predicate,
