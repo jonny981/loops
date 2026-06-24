@@ -1,0 +1,4 @@
+{
+  "problem": "roundToStep(x, step) in round.mjs rounds x to the nearest multiple of step. The naive `Math.round(x / step) * step` leaks floating-point error: roundToStep(0.3, 0.1) returns 0.30000000000000004 instead of 0.3. Fix it so the result is the clean decimal multiple (match the number of decimal places in step) and all cases in test.mjs pass. Integer-step cases must keep working.",
+  "test_cmd": "node test.mjs"
+}

@@ -1,2 +1,6 @@
-# Runtime output of `npx tsx bench/ab.ts`.
+# Runtime output of the bench runners.
 results.json
+results-*.json
+predictions-*.jsonl
+swebench-instances.json
+logs/

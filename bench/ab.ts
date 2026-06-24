@@ -10,16 +10,20 @@
  * The number that matters is ON − OFF (resolve-rate, iterations, tokens). See
  * bench/PLAN.md for the why.
  *
+ * The Ledger only pays off when ONE attempt is not enough (the multi-iteration
+ * regime). On one-shot-solvable tasks ON==OFF by construction — grounding is pure
+ * overhead — so this runs N TRIALS per (task, arm): few tasks × many trials gives
+ * the statistical power to see a resolve-rate gap that a single run cannot.
+ *
  * NOT offline: the arms drive the real `claude-cli` engine, which edits files, so
- * this needs host Claude auth (unlike the unit tests). Each (task, arm) runs in
- * its own throwaway git repo seeded from the task, so the arms never contaminate
- * each other and `commitJob`'s `git add -A` is safe.
+ * this needs host Claude auth. Each trial runs in its own throwaway git repo
+ * seeded from the task, so trials and arms never contaminate each other.
  *
- *   npx tsx bench/ab.ts                 # all tasks, both arms
- *   npx tsx bench/ab.ts fix-fizzbuzz    # one task
- *   BENCH_MAX_ITERS=4 BENCH_MODEL=claude-sonnet-4-6 npx tsx bench/ab.ts
+ *   npx tsx bench/ab.ts                              # all tasks, both arms
+ *   BENCH_TASKS=tasks-hard BENCH_TRIALS=5 BENCH_MODEL=haiku \
+ *     BENCH_MAX_ITERS=5 BENCH_OUT=results-hard.json npx tsx bench/ab.ts
  *
- * Then:  npx tsx bench/report.ts
+ * Then:  npx tsx bench/report.ts [results-file]
  */
 
 import {
@@ -31,7 +35,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 
@@ -47,13 +51,17 @@ import {
 } from '../src/api.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TASKS_DIR = join(HERE, 'tasks');
-const RESULTS = join(HERE, 'results.json');
+const resolveIn = (p: string) => (isAbsolute(p) ? p : join(HERE, p));
+
+const TASKS_DIR = resolveIn(process.env.BENCH_TASKS || 'tasks');
+const OUT = resolveIn(process.env.BENCH_OUT || 'results.json');
 
 /** Same cap for both arms — only the Ledger varies. */
 const MAX_ITERS = Number(process.env.BENCH_MAX_ITERS ?? 6);
 /** Same model for both arms (undefined → the CLI default). Critical for the A/B. */
 const MODEL = process.env.BENCH_MODEL || undefined;
+/** Trials per (task, arm) — power on a small task set. */
+const TRIALS = Number(process.env.BENCH_TRIALS ?? 1);
 const ENGINE = 'claude-cli';
 
 type Arm = 'off' | 'on';
@@ -65,8 +73,7 @@ interface Task {
   seedDir: string;
 }
 
-interface ArmResult {
-  arm: Arm;
+interface TrialResult {
   /** The authoritative check: the test command passes on the final tree. */
   resolved: boolean;
   /** The loop's own terminal status (pass / exhausted / fail / …). */
@@ -75,7 +82,11 @@ interface ArmResult {
   inputTokens: number;
   outputTokens: number;
   elapsedMs: number;
-  repoDir: string;
+}
+
+interface ArmResult {
+  arm: Arm;
+  trials: TrialResult[];
 }
 
 interface TaskResult {
@@ -101,7 +112,7 @@ function loadTasks(filter: string[]): Task[] {
   });
 }
 
-/** A fresh git repo seeded at the task's broken state — the per-arm workspace. */
+/** A fresh git repo seeded at the task's broken state — the per-trial workspace. */
 async function prepareRepo(task: Task, arm: Arm): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), `loops-bench-${task.id}-${arm}-`));
   cpSync(task.seedDir, dir, { recursive: true });
@@ -170,7 +181,7 @@ async function testPasses(task: Task, dir: string): Promise<boolean> {
   return r.exitCode === 0;
 }
 
-async function runArm(task: Task, arm: Arm): Promise<ArmResult> {
+async function runTrial(task: Task, arm: Arm): Promise<TrialResult> {
   const repoDir = await prepareRepo(task, arm);
   const job = arm === 'on' ? onJob(task, repoDir) : offJob(task, repoDir);
   const result: RunResult = await run(job, {
@@ -181,54 +192,67 @@ async function runArm(task: Task, arm: Arm): Promise<ArmResult> {
   const resolved = await testPasses(task, repoDir);
   const stat = result.stats.loops.find((l) => l.path.includes(`solve-${task.id}`));
   return {
-    arm,
     resolved,
     status: result.outcome.status,
     iterations: stat?.iterations ?? 0,
     inputTokens: result.stats.totalInputTokens,
     outputTokens: result.stats.totalOutputTokens,
     elapsedMs: result.stats.elapsedMs,
-    repoDir,
   };
 }
+
+const pct = (xs: TrialResult[]) =>
+  xs.length ? (xs.filter((t) => t.resolved).length / xs.length) * 100 : 0;
 
 async function main(): Promise<void> {
   const filter = process.argv.slice(2).filter((a) => !a.startsWith('-'));
   const tasks = loadTasks(filter);
   if (!tasks.length) {
-    console.error(`no tasks under ${TASKS_DIR}` + (filter.length ? ` matching ${filter.join(', ')}` : ''));
+    console.error(`no tasks under ${TASKS_DIR}`);
     process.exit(1);
   }
 
   console.log(
-    `Ledger A/B — ${tasks.length} task(s), max ${MAX_ITERS} iters, ` +
-      `engine ${ENGINE}, model ${MODEL ?? '(cli default)'}`,
+    `Ledger A/B — ${tasks.length} task(s) × ${TRIALS} trial(s), max ${MAX_ITERS} ` +
+      `iters, engine ${ENGINE}, model ${MODEL ?? '(cli default)'}\n` +
+      `tasks ${TASKS_DIR}`,
   );
 
   const results: TaskResult[] = [];
   for (const task of tasks) {
     console.log(`\n■ ${task.id}`);
     const arms: ArmResult[] = [];
-    // OFF first, then ON — each on its own fresh copy of the seed.
+    // OFF first, then ON — each trial on its own fresh copy of the seed.
     for (const arm of ['off', 'on'] as Arm[]) {
-      process.stdout.write(`  ${arm.toUpperCase().padEnd(3)} … `);
-      const r = await runArm(task, arm);
-      console.log(
-        `${r.resolved ? 'resolved' : 'unresolved'} · ${r.iterations} iter · ` +
-          `${r.inputTokens + r.outputTokens} tok · ${(r.elapsedMs / 1000).toFixed(0)}s`,
-      );
-      arms.push(r);
+      const trials: TrialResult[] = [];
+      for (let t = 0; t < TRIALS; t++) {
+        process.stdout.write(`  ${arm.toUpperCase().padEnd(3)} trial ${t + 1}/${TRIALS} … `);
+        const r = await runTrial(task, arm);
+        console.log(
+          `${r.resolved ? 'resolved' : 'unresolved'} · ${r.iterations} iter · ` +
+            `${r.inputTokens + r.outputTokens} tok · ${(r.elapsedMs / 1000).toFixed(0)}s`,
+        );
+        trials.push(r);
+      }
+      console.log(`  ${arm.toUpperCase()} → ${pct(trials).toFixed(0)}% resolved (${trials.filter((x) => x.resolved).length}/${TRIALS})`);
+      arms.push({ arm, trials });
     }
     results.push({ id: task.id, arms });
   }
 
   const out = {
     generatedAt: new Date().toISOString(),
-    config: { maxIters: MAX_ITERS, engine: ENGINE, model: MODEL ?? null },
+    config: {
+      maxIters: MAX_ITERS,
+      engine: ENGINE,
+      model: MODEL ?? null,
+      trials: TRIALS,
+      tasksDir: TASKS_DIR,
+    },
     tasks: results,
   };
-  writeFileSync(RESULTS, JSON.stringify(out, null, 2));
-  console.log(`\nwrote ${RESULTS} — run \`npx tsx bench/report.ts\` for the table`);
+  writeFileSync(OUT, JSON.stringify(out, null, 2));
+  console.log(`\nwrote ${OUT} — run \`npx tsx bench/report.ts ${OUT}\` for the table`);
 }
 
 main().catch((e) => {

@@ -1,0 +1,4 @@
+{
+  "problem": "parseCsvLine(line) in csv.mjs splits a CSV line into fields. It just splits on commas, so it breaks on quoted fields: parseCsvLine('a,\"b,c\",d') should be ['a','b,c','d']. Fix it to handle double-quoted fields that may contain commas, and the \"\" escape for a literal quote inside a quoted field (e.g. '\"x\"\"y\"' is the single value x\"y). Unquoted and empty fields must keep working. Make all cases in test.mjs pass.",
+  "test_cmd": "node test.mjs"
+}

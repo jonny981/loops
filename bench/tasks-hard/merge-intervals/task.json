@@ -1,0 +1,4 @@
+{
+  "problem": "mergeIntervals(intervals) in intervals.mjs merges overlapping [start, end] intervals. It assumes the input is sorted and uses a strict `<` overlap test, so it fails on unsorted input ([[8,10],[1,3],[2,6]]) and on touching intervals ([[1,2],[2,3]] should merge to [[1,3]]). Fix it: sort by start, then merge when the next start is <= the current end. Make all cases in test.mjs pass.",
+  "test_cmd": "node test.mjs"
+}
