@@ -15,8 +15,9 @@
  * signal, not this read.
  */
 
-import { log } from './git.ts';
-import type { Workspace } from './types.ts';
+import { log, type CommitRecord } from './git.ts';
+import type { JobContext, Workspace } from './types.ts';
+import type { EngineRef } from '../engines/engine.ts';
 
 export interface GroundOptions {
   /**
@@ -65,5 +66,95 @@ export async function groundingText(
     return r.body ? `${head}\n\n${truncate(r.body, bodyChars)}` : head;
   });
 
+  return `${header}\n\n${entries.join('\n\n')}`;
+}
+
+// ── Retrieval grounding ─────────────────────────────────────────────────────
+// Recent-N grounding is noisy when the branch log carries unrelated work (e.g. a
+// shared monorepo). Retrieval fixes that the way DiffMem/GCC do — selectively —
+// but stays in the git grain: a cheap model reads the candidate commit SUBJECTS
+// and picks the shas relevant to the task; only those bodies are injected. No
+// embeddings, no index file — git's own log IS the index.
+
+export interface RetrieveOptions {
+  /** The task/intent to find relevant prior commits for. */
+  intent: string;
+  /** How many recent commits to offer as candidates. Default 50. */
+  candidates?: number;
+  /** Max commits to inject. Default 8. */
+  max?: number;
+  /** Truncate each injected body. Default 1200. */
+  bodyChars?: number;
+  /** Engine for the (cheap) selection call. Default the run engine. */
+  engine?: EngineRef;
+  /** Model for the selection call (a small one is plenty). */
+  model?: string;
+}
+
+const SELECT_SYSTEM =
+  'You select which past commits are relevant CONTEXT for a task. Be selective: ' +
+  'return only genuinely relevant commits, fewer is better. Output ONLY shas, ' +
+  'comma-separated, most relevant first — or the single word NONE.';
+
+/** Match the model's reply back to candidate commits, preserving its order. */
+function pickShas(text: string, records: CommitRecord[]): CommitRecord[] {
+  const ids = text.toLowerCase().match(/[0-9a-f]{7,40}/g) ?? [];
+  const out: CommitRecord[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    const rec = records.find((r) => r.sha.startsWith(id));
+    if (rec && !seen.has(rec.sha)) {
+      seen.add(rec.sha);
+      out.push(rec);
+    }
+  }
+  return out;
+}
+
+/**
+ * Render only the prior commits a cheap model judges relevant to `intent`.
+ * Returns '' when nothing is on the branch or nothing is judged relevant.
+ */
+export async function retrieveLedger(
+  ctx: JobContext,
+  opts: RetrieveOptions,
+): Promise<string> {
+  const records = await log({
+    cwd: ctx.workspace.dir,
+    max: opts.candidates ?? 50,
+    signal: ctx.signal,
+  });
+  if (!records.length) return '';
+
+  const list = records
+    .map((r) => `${r.sha.slice(0, 9)}: ${r.subject}`)
+    .join('\n');
+  const engine = opts.engine ? ctx.resolveEngine(opts.engine) : ctx.engine;
+  const result = await engine.run(
+    {
+      prompt:
+        `TASK:\n${opts.intent}\n\n` +
+        `CANDIDATE COMMITS (sha: subject):\n${list}\n\n` +
+        `Return the shas relevant to the TASK (up to ${opts.max ?? 8}), or NONE.`,
+      system: SELECT_SYSTEM,
+      model: opts.model,
+      maxTokens: 200,
+    },
+    () => {},
+    ctx.signal,
+  );
+
+  const picked = pickShas(result.text, records).slice(0, opts.max ?? 8);
+  if (!picked.length) return '';
+
+  const where = ctx.workspace.branch ? `\`${ctx.workspace.branch}\`` : 'this branch';
+  const header =
+    `## Relevant prior work on ${where} (retrieved for this task)\n` +
+    `Commits a search judged relevant — read them before working.`;
+  const bodyChars = opts.bodyChars ?? 1200;
+  const entries = picked.map((r) => {
+    const head = `### ${r.sha.slice(0, 7)}  ${r.subject}`;
+    return r.body ? `${head}\n\n${truncate(r.body, bodyChars)}` : head;
+  });
   return `${header}\n\n${entries.join('\n\n')}`;
 }

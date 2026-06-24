@@ -11,7 +11,7 @@ import { LoopError } from './errors.ts';
 import { assertBudget } from './budget.ts';
 import { isRepo, stageAll, commit } from './git.ts';
 import { readDraft, resetDraft, ensureIgnored, draftPath } from './draft.ts';
-import { groundingText } from './ground.ts';
+import { groundingText, retrieveLedger } from './ground.ts';
 
 export interface AgentJobConfig {
   label: string;
@@ -51,6 +51,12 @@ export interface GroundConfig {
   includeDraft?: boolean;
   /** Tell the agent to append its reasoning to the draft. Default true. */
   recordInstruction?: boolean;
+  /**
+   * Retrieve relevant commits with a cheap model instead of taking recent-N.
+   * Far less noisy when the branch log carries unrelated work (a shared repo).
+   * `true` uses defaults; an object tunes the candidate window / selection model.
+   */
+  retrieve?: boolean | { candidates?: number; model?: string };
 }
 
 /**
@@ -67,11 +73,21 @@ async function withGrounding(
   const opts: GroundConfig = typeof ground === 'object' ? ground : {};
   const parts: string[] = [];
 
-  const ledger = await groundingText(ctx.workspace, {
-    max: opts.max,
-    bodyChars: opts.bodyChars,
-    signal: ctx.signal,
-  });
+  const ledger = opts.retrieve
+    ? await retrieveLedger(ctx, {
+        intent: userPrompt,
+        max: opts.max,
+        bodyChars: opts.bodyChars,
+        candidates:
+          typeof opts.retrieve === 'object' ? opts.retrieve.candidates : undefined,
+        model:
+          typeof opts.retrieve === 'object' ? opts.retrieve.model : undefined,
+      })
+    : await groundingText(ctx.workspace, {
+        max: opts.max,
+        bodyChars: opts.bodyChars,
+        signal: ctx.signal,
+      });
   if (ledger) parts.push(ledger);
 
   if (opts.includeDraft !== false) {

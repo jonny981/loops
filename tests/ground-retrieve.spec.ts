@@ -1,0 +1,83 @@
+import { describe, it, expect, afterAll } from 'vitest';
+
+import { run, agentJob, stageAll, commit, MockEngine } from '../src/api.ts';
+import type { RunOptions, AgentRequest } from '../src/api.ts';
+import { tmpRepo, write, cleanupRepos } from './git-helpers.ts';
+
+afterAll(cleanupRepos);
+
+async function makeCommit(dir: string, file: string, subject: string, body: string) {
+  write(dir, file, `${subject}\n`);
+  await stageAll({ cwd: dir });
+  await commit({ subject, body }, { cwd: dir });
+}
+
+/**
+ * One mock engine plays both roles: the selection call (it returns the shas of
+ * candidates whose subject says "relevant") and the work call (it records the
+ * grounded prompt it was handed).
+ */
+function dualMock(): { engine: MockEngine; workPrompt: () => string } {
+  let seen = '';
+  const engine = new MockEngine((req: AgentRequest) => {
+    if (/Return the shas relevant/i.test(req.prompt)) {
+      const shas = [...req.prompt.matchAll(/^([0-9a-f]{7,}): (.+)$/gm)]
+        .filter((m) => /relevant/i.test(m[2]!))
+        .map((m) => m[1]!);
+      return shas.join(', ') || 'NONE';
+    }
+    seen = req.prompt;
+    return 'done';
+  });
+  return { engine, workPrompt: () => seen };
+}
+
+describe('retrieval grounding', () => {
+  it('injects only the commits a search judges relevant, not recent-N', async () => {
+    const repo = await tmpRepo();
+    await makeCommit(repo, 'a.ts', 'feat: relevant auth work', '## Why\n\nbuilt the auth flow');
+    await makeCommit(repo, 'b.ts', 'chore: unrelated lockfile bump', '## Why\n\nbumped deps');
+    await makeCommit(repo, 'c.ts', 'feat: relevant token refresh', '## Why\n\nadded token refresh');
+
+    const m = dualMock();
+    const opts: RunOptions = { engine: 'mock', engines: { mock: () => m.engine }, cwd: repo };
+    await run(
+      agentJob({
+        label: 'work',
+        prompt: 'Continue the auth feature.',
+        ground: { retrieve: true, recordInstruction: false },
+      }),
+      opts,
+    );
+
+    const prompt = m.workPrompt();
+    expect(prompt).toContain('retrieved for this task');
+    // the relevant commits made it in
+    expect(prompt).toContain('relevant auth work');
+    expect(prompt).toContain('built the auth flow');
+    expect(prompt).toContain('relevant token refresh');
+    // the unrelated one did NOT
+    expect(prompt).not.toContain('unrelated lockfile bump');
+    expect(prompt).not.toContain('bumped deps');
+    // the caller's prompt is still last
+    expect(prompt).toContain('Continue the auth feature.');
+  });
+
+  it('falls back to nothing when the search finds no relevant commits', async () => {
+    const repo = await tmpRepo();
+    await makeCommit(repo, 'a.ts', 'chore: nothing matches', '## Why\n\nnoise');
+    const m = dualMock(); // nothing says "relevant" → NONE
+    const opts: RunOptions = { engine: 'mock', engines: { mock: () => m.engine }, cwd: repo };
+    await run(
+      agentJob({
+        label: 'work',
+        prompt: 'A brand new task.',
+        ground: { retrieve: true, recordInstruction: false },
+      }),
+      opts,
+    );
+    const prompt = m.workPrompt();
+    expect(prompt).not.toContain('retrieved for this task');
+    expect(prompt.trim()).toBe('A brand new task.');
+  });
+});
