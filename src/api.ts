@@ -29,6 +29,7 @@ export type {
 // Primitives
 export { loop } from './core/loop.ts';
 export { dag, sequence, parallel } from './core/dag.ts';
+export { tournament, type TournamentConfig } from './core/tournament.ts';
 export {
   agentJob,
   fnJob,
