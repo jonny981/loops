@@ -36,6 +36,7 @@ import {
   mergeBranch,
 } from './git.ts';
 import { readDraft } from './draft.ts';
+import type { EnvHandle } from '../env/environment.ts';
 import { LoopError } from './errors.ts';
 
 /** Sanitise a name into a git-ref-safe slug. */
@@ -100,8 +101,17 @@ export function dag(config: DagConfig): Job {
 
     // Each node runs under its own name in the path, so a nested job (e.g. a
     // loop) is uniquely addressable for stats/logs even across same-named siblings.
-    const nodeCtx = (name: string, workspace?: Workspace): JobContext =>
-      childContext(parent, { depth, path: [...path, name], workspace });
+    const nodeCtx = (
+      name: string,
+      workspace?: Workspace,
+      environment?: EnvHandle,
+    ): JobContext =>
+      childContext(parent, {
+        depth,
+        path: [...path, name],
+        workspace,
+        environment,
+      });
 
     // Land-back merges are serialised: concurrent nodes finishing at once must
     // not race on the parent branch's index/HEAD.
@@ -138,8 +148,14 @@ export function dag(config: DagConfig): Job {
         signal: parent.signal,
       });
       const wtWs: Workspace = { dir: wt.dir, branch };
+      // Each team gets its own environment, named after its branch — born with
+      // the worktree, torn down with it. A failed start propagates and the node
+      // is recorded as failed; the worktree is still cleaned up in `finally`.
+      let envHandle: EnvHandle | undefined;
       try {
-        const outcome = await node.job(nodeCtx(name, wtWs));
+        if (config.environment)
+          envHandle = await config.environment.up(wtWs, parent.signal);
+        const outcome = await node.job(nodeCtx(name, wtWs, envHandle));
         if (outcome.status === 'pass') {
           // Capture anything the node left uncommitted, so nothing is stranded
           // in the worktree, then land it back.
@@ -174,6 +190,8 @@ export function dag(config: DagConfig): Job {
         }
         return outcome;
       } finally {
+        if (envHandle)
+          await envHandle.down(parent.signal).catch(() => {});
         await removeWorktree(base.dir, wt.dir, {
           signal: parent.signal,
         }).catch(() => {});

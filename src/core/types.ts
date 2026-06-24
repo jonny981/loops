@@ -20,7 +20,7 @@ import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
 import type { LoopError } from './errors.ts';
 import type { Budget } from './budget.ts';
 import type { CommitJobConfig } from './job.ts';
-import type { EnvHandle } from '../env/environment.ts';
+import type { EnvHandle, Environment } from '../env/environment.ts';
 
 /** Terminal disposition of a `Job`. */
 export type OutcomeStatus =
@@ -219,6 +219,13 @@ export interface DagConfig {
    * default — the shared workspace.
    */
   isolation?: 'worktree';
+  /**
+   * Give each ISOLATED node its own environment, brought up when its worktree
+   * forks and torn down when it joins — so every branch-team gets its own stage,
+   * named by the provider from the workspace branch. Requires isolation; a
+   * non-isolated node shares the workspace and gets no per-team env.
+   */
+  environment?: Environment;
 }
 
 /** Per-node disposition within a DAG run. */

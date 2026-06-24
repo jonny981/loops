@@ -3,13 +3,14 @@ import { describe, it, expect, afterAll } from 'vitest';
 import {
   run,
   loop,
+  dag,
   fnJob,
   commandSucceeds,
   MockEngine,
   MockEnvironment,
 } from '../src/api.ts';
 import type { RunOptions } from '../src/api.ts';
-import { tmpRepo, cleanupRepos } from './git-helpers.ts';
+import { tmpRepo, write, cleanupRepos } from './git-helpers.ts';
 
 afterAll(cleanupRepos);
 
@@ -73,6 +74,50 @@ describe('Environment axis', () => {
     });
     const { outcome } = await run(job, { ...base, cwd: repo });
     expect(outcome.status).toBe('exhausted'); // gate never opens, hits max
+  });
+
+  it('gives each worktree team its own environment, named after its branch', async () => {
+    const repo = await tmpRepo();
+    const envir = new MockEnvironment(); // url derived from ws.branch
+    const seen: Record<string, string | undefined> = {};
+    const job = dag({
+      name: 'fan',
+      isolation: 'worktree',
+      environment: envir,
+      stopOnError: false,
+      nodes: {
+        api: fnJob('api', async (ctx) => {
+          seen.api = ctx.environment?.url;
+          write(ctx.workspace.dir, 'api.ts', 'x\n');
+          return { status: 'pass' };
+        }),
+        web: fnJob('web', async (ctx) => {
+          seen.web = ctx.environment?.url;
+          write(ctx.workspace.dir, 'web.ts', 'y\n');
+          return { status: 'pass' };
+        }),
+      },
+    });
+    const { outcome } = await run(job, { ...base, cwd: repo });
+    expect(outcome.status).toBe('pass');
+    expect(envir.upCount).toBe(2); // one stage per team
+    expect(envir.downCount).toBe(2); // each torn down with its worktree
+    // each team's env is aligned with its own worktree branch
+    expect(seen.api).toContain('loops/fan-api');
+    expect(seen.web).toContain('loops/fan-web');
+    expect(seen.api).not.toBe(seen.web);
+  });
+
+  it('does not bring up a per-team env for a non-isolated node', async () => {
+    const repo = await tmpRepo();
+    const envir = new MockEnvironment();
+    const job = dag({
+      name: 'plain',
+      environment: envir,
+      nodes: { x: fnJob('x', async () => ({ status: 'pass' })) },
+    });
+    await run(job, { ...base, cwd: repo });
+    expect(envir.upCount).toBe(0); // per-team env requires isolation
   });
 
   it('fails the run cleanly when the environment cannot start', async () => {
