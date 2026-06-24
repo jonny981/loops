@@ -10,6 +10,7 @@ import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
 import { assertBudget } from './budget.ts';
 import { isRepo, stageAll, commit } from './git.ts';
+import { readDraft, resetDraft, ensureIgnored } from './draft.ts';
 
 export interface AgentJobConfig {
   label: string;
@@ -145,9 +146,13 @@ export interface CommitJobConfig {
     | string
     | ((ctx: JobContext, last: Outcome | undefined) => string | Promise<string>);
   /**
-   * The "way" — the structured commit body. A string, a function, or omitted to
-   * compose a default from the last outcome. This is the harness-authored floor;
-   * pass your own to let the agent enrich it.
+   * The "way" — the structured commit body. Precedence when composing it:
+   *   1. this `body` (an explicit override — a string or function), else
+   *   2. the workspace draft (the staged commit body agents appended to), else
+   *   3. a default composed from the last outcome (the floor).
+   * The draft is the trusted source: it captures the why as it happens, across a
+   * long unit of work and across fanned-out sub-agents. Set `body` only to
+   * override it.
    */
   body?:
     | string
@@ -180,9 +185,12 @@ function composeWay(ctx: JobContext, last: Outcome | undefined): string {
 /**
  * Commit the workspace — write the "way" (a structured body) welded to the
  * "what" (the staged diff) onto the work branch. This is the loop's memory: the
- * next fresh context reads these commits back. Engine-agnostic; it only touches
- * `ctx.workspace.dir` and git. A non-repo workspace fails loudly (a non-retryable
- * CONFIG error) rather than silently dropping the work's record.
+ * next fresh context reads these commits back. The body is composed from the
+ * workspace draft (the staged commit body agents appended to as they worked),
+ * falling back to the outcome floor — so the rich why survives context decay and
+ * fan-out. The draft is cleared once the commit lands. Engine-agnostic; it only
+ * touches `ctx.workspace.dir` and git. A non-repo workspace fails loudly (a
+ * non-retryable CONFIG error) rather than silently dropping the work's record.
  */
 export function commitJob(config: CommitJobConfig): Job {
   return async (ctx) => {
@@ -202,17 +210,24 @@ export function commitJob(config: CommitJobConfig): Job {
         typeof config.subject === 'function'
           ? await config.subject(ctx, last)
           : config.subject;
+      // The way, in precedence order: explicit override, then the draft (the
+      // trusted accumulated why), then the outcome floor.
       const body =
-        config.body === undefined
-          ? composeWay(ctx, last)
-          : typeof config.body === 'function'
+        config.body !== undefined
+          ? typeof config.body === 'function'
             ? await config.body(ctx, last)
-            : config.body;
-      if (config.stageAll ?? true) await stageAll({ cwd, signal: ctx.signal });
+            : config.body
+          : readDraft(ctx.workspace) || composeWay(ctx, last);
+      if (config.stageAll ?? true) {
+        ensureIgnored(ctx.workspace); // never stage the draft
+        await stageAll({ cwd, signal: ctx.signal });
+      }
       const sha = await commit(
         { subject, body, allowEmpty: config.allowEmpty },
         { cwd, signal: ctx.signal },
       );
+      // Crystallise, then reset: the draft's job ends when it becomes a commit.
+      if (sha) resetDraft(ctx.workspace);
       const outcome: Outcome = sha
         ? {
             status: 'pass',

@@ -50,6 +50,16 @@ export {
   type CommitInput,
   type LogQuery,
 } from './core/git.ts';
+
+// The draft — the staged commit body (the write-ahead "way")
+export {
+  appendDraft,
+  readDraft,
+  resetDraft,
+  draftPath,
+  ensureIgnored,
+  type DraftNote,
+} from './core/draft.ts';
 export {
   toCondition,
   predicate,
