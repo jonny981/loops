@@ -9,7 +9,10 @@
     "loops": "./bin/loops.mjs"
   },
   "exports": {
-    ".": "./src/api.ts"
+    ".": "./src/api.ts",
+    "./env/command": "./src/env/command.ts",
+    "./env/sst": "./src/env/sst.ts",
+    "./env/docker": "./src/env/docker.ts"
   },
   "scripts": {
     "loops": "tsx src/index.ts",

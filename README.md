@@ -229,6 +229,16 @@ await run(job, { environment: sstEnv }); // one env for the run…
 // …or DagConfig.environment to give every worktree-team its own stage, named after its branch.
 ```
 
+Environments are **optional** — a research pipeline that never deploys just leaves it unset, and the gates test files and commands without a `BASE_URL`.
+
+**Built-in adapters** (opt-in subpaths, no added dependency — they shell out to the CLI on PATH):
+
+- `loops/env/command` — `commandEnvironment`, the generic factory every IaC tool fits (deploy / read outputs / destroy). sst, terraform, pulumi, and cloudformation-via-aws-cli are all thin presets over it.
+- `loops/env/sst` — `sstEnvironment`, a per-branch sst stage (`sst deploy --stage <branch>`).
+- `loops/env/docker` — `dockerEnvironment`, a local stack via a per-branch Docker Compose project, with ephemeral-port discovery so parallel branches never collide.
+
+SDK-bound adapters (e.g. the AWS SDK) add a real dependency, so they belong in your own package or loop definition, not the core.
+
 ## Composition — loops and DAGs
 
 ```ts
