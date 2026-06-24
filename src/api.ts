@@ -34,6 +34,7 @@ export {
   commitJob,
   type AgentJobConfig,
   type CommitJobConfig,
+  type GroundConfig,
 } from './core/job.ts';
 
 // Git substrate (the convergence ledger)

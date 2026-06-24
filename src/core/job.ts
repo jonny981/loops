@@ -10,7 +10,8 @@ import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
 import { assertBudget } from './budget.ts';
 import { isRepo, stageAll, commit } from './git.ts';
-import { readDraft, resetDraft, ensureIgnored } from './draft.ts';
+import { readDraft, resetDraft, ensureIgnored, draftPath } from './draft.ts';
+import { groundingText } from './ground.ts';
 
 export interface AgentJobConfig {
   label: string;
@@ -23,13 +24,73 @@ export interface AgentJobConfig {
   model?: string;
   maxTokens?: number;
   allowedTools?: string[];
+  /** Working dir for the turn. Default: the workspace dir (the worktree). */
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * Ground the turn in memory before it works: prepend the branch-local ledger
+   * (recent committed milestones) and the live draft (this run's accumulated
+   * why), and tell the agent where to record its own reasoning. `true` uses
+   * defaults; an object tunes the reach. This is how a fresh context stops
+   * repeating what earlier iterations already tried.
+   */
+  ground?: boolean | GroundConfig;
   /**
    * Map the agent's raw text into an `Outcome`. Default: `pass`, with the text
    * as the summary. Return `fail` to keep an enclosing loop going.
    */
   outcome?: (text: string, ctx: JobContext) => Outcome | Promise<Outcome>;
+}
+
+export interface GroundConfig {
+  /** Max committed milestones to include (newest first). Default 10. */
+  max?: number;
+  /** Truncate each commit body to this many chars. Default 1200. */
+  bodyChars?: number;
+  /** Include the live draft (this run's why-so-far). Default true. */
+  includeDraft?: boolean;
+  /** Tell the agent to append its reasoning to the draft. Default true. */
+  recordInstruction?: boolean;
+}
+
+/**
+ * Build the grounding preamble: the committed ledger (past milestones), the live
+ * draft (this run's why-so-far), and an instruction to record the why — then the
+ * caller's prompt. Empty parts are dropped, so a first turn on a fresh branch is
+ * just the prompt.
+ */
+async function withGrounding(
+  ctx: JobContext,
+  userPrompt: string,
+  ground: boolean | GroundConfig,
+): Promise<string> {
+  const opts: GroundConfig = typeof ground === 'object' ? ground : {};
+  const parts: string[] = [];
+
+  const ledger = await groundingText(ctx.workspace, {
+    max: opts.max,
+    bodyChars: opts.bodyChars,
+    signal: ctx.signal,
+  });
+  if (ledger) parts.push(ledger);
+
+  if (opts.includeDraft !== false) {
+    const draft = readDraft(ctx.workspace);
+    if (draft)
+      parts.push(`## Work in progress this run (the draft — why so far)\n\n${draft}`);
+  }
+
+  if (opts.recordInstruction !== false) {
+    parts.push(
+      `## Record your reasoning\n` +
+        `As you work, append the why (intent, alternatives, constraints, what ` +
+        `changed) to \`${draftPath(ctx.workspace)}\`. It becomes the commit body ` +
+        `at the next milestone.`,
+    );
+  }
+
+  parts.push(userPrompt);
+  return parts.join('\n\n---\n\n');
 }
 
 const TERMINAL = (text: string): Outcome => ({
@@ -45,10 +106,13 @@ export function agentJob(config: AgentJobConfig): Job {
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label: config.label });
 
     const engine = ctx.resolveEngine(config.engine);
-    const prompt =
+    const userPrompt =
       typeof config.prompt === 'function'
         ? await config.prompt(ctx)
         : config.prompt;
+    const prompt = config.ground
+      ? await withGrounding(ctx, userPrompt, config.ground)
+      : userPrompt;
     const system =
       typeof config.system === 'function' ? config.system(ctx) : config.system;
 
@@ -62,7 +126,7 @@ export function agentJob(config: AgentJobConfig): Job {
           model: config.model,
           maxTokens: config.maxTokens,
           allowedTools: config.allowedTools,
-          cwd: config.cwd,
+          cwd: config.cwd ?? ctx.workspace.dir,
           timeoutMs: config.timeoutMs,
         },
         (e) => {
