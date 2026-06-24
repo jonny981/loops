@@ -24,6 +24,7 @@
 import type { JobContext, LoopConfig, Outcome, Job } from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
+import { commitJob, type CommitJobConfig } from './job.ts';
 import { LoopError, type LoopPhase } from './errors.ts';
 
 const VALID_STATUS = new Set<Outcome['status']>([
@@ -62,6 +63,36 @@ export function loop(config: LoopConfig): Job {
       });
 
     parent.emit({ kind: 'loop:start', ts: ts(), path, depth, max: config.max });
+
+    // At a milestone (the loop converged), record one structured checkpoint
+    // commit. `commitJob` composes the body from the draft the iterations
+    // accumulated, so the commit carries the reasoned "way", not a per-iteration
+    // fragment. Best-effort: a failed recording is surfaced but never undoes a
+    // genuine convergence.
+    const commitCfg: CommitJobConfig | undefined = config.commit
+      ? config.commit === true
+        ? {
+            label: `${config.name}:checkpoint`,
+            subject: (_c, l) =>
+              l?.summary?.split('\n')[0]?.trim().slice(0, 72) ||
+              `chore(${config.name}): checkpoint`,
+          }
+        : { label: `${config.name}:checkpoint`, ...config.commit }
+      : undefined;
+    const checkpoint = commitCfg ? commitJob(commitCfg) : undefined;
+    const recordMilestone = async (ctx: JobContext): Promise<void> => {
+      if (!checkpoint) return;
+      const outcome = await checkpoint(ctx);
+      if (outcome.status !== 'pass') {
+        parent.emit({
+          kind: 'error',
+          ts: ts(),
+          path,
+          message: `checkpoint commit did not pass: ${outcome.summary ?? outcome.status}`,
+          code: outcome.error?.code ?? 'UNKNOWN',
+        });
+      }
+    };
 
     const finish = async (
       outcome: Outcome,
@@ -280,6 +311,7 @@ export function loop(config: LoopConfig): Job {
 
         if (conv.met) {
           if (!config.review) {
+            await recordMilestone(ctxAt(iteration, last));
             return finish(
               {
                 status: 'pass',
@@ -308,6 +340,7 @@ export function loop(config: LoopConfig): Job {
             outcome: reviewOutcome,
           });
           if (reviewOutcome.status === 'pass') {
+            await recordMilestone(ctxAt(iteration, last));
             return finish(
               {
                 status: 'pass',

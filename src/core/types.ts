@@ -19,6 +19,7 @@
 import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
 import type { LoopError } from './errors.ts';
 import type { Budget } from './budget.ts';
+import type { CommitJobConfig } from './job.ts';
 
 /** Terminal disposition of a `Job`. */
 export type OutcomeStatus =
@@ -156,6 +157,15 @@ export interface LoopConfig {
    * never terminates). Default: unbounded (relies on `max`).
    */
   maxReviewRestarts?: number;
+  /**
+   * Record a checkpoint commit when the loop converges — the milestone. A commit
+   * is a milestone, not an iteration: iterations accumulate the why in the draft,
+   * and `commitJob` composes one structured commit from it on convergence. `true`
+   * derives the subject from the converged outcome; pass a `CommitJobConfig` to
+   * set the subject/body. Off by default. Finer granularity comes from finer
+   * structure (more loops/nodes), not per-iteration commits.
+   */
+  commit?: boolean | CommitJobConfig;
   /** Delay between iterations (polling intervals). Interruptible by abort. */
   delayMs?: number;
   retry?: RetryPolicy;
