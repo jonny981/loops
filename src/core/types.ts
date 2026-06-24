@@ -192,6 +192,14 @@ export interface DagNode {
   when?: ConditionInput;
   /** A failure here does not fail the DAG, and does not block dependents. */
   optional?: boolean;
+  /**
+   * Run this node in its own git worktree on a fork branch (branches-as-teams).
+   * Concurrent writers then never collide on files or the index, and the node's
+   * committed work lands back into the parent branch on pass. Defaults to the
+   * DAG's `isolation`. Opt-in: forking a worktree has a real setup cost, and a
+   * read-only node never needs it.
+   */
+  isolate?: boolean;
 }
 
 export interface DagConfig {
@@ -202,6 +210,12 @@ export interface DagConfig {
   concurrency?: number;
   /** When a required node fails, abort the rest. Default: true. */
   stopOnError?: boolean;
+  /**
+   * Default isolation for nodes that do not set `isolate`. `'worktree'` runs each
+   * such node in its own worktree + fork branch, landed back on pass. Off by
+   * default — the shared workspace.
+   */
+  isolation?: 'worktree';
 }
 
 /** Per-node disposition within a DAG run. */

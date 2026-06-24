@@ -12,6 +12,9 @@
  */
 
 import { execa } from 'execa';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /** One commit as the ledger sees it: the what (sha) plus the way (body). */
 export interface CommitRecord {
@@ -165,4 +168,80 @@ function parseLog(stdout: string): CommitRecord[] {
     });
   }
   return records;
+}
+
+// ── Worktrees (branches-as-teams) ──────────────────────────────────────────
+
+export interface WorktreeHandle {
+  /** The isolated working directory. */
+  dir: string;
+  /** The branch checked out there. */
+  branch: string;
+}
+
+/**
+ * Fork an isolated worktree on a new branch from `base` (default HEAD). This is
+ * how a concurrency boundary becomes a team: each concurrent writer gets its own
+ * working dir and branch, so siblings never collide on files or the index.
+ */
+export async function addWorktree(
+  repoDir: string,
+  opts: { branch: string; base?: string; signal?: AbortSignal },
+): Promise<WorktreeHandle> {
+  const dir = mkdtempSync(join(tmpdir(), 'loops-wt-'));
+  const r = await git(
+    ['worktree', 'add', '-b', opts.branch, dir, opts.base ?? 'HEAD'],
+    { cwd: repoDir, signal: opts.signal },
+  );
+  if (r.exitCode !== 0)
+    throw new Error(
+      `git worktree add failed (exit ${r.exitCode}): ${r.stdout}`.trim(),
+    );
+  return { dir, branch: opts.branch };
+}
+
+/** Remove a worktree (force-discards anything uncommitted left in it). */
+export async function removeWorktree(
+  repoDir: string,
+  dir: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  await git(['worktree', 'remove', '--force', dir], {
+    cwd: repoDir,
+    signal: opts.signal,
+  });
+}
+
+/** Delete a branch ref (used to clean up a merged fork branch). */
+export async function deleteBranch(
+  repoDir: string,
+  branch: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  await git(['branch', '-D', branch], { cwd: repoDir, signal: opts.signal });
+}
+
+export interface MergeResult {
+  ok: boolean;
+  conflict: boolean;
+}
+
+/**
+ * Land a fork branch back into the branch checked out at `repoDir`, preserving
+ * the team shape (`--no-ff`). On conflict the merge is aborted so the target
+ * stays clean and the caller can fail the node honestly — loops does not
+ * auto-resolve (a merge-resolver is a separate, later layer).
+ */
+export async function mergeBranch(
+  repoDir: string,
+  branch: string,
+  opts: { signal?: AbortSignal; message?: string } = {},
+): Promise<MergeResult> {
+  const r = await git(
+    ['merge', '--no-ff', '-m', opts.message ?? `merge ${branch}`, branch],
+    { cwd: repoDir, signal: opts.signal },
+  );
+  if (r.exitCode === 0) return { ok: true, conflict: false };
+  await git(['merge', '--abort'], { cwd: repoDir, signal: opts.signal });
+  return { ok: false, conflict: true };
 }

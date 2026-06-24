@@ -47,9 +47,15 @@ export {
   isDirty,
   commit,
   log,
+  addWorktree,
+  removeWorktree,
+  deleteBranch,
+  mergeBranch,
   type CommitRecord,
   type CommitInput,
   type LogQuery,
+  type WorktreeHandle,
+  type MergeResult,
 } from './core/git.ts';
 
 // The draft — the staged commit body (the write-ahead "way")

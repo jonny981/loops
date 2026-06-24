@@ -16,10 +16,32 @@
 import pLimit from 'p-limit';
 import toposort from 'toposort';
 
-import type { DagConfig, DagNode, Job, JobContext, Outcome } from './types.ts';
+import type {
+  DagConfig,
+  DagNode,
+  Job,
+  JobContext,
+  Outcome,
+  Workspace,
+} from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
+import {
+  isRepo,
+  stageAll,
+  commit,
+  addWorktree,
+  removeWorktree,
+  deleteBranch,
+  mergeBranch,
+} from './git.ts';
+import { readDraft } from './draft.ts';
 import { LoopError } from './errors.ts';
+
+/** Sanitise a name into a git-ref-safe slug. */
+function slug(s: string): string {
+  return s.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/(^-+|-+$)/g, '') || 'node';
+}
 
 function normalize(node: DagNode | Job): DagNode {
   return typeof node === 'function' ? { job: node } : node;
@@ -78,8 +100,85 @@ export function dag(config: DagConfig): Job {
 
     // Each node runs under its own name in the path, so a nested job (e.g. a
     // loop) is uniquely addressable for stats/logs even across same-named siblings.
-    const nodeCtx = (name: string): JobContext =>
-      childContext(parent, { depth, path: [...path, name] });
+    const nodeCtx = (name: string, workspace?: Workspace): JobContext =>
+      childContext(parent, { depth, path: [...path, name], workspace });
+
+    // Land-back merges are serialised: concurrent nodes finishing at once must
+    // not race on the parent branch's index/HEAD.
+    const mergeLimit = pLimit(1);
+    let forkSeq = 0;
+
+    /**
+     * Run a node, in its own worktree when isolated. On pass the node's work is
+     * captured (any uncommitted remainder is committed in the worktree) and
+     * landed back into the parent branch (`--no-ff`, serialised). A merge
+     * conflict fails the node honestly — loops does not auto-resolve. The
+     * worktree is always removed; a cleanly-merged fork branch is deleted.
+     */
+    const runNodeJob = async (
+      name: string,
+      node: DagNode,
+    ): Promise<Outcome> => {
+      const isolated = node.isolate ?? config.isolation === 'worktree';
+      if (!isolated) return node.job(nodeCtx(name));
+
+      const base = parent.workspace;
+      if (!(await isRepo({ cwd: base.dir, signal: parent.signal }))) {
+        parent.log(
+          `node "${name}" requested worktree isolation but ${base.dir} is not a git repo; running in the shared workspace`,
+          'warn',
+        );
+        return node.job(nodeCtx(name));
+      }
+
+      const branch = `loops/${slug(config.name)}-${slug(name)}-${(forkSeq += 1)}`;
+      const wt = await addWorktree(base.dir, {
+        branch,
+        base: 'HEAD',
+        signal: parent.signal,
+      });
+      const wtWs: Workspace = { dir: wt.dir, branch };
+      try {
+        const outcome = await node.job(nodeCtx(name, wtWs));
+        if (outcome.status === 'pass') {
+          // Capture anything the node left uncommitted, so nothing is stranded
+          // in the worktree, then land it back.
+          await stageAll({ cwd: wt.dir, signal: parent.signal });
+          await commit(
+            {
+              subject: `chore(${slug(name)}): worktree changes`,
+              body: readDraft(wtWs),
+            },
+            { cwd: wt.dir, signal: parent.signal },
+          );
+          const merged = await mergeLimit(() =>
+            mergeBranch(base.dir, branch, {
+              signal: parent.signal,
+              message: `merge ${branch} (node ${name})`,
+            }),
+          );
+          if (!merged.ok) {
+            return {
+              status: 'fail',
+              summary: `node "${name}" landed with a merge conflict; needs resolution`,
+              error: new LoopError({
+                code: 'BODY',
+                message: `merge conflict landing node "${name}"`,
+                path: [...path, name],
+              }),
+            };
+          }
+          await deleteBranch(base.dir, branch, { signal: parent.signal }).catch(
+            () => {},
+          );
+        }
+        return outcome;
+      } finally {
+        await removeWorktree(base.dir, wt.dir, {
+          signal: parent.signal,
+        }).catch(() => {});
+      }
+    };
 
     const record = (
       name: string,
@@ -167,7 +266,7 @@ export function dag(config: DagConfig): Job {
                 node: name,
                 phase: 'start',
               });
-              return { outcome: await node.job(nodeCtx(name)), phase: 'done' };
+              return { outcome: await runNodeJob(name, node), phase: 'done' };
             },
           );
           return record(name, result.outcome, result.phase);
