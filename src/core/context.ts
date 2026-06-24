@@ -5,6 +5,7 @@
  */
 
 import type { JobContext, Outcome, Workspace } from './types.ts';
+import type { EnvHandle } from '../env/environment.ts';
 
 export interface ContextOverride {
   depth: number;
@@ -14,6 +15,8 @@ export interface ContextOverride {
   lastReview?: Outcome;
   /** Override the workspace (a worktree fork at a concurrency boundary). */
   workspace?: Workspace;
+  /** Override the environment (a per-team env at a concurrency boundary). */
+  environment?: EnvHandle;
 }
 
 export function childContext(
@@ -29,6 +32,7 @@ export function childContext(
     // A child inherits the parent's workspace by default; a concurrency
     // boundary forks it into an isolated worktree by passing `workspace`.
     workspace: over.workspace ?? parent.workspace,
+    environment: over.environment ?? parent.environment,
     budget: parent.budget,
     log: parent.log,
     depth: over.depth,

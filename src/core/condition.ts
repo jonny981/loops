@@ -124,11 +124,14 @@ export function commandSucceeds(
   return async (ctx) => {
     try {
       const r = await execa(command, args, {
-        cwd: opts.cwd,
+        cwd: opts.cwd ?? ctx.workspace.dir,
         timeout: opts.timeoutMs,
         cancelSignal: ctx.signal,
         reject: false,
         stdin: 'ignore',
+        // Inherit the running environment's vars (BASE_URL, …) so the gate can
+        // test the live preview, not just static files on disk.
+        env: ctx.environment?.env,
       });
       return {
         met: r.exitCode === 0,

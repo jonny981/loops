@@ -16,6 +16,7 @@ import { LoopError } from '../core/errors.ts';
 import { Budget, type BudgetConfig } from '../core/budget.ts';
 import { makeRecorder, makeCheckpointer, loadCheckpoint } from './persist.ts';
 import { currentBranch } from '../core/git.ts';
+import type { Environment, EnvHandle } from '../env/environment.ts';
 import type {
   Job,
   JobContext,
@@ -34,6 +35,13 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** Root working directory the run operates in. Default: process.cwd(). */
   cwd?: string;
+  /**
+   * Bring an environment up for the run (the root workspace) before the job, and
+   * tear it down after — so the gate can test the running thing. The adapter
+   * (sst, Vercel, …) is yours; loops owns only the seam. Per-team environments
+   * at the worktree boundary are a separate, later binding.
+   */
+  environment?: Environment;
   onEvent?: (event: LoopEvent) => void;
   /** Seed the shared, mutable run state. */
   state?: Record<string, unknown>;
@@ -127,6 +135,39 @@ export async function run(
     branch: await currentBranch({ cwd: dir, signal: controller.signal }),
   };
 
+  // Bring the environment up for the run before the job, so the gate can test
+  // the running thing. A failed start fails the run cleanly rather than throwing.
+  let environment: EnvHandle | undefined;
+  if (options.environment) {
+    try {
+      environment = await options.environment.up(workspace, controller.signal);
+    } catch (e) {
+      const error = LoopError.from(e, { code: 'CONFIG' });
+      emit({
+        kind: 'error',
+        ts: Date.now(),
+        path: [],
+        message: `environment "${options.environment.name}" failed to start: ${error.message}`,
+        code: error.code,
+      });
+      return {
+        outcome: {
+          status: 'fail',
+          summary: `environment failed to start: ${error.message}`,
+          error,
+        },
+        stats: stats.snapshot(),
+        budget: budget
+          ? {
+              limit: budget.limit,
+              spent: budget.spent(),
+              remaining: budget.remaining(),
+            }
+          : undefined,
+      };
+    }
+  }
+
   const rootCtx: JobContext = {
     engine: resolveEngine(defaultEngine),
     resolveEngine,
@@ -134,6 +175,7 @@ export async function run(
     emit,
     state: initialState,
     workspace,
+    environment,
     budget,
     iteration: 0,
     depth: 0,
@@ -155,6 +197,9 @@ export async function run(
       code: error.code,
     });
     outcome = { status: 'fail', summary: error.message, error };
+  } finally {
+    // Tear the environment down whatever happened (best-effort).
+    if (environment) await environment.down(controller.signal).catch(() => {});
   }
 
   return {

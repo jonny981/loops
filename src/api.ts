@@ -104,6 +104,14 @@ export { isEngine } from './engines/engine.ts';
 export { EngineRegistry, type EngineFactory } from './engines/registry.ts';
 export { MockEngine, mockVerdict, type MockResponder } from './engines/mock.ts';
 
+// Environments (where the code runs — the third provider axis)
+export {
+  isEnvironment,
+  type Environment,
+  type EnvHandle,
+} from './env/environment.ts';
+export { MockEnvironment, type MockEnvOptions } from './env/mock.ts';
+
 // Runtime
 export {
   run,

@@ -20,6 +20,7 @@ import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
 import type { LoopError } from './errors.ts';
 import type { Budget } from './budget.ts';
 import type { CommitJobConfig } from './job.ts';
+import type { EnvHandle } from '../env/environment.ts';
 
 /** Terminal disposition of a `Job`. */
 export type OutcomeStatus =
@@ -75,6 +76,8 @@ export interface JobContext {
   readonly state: Record<string, unknown>;
   /** Where this job's code lives — the working dir and branch (the substrate). */
   readonly workspace: Workspace;
+  /** The running environment for this workspace, when one is up (gate target). */
+  readonly environment?: EnvHandle;
   /** 1-based iteration index within the enclosing loop; 0 outside a loop. */
   readonly iteration: number;
   /** Nesting depth (root steps are 0). */
