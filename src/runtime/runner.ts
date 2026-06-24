@@ -14,16 +14,31 @@ import { EngineRegistry, type EngineFactory } from '../engines/registry.ts';
 import { Stats, type StatsSnapshot } from '../core/stats.ts';
 import { LoopError } from '../core/errors.ts';
 import { Budget, type BudgetConfig } from '../core/budget.ts';
-import { makeRecorder, makeCheckpointer, loadCheckpoint } from './persist.ts';
+import {
+  makeRecorder,
+  makeCheckpointer,
+  loadCheckpoint,
+  flushCheckpoint,
+} from './persist.ts';
 import { currentBranch } from '../core/git.ts';
 import type { Environment, EnvHandle } from '../env/environment.ts';
 import type {
   Job,
   JobContext,
+  LimitPolicy,
   LoopEvent,
   Outcome,
   Workspace,
 } from '../core/types.ts';
+
+/** Default ceiling on an interruptible limit-wait: 5 minutes. */
+const DEFAULT_MAX_WAIT_MS = 300_000;
+
+/**
+ * Exit code for a `paused` run: EX_TEMPFAIL (sysexits.h). Distinct from `fail`
+ * (1) so a wrapper/cron can tell "paused, resumable" from "failed".
+ */
+export const EXIT_PAUSED = 75;
 
 export interface RunOptions {
   /** Default engine selected when a job/condition names none. Default agent-sdk. */
@@ -57,6 +72,21 @@ export interface RunOptions {
   checkpoint?: string;
   /** Restore shared run state written by a prior `checkpoint` before starting. */
   resumeFrom?: string;
+  /**
+   * How a loop reacts to a rate limit / quota / token budget. Default `auto`:
+   * wait out a known reset within `maxWaitMs`, else checkpoint and exit with a
+   * resume command (the `paused` status, exit code 75). `wait` waits any known
+   * reset with no ceiling; `exit-resume` never waits; `fail` is the old fatal
+   * behaviour.
+   */
+  onLimit?: LimitPolicy;
+  /** Ceiling on a single interruptible limit-wait, in ms. Default 300000. */
+  maxWaitMs?: number;
+  /**
+   * Ready-to-paste command to resume a paused run, surfaced to reporters and the
+   * `limit:pause` event. The CLI reconstructs this from the invocation.
+   */
+  resumeCommand?: string;
 }
 
 export interface RunResult {
@@ -177,6 +207,9 @@ export async function run(
     workspace,
     environment,
     budget,
+    onLimit: options.onLimit ?? 'auto',
+    maxWaitMs: options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
+    resumeCommand: options.resumeCommand,
     iteration: 0,
     depth: 0,
     path: [],
@@ -202,6 +235,11 @@ export async function run(
     if (environment) await environment.down(controller.signal).catch(() => {});
   }
 
+  // A paused run is meant to be resumed; guarantee the latest shared state is on
+  // disk even if no boundary event flushed it (the checkpointer is best-effort).
+  if (outcome.status === 'paused' && options.checkpoint)
+    flushCheckpoint(options.checkpoint, initialState);
+
   return {
     outcome,
     stats: stats.snapshot(),
@@ -226,5 +264,7 @@ export function exitCodeFor(outcome: Outcome): number {
       return 2;
     case 'aborted':
       return 130;
+    case 'paused':
+      return EXIT_PAUSED;
   }
 }

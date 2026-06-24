@@ -10,6 +10,8 @@ export type LoopErrorCode =
   | 'VALIDATION' // a condition/validator could not produce a verdict
   | 'CONFIG' // the loop definition or CLI input was invalid
   | 'BUDGET' // the run's token budget was exhausted
+  | 'RATE_LIMIT' // the provider throttled the call (resets on its own)
+  | 'QUOTA' // an account/usage allowance was hit (may or may not reset)
   | 'BODY' // the step body threw
   | 'UNKNOWN';
 
@@ -29,6 +31,10 @@ export interface LoopErrorInit {
   iteration?: number;
   cause?: unknown;
   retryable?: boolean;
+  /** Suggested wait before retry, in ms (e.g. a `retry-after` header). */
+  retryAfterMs?: number;
+  /** When the limit resets, as epoch ms. The wait policy prefers this. */
+  resetAt?: number;
 }
 
 export class LoopError extends Error {
@@ -37,6 +43,10 @@ export class LoopError extends Error {
   readonly path?: readonly string[];
   readonly iteration?: number;
   readonly retryable: boolean;
+  /** Suggested wait before retry, in ms (e.g. a `retry-after` header). */
+  readonly retryAfterMs?: number;
+  /** When the limit resets, as epoch ms. The wait policy prefers this. */
+  readonly resetAt?: number;
 
   constructor(init: LoopErrorInit) {
     super(
@@ -48,8 +58,9 @@ export class LoopError extends Error {
     this.phase = init.phase;
     this.path = init.path;
     this.iteration = init.iteration;
-    this.retryable =
-      init.retryable ?? (init.code === 'ENGINE' || init.code === 'TIMEOUT');
+    this.retryAfterMs = init.retryAfterMs;
+    this.resetAt = init.resetAt;
+    this.retryable = init.retryable ?? defaultRetryable(init);
   }
 
   /** Wrap an arbitrary thrown value, preserving a `LoopError` as-is. */
@@ -71,6 +82,27 @@ export class LoopError extends Error {
       path: this.path,
       iteration: this.iteration,
       retryable: this.retryable,
+      retryAfterMs: this.retryAfterMs,
+      resetAt: this.resetAt,
     };
+  }
+}
+
+/**
+ * Default `retryable` by code. ENGINE/TIMEOUT and RATE_LIMIT always refresh on
+ * their own, so they retry. QUOTA retries only when a reset is known (a reset
+ * the wait policy can act on); a quota with no parseable reset is fatal until
+ * the allowance refreshes out of band. BUDGET never refreshes within a run.
+ */
+function defaultRetryable(init: LoopErrorInit): boolean {
+  switch (init.code) {
+    case 'ENGINE':
+    case 'TIMEOUT':
+    case 'RATE_LIMIT':
+      return true;
+    case 'QUOTA':
+      return init.resetAt != null || init.retryAfterMs != null;
+    default:
+      return false;
   }
 }

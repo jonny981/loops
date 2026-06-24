@@ -18,7 +18,8 @@ export type IterationStatus =
   | 'pass'
   | 'fail'
   | 'aborted'
-  | 'exhausted';
+  | 'exhausted'
+  | 'paused';
 
 export interface IterationRecord {
   iteration: number;

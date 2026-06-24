@@ -18,7 +18,17 @@ const statusColor = (status: Outcome['status'], text: string): string =>
       ? pc.red(text)
       : status === 'exhausted'
         ? pc.yellow(text)
-        : pc.gray(text);
+        : status === 'paused'
+          ? pc.cyan(text)
+          : pc.gray(text);
+
+/** Format an epoch ms as a local clock time, for "resuming at <time>". */
+const clock = (ts: number): string =>
+  new Date(ts).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 
 /** Emit each event as one NDJSON line on stdout. */
 export function jsonReporter(): Listener {
@@ -179,6 +189,18 @@ export function plainReporter(): Listener {
           `${indent(event.path)}    ${pc.dim(`tool ${event.phase}: ${event.name}`)}`,
         );
         return;
+      case 'limit:wait':
+        endStream();
+        console.log(
+          `${indent(event.path)}  ${pc.yellow(`⏳ ${event.code.toLowerCase()}`)}: waiting ${Math.round(event.waitMs / 1000)}s, resuming at ${clock(event.resumeAt)}`,
+        );
+        return;
+      case 'limit:pause':
+        endStream();
+        console.log(
+          `${indent(event.path)}  ${pc.cyan(`⏸ ${event.code.toLowerCase()}`)}: ${pc.dim(event.reason)}`,
+        );
+        return;
       case 'log':
         endStream();
         console.log(
@@ -198,7 +220,7 @@ export function plainReporter(): Listener {
 }
 
 /** The exit summary, printed once at the end in every mode. */
-export function printSummary(result: RunResult): void {
+export function printSummary(result: RunResult, resumeCommand?: string): void {
   const { outcome, stats } = result;
   const line = pc.dim('─'.repeat(56));
   console.log(`\n${line}`);
@@ -206,6 +228,14 @@ export function printSummary(result: RunResult): void {
     `${pc.bold('Result')}  ${statusColor(outcome.status, outcome.status.toUpperCase())}${outcome.confidence != null ? pc.gray(`  confidence ${outcome.confidence.toFixed(2)}`) : ''}`,
   );
   if (outcome.summary) console.log(`${pc.dim('Summary')} ${outcome.summary}`);
+  // A paused run is resumable; surface the exact command to continue it.
+  if (outcome.status === 'paused') {
+    console.log(
+      resumeCommand
+        ? `${pc.dim('Resume')}  ${pc.cyan(resumeCommand)}`
+        : `${pc.dim('Resume')}  ${pc.yellow('re-run with --checkpoint <path> to make a pause resumable')}`,
+    );
+  }
 
   console.log(line);
   console.log(`${pc.bold('Loops')}`);

@@ -12,6 +12,7 @@ export type {
   JobContext,
   Outcome,
   OutcomeStatus,
+  LimitPolicy,
   Condition,
   ConditionInput,
   ConditionResult,
@@ -116,6 +117,7 @@ export { MockEnvironment, type MockEnvOptions } from './env/mock.ts';
 export {
   run,
   exitCodeFor,
+  EXIT_PAUSED,
   type RunOptions,
   type RunResult,
 } from './runtime/runner.ts';

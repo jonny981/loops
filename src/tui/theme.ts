@@ -9,6 +9,7 @@ export const glyph = {
   fail: '✘',
   aborted: '◼',
   exhausted: '⊘',
+  paused: '⏸',
   running: '◐',
 } as const;
 
@@ -22,6 +23,8 @@ export function statusColor(status: Outcome['status'] | undefined): string {
       return 'yellow';
     case 'aborted':
       return 'gray';
+    case 'paused':
+      return 'cyan';
     default:
       return 'cyan';
   }
@@ -37,6 +40,8 @@ export function statusGlyph(status: Outcome['status'] | undefined): string {
       return glyph.exhausted;
     case 'aborted':
       return glyph.aborted;
+    case 'paused':
+      return glyph.paused;
     default:
       return glyph.running;
   }
