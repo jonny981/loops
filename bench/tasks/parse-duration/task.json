@@ -1,0 +1,4 @@
+{
+  "problem": "duration.mjs parses strings like '1h30m' into milliseconds, but minutes come out wrong: parseDuration('1h30m') should be 5400000 and parseDuration('2m') should be 120000. Hours and seconds are fine. The test in test.mjs reproduces it. Make the test pass.",
+  "test_cmd": "node test.mjs"
+}

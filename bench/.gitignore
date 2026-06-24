@@ -1,0 +1,2 @@
+# Runtime output of `npx tsx bench/ab.ts`.
+results.json

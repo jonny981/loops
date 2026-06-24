@@ -1,0 +1,4 @@
+{
+  "problem": "fizzbuzz.mjs has a bug: fizzbuzz(n) returns 'Fizz' for multiples of 15, but it should return 'FizzBuzz' (a number divisible by both 3 and 5). The test in test.mjs reproduces it. Make the test pass without breaking the other cases.",
+  "test_cmd": "node test.mjs"
+}

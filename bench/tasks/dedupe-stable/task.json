@@ -1,0 +1,4 @@
+{
+  "problem": "dedupe.mjs removes duplicates but reorders the result: dedupe([3,1,2,1,3]) returns [1,2,3] when it should return [3,1,2], preserving each element's first occurrence. The test in test.mjs reproduces it. Make the test pass.",
+  "test_cmd": "node test.mjs"
+}
