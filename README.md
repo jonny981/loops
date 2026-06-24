@@ -4,6 +4,8 @@
 
 `loops` is a tiny, nestable job primitive for driving agents in **convergence loops**. Each iteration runs with a **fresh context**; the loop stops only when a gate _you_ define says it's done — a deterministic check (the tests really pass), a model judge with a confidence threshold, a k-of-n jury, or any mix. Compose loops and DAGs both ways, run them against any model backend behind a one-method `Engine`, and watch it all in a live terminal UI.
 
+A fresh context every turn would cause amnesia — a clean-slate iteration re-walking a dead end an earlier one already ruled out — so the core is **Ledger**: the loop writes its reasoning to git as it works and grounds the next turn on that log. Fresh context kills rot; the ledger kills amnesia.
+
 ![status: alpha](https://img.shields.io/badge/status-alpha-orange)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
 ![node >=20](https://img.shields.io/badge/node-%3E%3D20-3c873a)
@@ -18,11 +20,13 @@ export default loop({
   max: 20,
   body: agentJob({
     prompt: (c) => `Iteration ${c.iteration}: make concrete progress on TASK.md.`,
+    ground: true, // read the ledger (past commits) + the draft before working
   }),
   until: [
     commandSucceeds('npm', ['test']), // ground truth
     agentCheck({ question: 'Does it match TASK.md?', threshold: 0.85 }), // intent
   ],
+  commit: { subject: 'feat: TASK.md' }, // one milestone commit when it converges
 });
 ```
 
@@ -33,9 +37,10 @@ export default loop({
 Agents rarely nail it in one shot. The reliable pattern is a **convergence loop**: do a bit of work, check whether you're _actually_ done, and if not, go again. Two things make or break it, and `loops` is built around both:
 
 - **A fresh context every turn.** Long-running agents rot as their history balloons. `loops` runs each iteration with a clean slate and lets progress accumulate where it belongs — in the **workspace** (files, git commits), not in a chat transcript. The loop carries only thin bookkeeping.
+- **Memory in git, not in the transcript.** Fresh context alone would mean amnesia. **Ledger** (below) writes the _why_ to git as the work happens and reads it back before the next turn, so a clean slate is never a blank one.
 - **A real done-check.** "Ask the model if it's finished" is the classic trap: the model grades its own homework. `loops` makes the gate a first-class value and lets you combine a **deterministic** signal (the tests genuinely pass) with a **separate judge**, so "done" means _converged_, not _claims to be_.
 
-Everything else — DAGs, nesting, engines, budgets, the TUI — hangs off that one idea. The whole thing is small enough to read in an afternoon.
+Everything else — DAGs, nesting, engines, budgets, the TUI — hangs off those ideas. The whole thing is small enough to read in an afternoon.
 
 ## Install
 
@@ -145,6 +150,28 @@ agentCheck({
 
 **Builders:** `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds` (a shell command exits 0), `all`, `any`, `not`, `quorum` (k-of-n), `agentCheck` (small-model judge), `always`, `never`, and `gateJob` (lift a condition into a `Job`, e.g. a reviewer).
 
+## Ledger — memory built on git
+
+Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is the core that closes the gap: the loop writes its reasoning to git as it works and reads it back before the next turn. No parallel database — git _is_ the memory. (`Ledger` is the engine; "the ledger" is the commit log it reads and writes.)
+
+- **The draft — write the way.** As agents work they append the _why_ (intent, alternatives, constraints) to a durable, shared file (`.loops/progress.md`, kept out of git). It survives context decay over a long task and is shared across a fanned-out team, so no single agent has to remember everything at commit time.
+
+  ```ts
+  appendDraft(ctx.workspace, { heading: 'Why', body: 'tried a token refresh; the gate still failed on scope' });
+  ```
+
+- **Milestone commits — crystallise it.** A commit is a _milestone_, not an iteration. When a loop converges, `commitJob` composes one structured body from the accumulated draft (the **way**) welded to the diff (the **what**), then clears the draft. Turn it on with `commit:`; iterations stay durable in the workspace + draft, so the log holds only converged, reasoned-over checkpoints. Finer milestones? Compose finer loops/nodes.
+
+  ```ts
+  loop({ name: 'build', body, until, commit: { subject: 'feat: the feature' } });
+  ```
+
+- **Grounding — read it back.** A fresh turn reads the recent committed ledger (past milestones) and the live draft (this run's why-so-far), prepended to its prompt, so it knows what was already tried. The reach is **branch-local**: adjacent branches are in-flight and may never land, and the merge is where work becomes shared truth.
+
+  ```ts
+  agentJob({ label: 'work', prompt: 'Continue the task.', ground: true });
+  ```
+
 ## Engines — bring any model
 
 The agent launch only ever touches the `Engine` interface, so the loop knows nothing about your model, provider, or framework.
@@ -174,6 +201,34 @@ await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
 
 That's the whole contract: implement `run`, register a name. A managed/durable runner could be a drop-in engine too.
 
+## Environments — test the running thing
+
+A gate is only as honest as what it tests. `commandSucceeds('npm', ['test'])` checks files on disk; to check that the thing _works_ you need it running. The **Environment** axis is where code runs — local services or a per-branch cloud preview — so `until` can gate on the live preview, not just static files. It is the third provider axis:
+
+| Axis          | Where it…       | Lives in              |
+| ------------- | --------------- | --------------------- |
+| `Engine`      | the agent thinks | model / provider      |
+| `Workspace`   | the code lives   | worktree + branch     |
+| `Environment` | the code runs    | local / cloud preview |
+
+Like `Engine`, loops owns only the interface and the lifecycle binding; the adapter (sst, Vercel, Docker…) is yours and lives next to the deploy config it wraps — loops never depends on a deploy tool. The handle's `env` (e.g. `BASE_URL`) is injected into gate commands, so the done-check reaches the live preview.
+
+```ts
+import { run, loop, commandSucceeds, type Environment } from 'loops';
+
+const sstEnv: Environment = {
+  name: 'sst',
+  async up(ws) {
+    const url = await deployStage(slug(ws.branch), ws.dir); // your deploy
+    return { url, env: { BASE_URL: url }, down: () => removeStage(slug(ws.branch)) };
+  },
+};
+
+const job = loop({ name: 'build', body, until: commandSucceeds('playwright', ['test']) });
+await run(job, { environment: sstEnv }); // one env for the run…
+// …or DagConfig.environment to give every worktree-team its own stage, named after its branch.
+```
+
 ## Composition — loops and DAGs
 
 ```ts
@@ -192,6 +247,8 @@ dag({
 ```
 
 `needs` = dependencies; a non-`pass` required dependency blocks its dependents; `optional` nodes never block or fail the DAG; an unmet `when` skips a node (counts green); cycles are detected before any work runs. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
+
+**Worktree isolation — branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node honestly (loops does not auto-resolve — that's a separate layer). Each team gets its own branch, its own draft, and — with `DagConfig.environment` — its own stage, all born and torn down together.
 
 ## Budget, records, resume
 
@@ -222,7 +279,7 @@ Every mode ends with a summary: result, per-loop iterations, review tallies, tok
 
 ## What `loops` is (and isn't)
 
-`loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress lives on disk (files, git), so each iteration can start clean. If the process dies mid-run, you re-run against the same workspace and continue — you lose the bookkeeping, not the work.
+`loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress _and its reasoning_ live in git (the Ledger), so each iteration can start clean and still know what came before. If the process dies mid-run, you re-run against the same workspace — the worktree holds the files, the draft holds the why, the log holds the milestones — and continue. You lose the bookkeeping, not the work.
 
 It deliberately does **not** do durable mid-run replay (re-running a half-finished graph and skipping completed steps) — that's an orchestration concern; for it, embed a `loops` job as a step inside [Temporal](https://temporal.io), [LangGraph](https://github.com/langchain-ai/langgraphjs), or [Mastra](https://mastra.ai). What it _does_ offer (run records, a thin state checkpoint, a token budget) is the lightweight version that fits the workspace-is-state model.
 
@@ -234,10 +291,14 @@ It deliberately does **not** do durable mid-run replay (re-running a half-finish
 
 ## Roadmap
 
+- [x] **Ledger** — git-memory core: the draft, grounding, milestone commits
+- [x] Worktree isolation (branches-as-teams) with `--no-ff` land-back
+- [x] Environment axis — provider interface + offline mock
 - [ ] Publish to npm (with a built `dist` + `exports`)
-- [ ] Richer per-iteration ledger + scrollable transcript in the TUI
+- [ ] Optional `wip:` autosave tier (per-iteration recovery, squashed on convergence)
 - [ ] Calibration helpers for agent judges
 - [ ] More engine adapters (OpenAI, local models)
+- [ ] Scrollable per-iteration transcript in the TUI
 
 ## Develop
 
