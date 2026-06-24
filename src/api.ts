@@ -53,12 +53,22 @@ export {
   removeWorktree,
   deleteBranch,
   mergeBranch,
+  mergeNoCommit,
+  conflictedFiles,
+  mergeAbort,
   type CommitRecord,
   type CommitInput,
   type LogQuery,
   type WorktreeHandle,
   type MergeResult,
 } from './core/git.ts';
+
+// Merge as synthesis (an agent resolves the conflict + writes a unified "way")
+export {
+  mergeSynthesis,
+  type MergeSynthesisConfig,
+  type MergeSynthesisResult,
+} from './core/merge.ts';
 
 // The draft — the staged commit body (the write-ahead "way")
 export {

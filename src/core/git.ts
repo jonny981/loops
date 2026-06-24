@@ -136,6 +136,8 @@ export interface LogQuery extends GitOpts {
   since?: string;
   /** Cap the number of commits returned (most recent first). */
   max?: number;
+  /** The ref to read (default HEAD) — e.g. a fork branch's own line of work. */
+  ref?: string;
 }
 
 /**
@@ -145,9 +147,10 @@ export interface LogQuery extends GitOpts {
  */
 export async function log(query: LogQuery): Promise<CommitRecord[]> {
   const { cwd, signal, since, max } = query;
+  const ref = query.ref ?? 'HEAD';
   const args = ['log', `--format=${LOG_FORMAT}`];
   if (max != null) args.push(`-n${max}`);
-  args.push(since ? `${since}..HEAD` : 'HEAD');
+  args.push(since ? `${since}..${ref}` : ref);
   const r = await git(args, { cwd, signal });
   if (r.exitCode !== 0) return [];
   return parseLog(r.stdout);
@@ -244,4 +247,45 @@ export async function mergeBranch(
   if (r.exitCode === 0) return { ok: true, conflict: false };
   await git(['merge', '--abort'], { cwd: repoDir, signal: opts.signal });
   return { ok: false, conflict: true };
+}
+
+/**
+ * Begin a `--no-ff --no-commit` merge WITHOUT aborting on conflict, so a resolver
+ * can synthesise the result. `clean` means it merged cleanly (staged, ready to
+ * commit); otherwise `conflicted` lists the unresolved paths (with markers).
+ */
+export async function mergeNoCommit(
+  repoDir: string,
+  branch: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{ clean: boolean; conflicted: string[] }> {
+  const r = await git(['merge', '--no-ff', '--no-commit', branch], {
+    cwd: repoDir,
+    signal: opts.signal,
+  });
+  if (r.exitCode === 0) return { clean: true, conflicted: [] };
+  return { clean: false, conflicted: await conflictedFiles(repoDir, opts) };
+}
+
+/** Paths with unresolved merge conflicts. */
+export async function conflictedFiles(
+  repoDir: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<string[]> {
+  const r = await git(['diff', '--name-only', '--diff-filter=U'], {
+    cwd: repoDir,
+    signal: opts.signal,
+  });
+  return r.stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Abort an in-progress merge. */
+export async function mergeAbort(
+  repoDir: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
+  await git(['merge', '--abort'], { cwd: repoDir, signal: opts.signal });
 }

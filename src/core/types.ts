@@ -240,6 +240,12 @@ export interface DagConfig {
    * non-isolated node shares the workspace and gets no per-team env.
    */
   environment?: Environment;
+  /**
+   * What to do when an isolated node's land-back conflicts. `'fail'` (default)
+   * fails the node honestly. `'synthesize'` runs `mergeSynthesis` — an agent
+   * resolves the conflict and writes a synthesised merge body.
+   */
+  onConflict?: 'fail' | 'synthesize';
 }
 
 /** Per-node disposition within a DAG run. */

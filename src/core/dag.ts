@@ -36,6 +36,7 @@ import {
   mergeBranch,
 } from './git.ts';
 import { readDraft } from './draft.ts';
+import { mergeSynthesis } from './merge.ts';
 import type { EnvHandle } from '../env/environment.ts';
 import { LoopError } from './errors.ts';
 
@@ -174,15 +175,37 @@ export function dag(config: DagConfig): Job {
             }),
           );
           if (!merged.ok) {
-            return {
-              status: 'fail',
-              summary: `node "${name}" landed with a merge conflict; needs resolution`,
-              error: new LoopError({
+            // Conflict. Either fail honestly, or synthesise the merge (an agent
+            // resolves it and writes a synthesised body).
+            if (config.onConflict !== 'synthesize') {
+              return {
+                status: 'fail',
+                summary: `node "${name}" landed with a merge conflict; needs resolution`,
+                error: new LoopError({
+                  code: 'BODY',
+                  message: `merge conflict landing node "${name}"`,
+                  path: [...path, name],
+                }),
+              };
+            }
+            try {
+              await mergeLimit(() =>
+                mergeSynthesis(parent, {
+                  branch,
+                  message: `merge: ${branch} (node ${name}, synthesis)`,
+                }),
+              );
+            } catch (e) {
+              const error = LoopError.from(e, {
                 code: 'BODY',
-                message: `merge conflict landing node "${name}"`,
                 path: [...path, name],
-              }),
-            };
+              });
+              return {
+                status: 'fail',
+                summary: `node "${name}" merge synthesis failed: ${error.message}`,
+                error,
+              };
+            }
           }
           await deleteBranch(base.dir, branch, { signal: parent.signal }).catch(
             () => {},
