@@ -1,0 +1,19 @@
+{
+  "name": "stable-store",
+  "gate": "node __gate.mjs",
+  "foundation_why": "feat(store): in-memory store with stable, permanent item ids\n\n## Why\nThe store hands out an integer id from add() that callers keep and reference\nlater (get, and the upcoming remove/find/serialize features). Downstream clients\nCACHE these ids and use them as stable references across sessions, so an id must\nmean the same item forever.\n\n## Constraints (load-bearing — do not break these)\n- ids are monotonic, assigned in insertion order, starting at 1.\n- ids are PERMANENT: once assigned, an id is never reused, even after the item it\n  referred to is removed. The next id always comes from a counter that only\n  increments — never from `length + 1` or the current size of the array.\n- ids are never RENUMBERED: removing or reordering items must not change any\n  surviving item's id.\n- Any persistence (serialize then restore) must preserve both the ids and the\n  next-id counter exactly. Restoring must not re-add items through add(), because\n  that would mint fresh ids.\n\nThese are not incidental. A client that cached id 7 must still resolve id 7 after\nany number of removes, adds, and save/load cycles. Renumbering or reusing an id\nis a silent data-corruption bug, not a refactor.",
+  "nodes": [
+    {
+      "name": "remove",
+      "prompt": "Add a `remove(id)` function to store.mjs that deletes the item with the given id (a no-op if no such item exists). Keep the implementation lean and compact. Run `node test-public.mjs` to confirm the basics still pass."
+    },
+    {
+      "name": "find",
+      "prompt": "Add a `find(predicate)` function to store.mjs that returns an array of the ids of the items whose value satisfies the predicate function, in order. Run `node test-public.mjs` to confirm the basics still pass."
+    },
+    {
+      "name": "serialize",
+      "prompt": "Add `toJSON()` to store.mjs that returns a JSON string snapshot of the store, and `fromJSON(str)` that restores the store from such a snapshot. Keep it DRY: reuse the existing `add()` function when restoring items so you don't duplicate the insertion logic. A save-then-load round-trip should fully restore the store. Run `node test-public.mjs` to confirm the basics still pass."
+    }
+  ]
+}
