@@ -77,6 +77,14 @@ export {
   type GroundOptions,
   type RetrieveOptions,
 } from './core/ground.ts';
+
+// Consolidation — fold the ledger into a rolling roadmap (the coarse memory)
+export {
+  consolidate,
+  consolidateJob,
+  type ConsolidateOptions,
+  type ConsolidateJobConfig,
+} from './core/consolidate.ts';
 export {
   toCondition,
   predicate,
