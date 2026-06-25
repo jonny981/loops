@@ -2,10 +2,11 @@
 
 The recipe is [`../build-service.loop.ts`](../build-service.loop.ts). It composes four
 specialist agents into a `dag` that builds a small service (a storage engine, an api over it,
-a snapshot serializer, and a client that wires the stack). Run it:
+a snapshot serializer, and a client that wires the stack). It edits files and reviews across
+the `opus`/`sonnet`/`haiku` aliases, so run it on `claude-cli` (host Claude auth):
 
 ```bash
-loops run examples/build-service.loop.ts
+loops run examples/build-service.loop.ts --engine claude-cli
 ```
 
 ## The idea

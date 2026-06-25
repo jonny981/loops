@@ -15,7 +15,7 @@
  * only past an independent, multi-model, dimensional review it never applies to itself. That
  * enforced honest-convergence gate is the point; memory is one free pillar underneath it.
  *
- *   loops run examples/build-service.loop.ts
+ *   loops run examples/build-service.loop.ts --engine claude-cli
  */
 
 import { dirname, join } from 'node:path';
