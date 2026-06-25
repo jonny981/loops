@@ -112,4 +112,21 @@ describe('AgentDef', () => {
     expect(seenSystem.indexOf('adversarial reviewer')).toBeLessThan(seenSystem.indexOf('JSON')); // validator contract comes last
     expect(seenModel).toBe('haiku'); // model falls back to the agent's
   });
+
+  it('agentJob carries `leaf` from the agent def into the engine request', async () => {
+    const repo = await tmpRepo();
+    const leafAgent = defineAgent({ name: 'leafy', system: 'no fan-out', leaf: true });
+    const cap = capturing();
+    const opts: RunOptions = { engine: 'mock', engines: { mock: () => cap.engine }, cwd: repo };
+    await run(agentJob({ agent: leafAgent, prompt: 'go' }), opts);
+    expect(cap.req().leaf).toBe(true);
+    // inline config can still set it directly
+    const cap2 = capturing();
+    await run(agentJob({ prompt: 'go', leaf: true }), {
+      engine: 'mock',
+      engines: { mock: () => cap2.engine },
+      cwd: repo,
+    });
+    expect(cap2.req().leaf).toBe(true);
+  });
 });

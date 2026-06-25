@@ -6,12 +6,13 @@
 
 import pTimeout from 'p-timeout';
 
-import type {
-  AgentRequest,
-  AgentResult,
-  Engine,
-  EngineEventSink,
-  EngineOptions,
+import {
+  SUBAGENT_TOOLS,
+  type AgentRequest,
+  type AgentResult,
+  type Engine,
+  type EngineEventSink,
+  type EngineOptions,
 } from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
@@ -96,6 +97,8 @@ export class AgentSdkEngine implements Engine {
       systemPrompt: req.system,
       cwd: req.cwd,
       allowedTools: req.allowedTools,
+      // A leaf agent may not spawn sub-agents — disallow the spawn tool.
+      disallowedTools: req.leaf ? SUBAGENT_TOOLS : undefined,
       permissionMode: this.opts.permissionMode,
       includePartialMessages: true,
       abortController: abort,

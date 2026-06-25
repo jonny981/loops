@@ -31,6 +31,12 @@ export interface AgentDef {
   model?: string;
   /** Allowed tool names — the permission boundary. */
   tools?: string[];
+  /**
+   * Mark this agent a leaf: it may not spawn sub-agents / fan out (the engine disallows
+   * the sub-agent tool). Use it to control where a branch of the graph bottoms out — to
+   * stop a thorough agent from quietly expanding into a slow, expensive swarm.
+   */
+  leaf?: boolean;
   /** Structured job descriptions (not prose) — for discovery / docs. */
   capabilities?: string[];
   /** Methodologies the agent applies; their instructions are folded into the system. */

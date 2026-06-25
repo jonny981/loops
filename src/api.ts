@@ -148,7 +148,7 @@ export type {
   EngineStreamEvent,
   Usage,
 } from './engines/engine.ts';
-export { isEngine } from './engines/engine.ts';
+export { isEngine, SUBAGENT_TOOLS } from './engines/engine.ts';
 export { EngineRegistry, type EngineFactory } from './engines/registry.ts';
 export { MockEngine, mockVerdict, type MockResponder } from './engines/mock.ts';
 

@@ -21,6 +21,9 @@ export interface Usage {
   outputTokens: number;
 }
 
+/** Tools an agent uses to spawn sub-agents / fan out. A `leaf` request disallows these. */
+export const SUBAGENT_TOOLS = ['Task'];
+
 export interface AgentRequest {
   prompt: string;
   system?: string;
@@ -30,6 +33,14 @@ export interface AgentRequest {
   allowedTools?: string[];
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * Forbid this agent from spawning sub-agents (fanning out). A leaf agent is told to
+   * disallow the sub-agent tool (`SUBAGENT_TOOLS`), so a branch of the graph bottoms out
+   * here instead of expanding into an uncontrolled swarm — control over where work stops.
+   * Authoritative over `allowedTools` (a disallow wins). Engines with no sub-agent tool
+   * (anthropic-api, mock) ignore it.
+   */
+  leaf?: boolean;
 }
 
 export interface AgentResult {

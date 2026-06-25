@@ -5,12 +5,13 @@
  */
 
 import { execa } from 'execa';
-import type {
-  AgentRequest,
-  AgentResult,
-  Engine,
-  EngineEventSink,
-  EngineOptions,
+import {
+  SUBAGENT_TOOLS,
+  type AgentRequest,
+  type AgentResult,
+  type Engine,
+  type EngineEventSink,
+  type EngineOptions,
 } from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
@@ -86,6 +87,8 @@ export function buildClaudeArgs(
   if (req.system) args.push('--append-system-prompt', req.system);
   if (req.allowedTools?.length)
     args.push('--allowedTools', req.allowedTools.join(','));
+  // A leaf agent may not spawn sub-agents — disallow the spawn tool (wins over any allowlist).
+  if (req.leaf) args.push('--disallowedTools', SUBAGENT_TOOLS.join(','));
   if (opts.permissionMode) args.push('--permission-mode', opts.permissionMode);
   if (opts.cliArgs?.length) args.push(...opts.cliArgs);
   // `--` ends option parsing so a prompt starting with `-` can't be

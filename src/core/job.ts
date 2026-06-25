@@ -42,6 +42,11 @@ export interface AgentJobConfig {
   model?: string;
   maxTokens?: number;
   allowedTools?: string[];
+  /**
+   * Mark this turn a leaf: forbid spawning sub-agents (the engine disallows the sub-agent
+   * tool), so a branch bottoms out here. Falls back to the agent def's `leaf`.
+   */
+  leaf?: boolean;
   /** Working dir for the turn. Default: the workspace dir (the worktree). */
   cwd?: string;
   timeoutMs?: number;
@@ -192,6 +197,7 @@ export function agentJob(config: AgentJobConfig): Job {
           model: config.model ?? config.agent?.model,
           maxTokens: config.maxTokens,
           allowedTools: config.allowedTools ?? config.agent?.tools,
+          leaf: config.leaf ?? config.agent?.leaf,
           cwd: config.cwd ?? ctx.workspace.dir,
           timeoutMs: config.timeoutMs,
         },
