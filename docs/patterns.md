@@ -117,4 +117,5 @@ export const autoTriage = loop({
 
 The Ledger threads through the whole nesting via the land-back merge: the Tend loop
 grounds on **milestones** (each = a sub-loop that converged and merged back), the
-sub-loops ground on their own **drafts**. See [concepts.md](concepts.md#nesting--the-archetypes-compose).
+sub-loops ground on their own **scratch files** (working memory + handoff). See
+[concepts.md](concepts.md#nesting--the-archetypes-compose).

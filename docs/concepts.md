@@ -20,11 +20,15 @@ used as memory: each unit of work commits the *way* (a structured body: intent,
 alternatives ruled out, constraints) welded to the *what* (the diff), and the next
 fresh context reads it back before working. Two reads, two writes:
 
-- **draft** (`.loops/prompt.md`) — the prompt being written for whoever continues:
-  agents append the why as they work; grounding injects it into the next context.
-- **grounding** — before a turn, the branch-local ledger (recent committed
-  milestones) and the live draft are prepended to the prompt.
-- **commit** — at a milestone the draft crystallises into a commit body.
+- **working memory** (`.loops/ledger.md`) — the running log of what the current
+  agent(s) are trying. The harness auto-captures each turn (the reasoning + a summary
+  of actions); peers fanned out on one task share it.
+- **handoff** (`.loops/prompt.md`) — the distilled why for the *next* agent: intent,
+  alternatives ruled out, constraints, what is left. Curated, not a raw log.
+- **grounding** — before a turn, the branch-local commit log (recent committed
+  milestones) and both live scratch files are prepended to the prompt.
+- **commit** — at a milestone the body crystallises as the handoff plus a compacted
+  working log, welded to the diff; both scratch files reset.
 
 ## The two faces of the Ledger
 
@@ -56,7 +60,7 @@ in *what you can even measure* — a harness built for one is blind to the other
 | terminates when | the gate passes | the worklist is empty | a dynamic condition (maybe never) |
 | the Ledger's job | don't re-walk dead ends | transfer the house style | remember what's done + decided, forever |
 | right metric | resolve-rate, iters-to-converge | cross-task consistency/conformance | no-redo, correct termination, coherence |
-| memory stressed | grounding | draft + conventions | retrieval + consolidation |
+| memory stressed | grounding | handoff + conventions | retrieval + consolidation |
 | `loops` shape | `loop({ until: gate, max })` | `loop`/`dag` over a worklist | `loop({ until: dynamic, max: ∞ })` |
 
 **Converge** is the classic agent loop: keep going until an honest gate passes.
@@ -95,17 +99,20 @@ the memory granularity *matches* the nesting level:
 
 | tier | granularity | nesting level | where it lives |
 |---|---|---|---|
-| **draft** | within an iteration | a sub-loop's attempts | `.loops/prompt.md`, transient → a commit body |
+| **scratch** (working memory + handoff) | within an iteration | a sub-loop's attempts | `.loops/ledger.md` + `.loops/prompt.md`, transient → a commit body |
 | **milestone commit** | a converged unit | a sub-loop, merged back | a commit body |
 | **consolidated roadmap** | the whole process | the Tend loop's state | a commit body (`consolidateJob`) |
 
 All three ultimately live in **git commit bodies** — a prompt (the why) welded to a
-diff, read back by grounding. The draft is only a *write-ahead buffer* that
-crystallises into the next commit body and resets; milestones are commit bodies;
-the roadmap is a commit body (an empty-tree commit). Nothing durable is a side
-file. A Tend loop grounds on **milestones** (each = a sub-loop that converged and
-landed back — it sees outcomes, not raw sub-iterations); the sub-loop grounds on
-its own **draft**. The merge is where a sub-loop's work becomes visible.
+diff. The scratch files are only *write-ahead buffers* (working memory + handoff)
+that crystallise into the next commit body and reset; milestones are commit bodies;
+the roadmap is a commit body (an empty-tree commit). Nothing durable is a side file.
+A commit body does not expire at the next turn: welded to its diff, it is a permanent
+record any later agent can look back to, as far back as it wants — recent-N surfaces
+the nearby ones, retrieval selects the relevant ones however old. A Tend loop grounds
+on **milestones** (each = a sub-loop that converged and landed back — it sees
+outcomes, not raw sub-iterations); the sub-loop grounds on its own **scratch files**.
+The merge is where a sub-loop's work becomes visible.
 
 ## Scaling the read: recent-N → retrieval → consolidation
 

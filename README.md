@@ -4,7 +4,7 @@
 
 `loops` is a tiny, nestable job primitive for driving agents in **convergence loops**. Each iteration runs with a **fresh context**; the loop stops only when a gate _you_ define says it's done — a deterministic check (the tests really pass), a model judge with a confidence threshold, a k-of-n jury, or any mix. Compose loops and DAGs both ways, run them against any model backend behind a one-method `Engine`, and watch it all in a live terminal UI.
 
-A fresh context every turn would cause amnesia — a clean-slate iteration re-walking a dead end an earlier one already ruled out — so the core is **Ledger**: the loop writes its reasoning to git as it works and grounds the next turn on that log. Fresh context kills rot; the ledger kills amnesia.
+A fresh context every turn would cause amnesia — a clean-slate iteration re-walking a dead end an earlier one already ruled out — so the core is **Ledger**: the loop writes its reasoning to git as it works and grounds the next turn on that log. Fresh context kills rot; the Ledger kills amnesia.
 
 ![status: alpha](https://img.shields.io/badge/status-alpha-orange)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
@@ -20,7 +20,7 @@ export default loop({
   max: 20,
   body: agentJob({
     prompt: (c) => `Iteration ${c.iteration}: make concrete progress on TASK.md.`,
-    ground: true, // read the ledger (past commits) + the draft before working
+    ground: true, // read the commit log + this run's scratch files before working
   }),
   until: [
     commandSucceeds('npm', ['test']), // ground truth
@@ -152,21 +152,21 @@ agentCheck({
 
 ## Ledger — memory built on git
 
-Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is the core that closes the gap: the loop writes its reasoning to git as it works and reads it back before the next turn. No parallel database — git _is_ the memory. (`Ledger` is the engine; "the ledger" is the commit log it reads and writes.)
+Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is the core that closes the gap: the loop writes its reasoning to git as it works and reads it back before the next turn. No parallel database — git _is_ the memory. (`Ledger` is the engine; the **commit log** is the durable memory it reads and writes; `.loops/ledger.md` and `.loops/prompt.md` are the live scratch files for work in flight.)
 
-- **The draft — write the prompt for the next agent.** As agents work they append the _why_ (intent, alternatives, constraints) to a durable, shared file (`.loops/prompt.md`, kept out of git). It is not a backward progress log: grounding injects it into the next context's prompt, and it becomes the commit body at the next milestone. It survives context decay over a long task and is shared across a fanned-out team, so no single agent has to remember everything at commit time.
+- **Scratch files — working memory and a handoff.** Two gitignored files carry a unit of work forward. `.loops/ledger.md` is **working memory** for the agent(s) doing the work now: the harness auto-captures each grounded turn (the reasoning + a summary of actions), so the why is recorded even when no single agent holds it all at the end, and fanned-out peers share it. `.loops/prompt.md` is the **handoff** the agent distils for whoever continues: intent, alternatives ruled out, constraints, what is left. Grounding injects both into the next context; the commit body is the handoff plus a compacted working log.
 
   ```ts
-  appendDraft(ctx.workspace, { heading: 'Why', body: 'tried a token refresh; the gate still failed on scope' });
+  appendPrompt(ctx.workspace, { heading: 'Why', body: 'tried a token refresh; the gate still failed on scope' });
   ```
 
-- **Milestone commits — crystallise it.** A commit is a _milestone_, not an iteration. When a loop converges, `commitJob` composes one structured body from the accumulated draft (the **way**) welded to the diff (the **what**), then clears the draft. Turn it on with `commit:`; iterations stay durable in the workspace + draft, so the log holds only converged, reasoned-over checkpoints. Finer milestones? Compose finer loops/nodes.
+- **Milestone commits — crystallise it.** A commit is a _milestone_, not an iteration. When a loop converges, `commitJob` composes one structured body — the handoff plus a compacted working log (the **way**) — welded to the diff (the **what**), then clears both scratch files. Turn it on with `commit:`; iterations stay durable in the workspace + scratch files, so the log holds only converged, reasoned-over checkpoints. Welded to its diff, a commit body is a permanent record any later agent can look back to, as far back as it wants. Finer milestones? Compose finer loops/nodes.
 
   ```ts
   loop({ name: 'build', body, until, commit: { subject: 'feat: the feature' } });
   ```
 
-- **Grounding — read it back.** A fresh turn reads the recent committed ledger (past milestones) and the live draft (this run's why-so-far), prepended to its prompt, so it knows what was already tried. The reach is **branch-local**: adjacent branches are in-flight and may never land, and the merge is where work becomes shared truth.
+- **Grounding — read it back.** A fresh turn reads the recent committed commit log (past milestones) and this run's live scratch files (working memory + handoff), prepended to its prompt, so it knows what was already tried. The reach is **branch-local**: adjacent branches are in-flight and may never land, and the merge is where work becomes shared truth.
 
   ```ts
   agentJob({ label: 'work', prompt: 'Continue the task.', ground: true });
@@ -266,7 +266,7 @@ dag({
 
 `needs` = dependencies; a non-`pass` required dependency blocks its dependents; `optional` nodes never block or fail the DAG; an unmet `when` skips a node (counts green); cycles are detected before any work runs. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
 
-**Worktree isolation — branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node honestly (loops does not auto-resolve — that's a separate layer). Each team gets its own branch, its own draft, and — with `DagConfig.environment` — its own stage, all born and torn down together.
+**Worktree isolation — branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node honestly (loops does not auto-resolve — that's a separate layer). Each team gets its own branch, its own scratch files, and — with `DagConfig.environment` — its own stage, all born and torn down together.
 
 For **dynamic** dispatch (a loop that discovers each unit at runtime and routes it to its own isolated sub-loop), `isolated(job)` is the same boundary as a composable wrapper rather than a predeclared node — fork, run, land back on pass:
 
@@ -288,7 +288,7 @@ A loop is not one shape. Three recur, and they differ in what memory does and in
 | memory's job | don't re-walk dead ends | transfer the house style | remember what's done + decided, forever |
 | `loops` shape | `loop({ until: gate, max })` | `loop`/`dag` over a worklist | `loop({ until: dynamic, max: ∞ })` |
 
-They **nest**: GitHub triage is Tend ∘ Converge (pick the next ticket, classify it, dispatch a Converge loop to a test gate); OEM research is Sweep ∘ Converge (each item is itself a multi-step build that must converge). Because a `loop` and a `dag` are both `Job`s, dispatch is just a body that selects a sub-`Job` — wrap it in `isolated()` when each needs its own worktree. The Ledger's three tiers (draft → milestone commits → consolidated roadmap) map onto the three nesting levels.
+They **nest**: GitHub triage is Tend ∘ Converge (pick the next ticket, classify it, dispatch a Converge loop to a test gate); OEM research is Sweep ∘ Converge (each item is itself a multi-step build that must converge). Because a `loop` and a `dag` are both `Job`s, dispatch is just a body that selects a sub-`Job` — wrap it in `isolated()` when each needs its own worktree. The Ledger's three tiers (scratch files → milestone commits → consolidated roadmap) map onto the three nesting levels.
 
 There is no `converge()` / `sweep()` / `tend()` in the API — they are patterns, not primitives. Copy-paste recipes for each (and the nested dispatch) are in [docs/patterns.md](docs/patterns.md); the full treatment is in [docs/concepts.md](docs/concepts.md).
 
@@ -334,7 +334,7 @@ Every mode ends with a summary: result, per-loop iterations, review tallies, tok
 
 ## What `loops` is (and isn't)
 
-`loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress _and its reasoning_ live in git (the Ledger), so each iteration can start clean and still know what came before. If the process dies mid-run, you re-run against the same workspace — the worktree holds the files, the draft holds the why, the log holds the milestones — and continue. You lose the bookkeeping, not the work.
+`loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress _and its reasoning_ live in git (the Ledger), so each iteration can start clean and still know what came before. If the process dies mid-run, you re-run against the same workspace — the worktree holds the files, the scratch files hold the why, the log holds the milestones — and continue. You lose the bookkeeping, not the work.
 
 It deliberately does **not** do durable mid-run replay (re-running a half-finished graph and skipping completed steps) — that's an orchestration concern; for it, embed a `loops` job as a step inside [Temporal](https://temporal.io), [LangGraph](https://github.com/langchain-ai/langgraphjs), or [Mastra](https://mastra.ai). What it _does_ offer (run records, a thin state checkpoint, a token budget) is the lightweight version that fits the workspace-is-state model.
 
@@ -346,7 +346,7 @@ It deliberately does **not** do durable mid-run replay (re-running a half-finish
 
 ## Roadmap
 
-- [x] **Ledger** — git-memory core: the draft, grounding, milestone commits
+- [x] **Ledger** — git-memory core: the scratch files (working memory + handoff), grounding, milestone commits
 - [x] Worktree isolation (branches-as-teams) with `--no-ff` land-back
 - [x] Environment axis — provider interface + offline mock
 - [ ] Publish to npm (with a built `dist` + `exports`)
