@@ -37,7 +37,7 @@ import {
   isRepo,
 } from './git.ts';
 import { mergeSynthesis } from './merge.ts';
-import { readDraft } from './draft.ts';
+import { composeCommitBody } from './consolidate.ts';
 
 const slug = (s: string) =>
   s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'job';
@@ -84,7 +84,10 @@ export function isolated(job: Job, opts: IsolatedOptions = {}): Job {
         // Capture anything the job left uncommitted, then land it back.
         await stageAll({ cwd: wt.dir, signal: parent.signal });
         await commit(
-          { subject: `chore(${slug(label)}): worktree changes`, body: readDraft(wtWs) },
+          {
+            subject: `chore(${slug(label)}): worktree changes`,
+            body: await composeCommitBody(ctx, wtWs),
+          },
           { cwd: wt.dir, signal: parent.signal },
         );
         const merged = await mergeLock(() =>

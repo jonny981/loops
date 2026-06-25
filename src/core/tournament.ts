@@ -22,7 +22,7 @@ import {
   stageAll,
   commit,
 } from './git.ts';
-import { readDraft } from './draft.ts';
+import { composeCommitBody } from './consolidate.ts';
 import { LoopError } from './errors.ts';
 
 function slug(s: string): string {
@@ -103,7 +103,7 @@ export function tournament(config: TournamentConfig): Job {
             await commit(
               {
                 subject: `${config.name}: candidate ${i}`,
-                body: readDraft(ws),
+                body: await composeCommitBody(ctx, ws),
               },
               { cwd: wt.dir, signal: parent.signal },
             );

@@ -73,17 +73,23 @@ export {
 // Worktree isolation as a composable Job wrapper (for dynamic dispatch)
 export { isolated, type IsolatedOptions } from './core/isolated.ts';
 
-// The draft — the staged commit body (the write-ahead "way")
+// The scratch files — two write-ahead buffers: the handoff (`prompt.md`, the
+// staged commit body) and working memory (`ledger.md`, the auto-captured turn log)
 export {
-  appendDraft,
-  readDraft,
-  resetDraft,
-  draftPath,
+  appendPrompt,
+  readPrompt,
+  resetPrompt,
+  promptPath,
+  appendLedger,
+  readLedger,
+  resetLedger,
+  ledgerPath,
   ensureIgnored,
-  type DraftNote,
+  type PromptNote,
+  type LedgerEntry,
 } from './core/draft.ts';
 
-// The read side — grounding the next fresh context in the branch-local ledger
+// The read side — grounding the next fresh context in the branch-local commit log
 export {
   groundingText,
   retrieveLedger,
@@ -91,12 +97,16 @@ export {
   type RetrieveOptions,
 } from './core/ground.ts';
 
-// Consolidation — fold the ledger into a rolling roadmap (the coarse memory)
+// Consolidation — fold the commit log into a rolling roadmap (the coarse memory),
+// and the one-scale-down fold of a run's working log into the commit body
 export {
   consolidate,
   consolidateJob,
+  compactLedger,
+  composeCommitBody,
   type ConsolidateOptions,
   type ConsolidateJobConfig,
+  type CompactOptions,
 } from './core/consolidate.ts';
 export {
   toCondition,

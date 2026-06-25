@@ -35,7 +35,7 @@ import {
   deleteBranch,
   mergeBranch,
 } from './git.ts';
-import { readDraft } from './draft.ts';
+import { composeCommitBody } from './consolidate.ts';
 import { mergeSynthesis } from './merge.ts';
 import type { EnvHandle } from '../env/environment.ts';
 import { LoopError } from './errors.ts';
@@ -164,7 +164,7 @@ export function dag(config: DagConfig): Job {
           await commit(
             {
               subject: `chore(${slug(name)}): worktree changes`,
-              body: readDraft(wtWs),
+              body: await composeCommitBody(parent, wtWs),
             },
             { cwd: wt.dir, signal: parent.signal },
           );

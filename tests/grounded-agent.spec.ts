@@ -3,12 +3,14 @@ import { describe, it, expect, afterAll } from 'vitest';
 import {
   run,
   agentJob,
-  appendDraft,
+  appendPrompt,
+  appendLedger,
+  readLedger,
   stageAll,
   commit,
   MockEngine,
 } from '../src/api.ts';
-import type { RunOptions, Workspace, AgentRequest } from '../src/api.ts';
+import type { RunOptions, Workspace, AgentRequest, Engine } from '../src/api.ts';
 import { tmpRepo, write, cleanupRepos } from './git-helpers.ts';
 
 afterAll(cleanupRepos);
@@ -26,14 +28,15 @@ function capturing(): { engine: MockEngine; last: () => string } {
 }
 
 describe('grounded agentJob (read automation)', () => {
-  it('prepends the committed ledger and the live draft to the prompt', async () => {
+  it('prepends the commit log, the live working memory, and the handoff', async () => {
     const repo = await tmpRepo();
     // a prior milestone in the log
     write(repo, 'a.ts', 'x\n');
     await stageAll({ cwd: repo });
     await commit({ subject: 'feat: prior milestone', body: '## Why\n\nshipped A' }, { cwd: repo });
-    // and this run's accumulated why in the draft
-    appendDraft(ws(repo), { heading: 'Why', body: 'mid-run: trying approach B' });
+    // this run's working memory (fine-grained) and handoff (distilled)
+    appendLedger(ws(repo), { label: 'earlier', iteration: 1, text: 'mid-run: trying approach B' });
+    appendPrompt(ws(repo), { heading: 'Why', body: 'handoff: B beat A on idempotency' });
 
     const cap = capturing();
     const opts: RunOptions = { engine: 'mock', engines: { mock: () => cap.engine }, cwd: repo };
@@ -43,15 +46,46 @@ describe('grounded agentJob (read automation)', () => {
     );
 
     const prompt = cap.last();
-    expect(prompt).toContain('the ledger');
+    // committed memory (the commit log), not called "the ledger" anymore
+    expect(prompt).toContain('the commit log');
     expect(prompt).toContain('feat: prior milestone');
     expect(prompt).toContain('shipped A');
-    expect(prompt).toContain('The prompt so far');
+    // live working memory
+    expect(prompt).toContain('Working memory');
     expect(prompt).toContain('mid-run: trying approach B');
-    expect(prompt).toContain('Write the prompt for whoever continues this');
+    // live handoff
+    expect(prompt).toContain('Handoff so far');
+    expect(prompt).toContain('handoff: B beat A on idempotency');
+    // the leave-memory instruction
+    expect(prompt).toContain('Leave memory for whoever continues this');
     // the caller's prompt is still there, last
     expect(prompt).toContain('CONTINUE THE TASK');
-    expect(prompt.indexOf('the ledger')).toBeLessThan(prompt.indexOf('CONTINUE THE TASK'));
+    expect(prompt.indexOf('the commit log')).toBeLessThan(prompt.indexOf('CONTINUE THE TASK'));
+  });
+
+  it('auto-captures the turn into working memory after a grounded run', async () => {
+    const repo = await tmpRepo({ initialCommit: false });
+    // an engine that reasons and uses a couple of tools (it emits the tool events
+    // agentJob counts for the auto-capture summary)
+    const toolEngine: Engine = {
+      name: 'mock',
+      async run(req: AgentRequest, onEvent, signal) {
+        onEvent({ type: 'tool', name: 'Edit', phase: 'use' });
+        onEvent({ type: 'tool', name: 'Edit', phase: 'use' });
+        onEvent({ type: 'tool', name: 'Bash', phase: 'use' });
+        const text = 'I edited the parser and ran the tests';
+        onEvent({ type: 'text', delta: text });
+        onEvent({ type: 'usage', usage: { inputTokens: 10, outputTokens: 5 }, model: 'mock' });
+        return { text, usage: { inputTokens: 10, outputTokens: 5 }, model: 'mock', stopReason: 'end_turn' };
+      },
+    };
+    const opts: RunOptions = { engine: 'mock', engines: { mock: () => toolEngine }, cwd: repo };
+    await run(agentJob({ label: 'build', prompt: 'do it', ground: true }), opts);
+
+    const led = readLedger(ws(repo));
+    expect(led).toContain('### build');
+    expect(led).toContain('I edited the parser and ran the tests');
+    expect(led).toContain('_actions: Edit×2, Bash_');
   });
 
   it('is just the prompt on a fresh branch with no ledger or draft', async () => {
@@ -72,7 +106,7 @@ describe('grounded agentJob (read automation)', () => {
 
   it('does not ground when `ground` is unset', async () => {
     const repo = await tmpRepo();
-    appendDraft(ws(repo), 'some why');
+    appendPrompt(ws(repo), 'some why');
     const cap = capturing();
     const opts: RunOptions = { engine: 'mock', engines: { mock: () => cap.engine }, cwd: repo };
     await run(agentJob({ label: 'work', prompt: 'PLAIN' }), opts);

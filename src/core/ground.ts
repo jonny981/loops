@@ -56,7 +56,7 @@ export async function groundingText(
 
   const where = workspace.branch ? `\`${workspace.branch}\`` : 'this branch';
   const header =
-    `## Recent work on ${where} (the ledger)\n` +
+    `## Recent work on ${where} (the commit log)\n` +
     `What prior iterations already did and why — read it before working so you ` +
     `do not repeat a dead end. Most recent first.`;
 

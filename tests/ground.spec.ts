@@ -26,7 +26,7 @@ describe('grounding (the read side)', () => {
     await makeCommit(repo, 'b.ts', 'feat: b', '## Why\n\nA failed, switched to B');
 
     const text = await groundingText(ws(repo));
-    expect(text).toContain('the ledger');
+    expect(text).toContain('the commit log');
     expect(text).toContain('`main`');
     // newest first: feat: b appears before feat: a
     expect(text.indexOf('feat: b')).toBeLessThan(text.indexOf('feat: a'));
@@ -53,7 +53,7 @@ describe('grounding (the read side)', () => {
     expect(text).toBe('');
   });
 
-  it('bounds the body so the ledger does not re-rot the context', async () => {
+  it('bounds the body so the commit log does not re-rot the context', async () => {
     const repo = await tmpRepo();
     const big = 'x'.repeat(5000);
     await makeCommit(repo, 'a.ts', 'feat: big', big);

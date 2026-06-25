@@ -15,10 +15,11 @@
  * changelog.
  */
 
-import type { Job, JobContext, Outcome } from './types.ts';
+import type { Job, JobContext, Outcome, Workspace } from './types.ts';
 import type { EngineRef } from '../engines/engine.ts';
 import { log, commit } from './git.ts';
 import { LoopError } from './errors.ts';
+import { readPrompt, readLedger } from './draft.ts';
 
 const ROADMAP_SYSTEM =
   'You maintain a concise project ROADMAP from a stream of milestone commits. ' +
@@ -75,6 +76,79 @@ export async function consolidate(
     ctx.signal,
   );
   return result.text.trim();
+}
+
+// ── Fine-grained compaction (the commit body) ───────────────────────────────
+// The same fold, one scale down: where `consolidate` compresses a stream of
+// milestone commits into a roadmap, `compactLedger` compresses ONE run's verbose
+// working log (`ledger.md`) into the tight summary that rides in the commit body.
+
+const COMPACT_SYSTEM =
+  'You compress a verbose working log into a few tight lines for the next agent: ' +
+  'what was done and why, what was ruled out, what is left. Drop the play-by-play; ' +
+  'keep only what someone continuing the work needs. Output short markdown, no preamble.';
+
+function truncate(s: string, n: number): string {
+  const t = s.trim();
+  return t.length > n ? `${t.slice(0, n).trimEnd()}\n…` : t;
+}
+
+export interface CompactOptions {
+  engine?: EngineRef;
+  model?: string;
+  /** Truncation fallback length when the model call is skipped or fails. Default 2000. */
+  maxChars?: number;
+}
+
+/**
+ * Compress a verbose working log (the ledger) into a tight summary for the commit
+ * body — one cheap model call. Falls back to truncation when there is no usable
+ * reply or the call throws, so a commit never fails on compaction. '' in, '' out.
+ */
+export async function compactLedger(
+  ctx: JobContext,
+  text: string,
+  opts: CompactOptions = {},
+): Promise<string> {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  const max = opts.maxChars ?? 2000;
+  try {
+    const engine = opts.engine ? ctx.resolveEngine(opts.engine) : ctx.engine;
+    const result = await engine.run(
+      {
+        prompt: `WORKING LOG:\n${trimmed}\n\nOutput the compact summary.`,
+        system: COMPACT_SYSTEM,
+        model: opts.model,
+        maxTokens: 600,
+      },
+      () => {},
+      ctx.signal,
+    );
+    return result.text.trim() || truncate(trimmed, max);
+  } catch {
+    return truncate(trimmed, max);
+  }
+}
+
+/**
+ * Compose a commit body from a workspace's scratch files: the handoff (`prompt.md`)
+ * verbatim, then a compacted working log (`ledger.md`). The handoff is already
+ * curated, so it is not re-summarised; only the verbose ledger is folded. Returns ''
+ * when both are empty, so callers can fall back to their own floor.
+ */
+export async function composeCommitBody(
+  ctx: JobContext,
+  workspace: Workspace,
+  opts: CompactOptions = {},
+): Promise<string> {
+  const prompt = readPrompt(workspace);
+  const ledgerRaw = readLedger(workspace);
+  const ledger = ledgerRaw ? await compactLedger(ctx, ledgerRaw, opts) : '';
+  const parts: string[] = [];
+  if (prompt) parts.push(prompt);
+  if (ledger) parts.push(`## Working log\n\n${ledger}`);
+  return parts.join('\n\n');
 }
 
 export interface ConsolidateJobConfig extends ConsolidateOptions {

@@ -5,8 +5,8 @@ import {
   loop,
   fnJob,
   predicate,
-  appendDraft,
-  readDraft,
+  appendPrompt,
+  readPrompt,
   log,
   MockEngine,
 } from '../src/api.ts';
@@ -31,7 +31,7 @@ describe('loop commit-on-convergence (the milestone)', () => {
       body: fnJob('work', async (ctx) => {
         n += 1;
         write(repo, `step-${n}.ts`, `step ${n}\n`);
-        appendDraft(ctx.workspace, { heading: 'Why', body: `iteration ${n} did X` });
+        appendPrompt(ctx.workspace, { heading: 'Why', body: `iteration ${n} did X` });
         return { status: 'fail', summary: `step ${n}` };
       }),
       until: predicate(() => n >= 3, 'n>=3'),
@@ -47,7 +47,7 @@ describe('loop commit-on-convergence (the milestone)', () => {
     // the body carries the why from across all the iterations
     expect(feature[0]?.body).toContain('iteration 1 did X');
     expect(feature[0]?.body).toContain('iteration 3 did X');
-    expect(readDraft(ws(repo))).toBe(''); // consumed at the milestone
+    expect(readPrompt(ws(repo))).toBe(''); // consumed at the milestone
   });
 
   it('commit:true derives the subject from the converged outcome', async () => {
@@ -77,7 +77,7 @@ describe('loop commit-on-convergence (the milestone)', () => {
       body: fnJob('b', async (ctx) => {
         work += 1;
         write(repo, `w${work}.ts`, `${work}\n`);
-        appendDraft(ctx.workspace, `work ${work}`);
+        appendPrompt(ctx.workspace, `work ${work}`);
         return { status: 'pass', summary: `w${work}` };
       }),
       until: predicate(() => true),
