@@ -25,10 +25,36 @@ attempt 2 has prior reasoning to ground on.
 | convergence suite (haiku, 40 runs) | 100% | 100% | +0pp | +72% |
 | SWE-bench Lite requests (sonnet, n=6) | 100% (6/6) | 100% (6/6) | +0pp | +58% |
 | **SWE-bench Lite requests (haiku, n=6)** | **67% (4/6)** | **100% (6/6)** | **+33pp** | **+6%** |
+| graph cross-node (haiku, 3-node, n=10) | 70% (7/10) | 80% (8/10) | +10pp (within noise) | +33% |
 
 The first three are **ceiling effects**: the model solves everything in one
 attempt, both arms max out, the Ledger only adds cost. The fourth opens headroom
-— a weaker model on real bugs — and the Ledger converts it.
+— a weaker model on real bugs — and the Ledger converts it. The fifth (cross-node)
+is directionally positive but **inconclusive at n=10** — a single-instance gap (see
+below).
+
+## Cross-node (graph) detail
+
+`bench/graph.ts`, task `stable-store`: a chain (remove → find → serialize) where an
+upstream node establishes an id-stability invariant whose rationale lives only in
+its commit body, not its code. Only ON grounds each node in the accumulated ledger,
+so only ON reads the upstream why; OFF re-derives from the files. A hidden invariant
+gate decides resolved.
+
+Result (haiku, 10 trials/arm): OFF held 7/10, ON held 8/10 — **+10pp, a one-instance
+gap, within noise.** Two leaks compress it: OFF preserves the invariant ~70% of the
+time by default (the fence is judgment-based, and a careful agent often re-derives
+it), and ON broke 2/10 (grounding delivered the why, but a weak model does not
+always act on it). The mechanism is real at the trial level — we observed the why
+prevent a break — but the aggregate is not a claim.
+
+The sharper, more faithful test of what graphs actually need is a cross-node
+**contract**: an arbitrary upstream convention (a wire format, a field naming, a
+protocol version) the downstream node cannot guess. There OFF cannot hold (it never
+saw the convention) and ON holds whenever grounding surfaces it and the agent
+applies it — a wide, noise-robust gap that measures the real question: does the
+Ledger propagate cross-node decisions. (A contract-based `stable-store-contract`
+variant follows.)
 
 ## SWE-bench detail (the comparable number)
 
