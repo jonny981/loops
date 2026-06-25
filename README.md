@@ -172,6 +172,14 @@ Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is th
   agentJob({ label: 'work', prompt: 'Continue the task.', ground: true });
   ```
 
+- **Scaling the read — retrieval, then consolidation.** Recent-N grounding is the default, but on a long, noisy log the relevant commit falls out of the window. `ground: { retrieve: true }` has a cheap model select the relevant commits by subject instead — use it for long-horizon work. For an indefinite process, `consolidateJob` folds milestones into a rolling `LEDGER.md` roadmap (the coarse memory tier).
+
+  ```ts
+  agentJob({ label: 'work', prompt: 'Continue.', ground: { retrieve: true } });
+  ```
+
+The Ledger has **two faces**: _cross-iteration_ (recover from your own failed attempts in a retry loop) and _cross-node_ (honour an upstream node's decision a downstream agent could not otherwise know). Both need headroom — on one-shot, single-node work memory is only a tax. See [docs/concepts.md](docs/concepts.md) for where it helps and the measured evidence in [bench/RESULTS.md](bench/RESULTS.md).
+
 ## Engines — bring any model
 
 The agent launch only ever touches the `Engine` interface, so the loop knows nothing about your model, provider, or framework.
@@ -259,6 +267,28 @@ dag({
 `needs` = dependencies; a non-`pass` required dependency blocks its dependents; `optional` nodes never block or fail the DAG; an unmet `when` skips a node (counts green); cycles are detected before any work runs. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
 
 **Worktree isolation — branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node honestly (loops does not auto-resolve — that's a separate layer). Each team gets its own branch, its own draft, and — with `DagConfig.environment` — its own stage, all born and torn down together.
+
+For **dynamic** dispatch (a loop that discovers each unit at runtime and routes it to its own isolated sub-loop), `isolated(job)` is the same boundary as a composable wrapper rather than a predeclared node — fork, run, land back on pass:
+
+```ts
+loop({ name: 'triage', until: queueEmpty, body: pickAndDispatch });
+// where pickAndDispatch routes each ticket to isolated(convergeLoop) or isolated(sweep)
+```
+
+## Loop archetypes — Converge, Sweep, Tend
+
+A loop is not one shape. Three recur, and they differ in what memory does and in what you can even measure — a harness built for one is blind to the others.
+
+| | **Converge** | **Sweep** | **Tend** |
+| --- | --- | --- | --- |
+| shape | one hard target, retried | a known set, one fresh task each | an unbounded process picking the next unit |
+| example | build to a high bar with tests | research each OEM | triage issues until none remain |
+| iteration N vs N−1 | the **same** task | an **independent** task | a **discovered** task |
+| terminates when | the gate passes | the worklist is empty | a dynamic condition (maybe never) |
+| memory's job | don't re-walk dead ends | transfer the house style | remember what's done + decided, forever |
+| `loops` shape | `loop({ until: gate, max })` | `loop`/`dag` over a worklist | `loop({ until: dynamic, max: ∞ })` |
+
+They **nest**: GitHub triage is Tend ∘ Converge (pick the next ticket, classify it, dispatch a Converge loop to a test gate); OEM research is Sweep ∘ Converge (each item is itself a multi-step build that must converge). Because a `loop` and a `dag` are both `Job`s, dispatch is just a body that selects a sub-`Job` — wrap it in `isolated()` when each needs its own worktree. The Ledger's three tiers (draft → milestone commits → consolidated roadmap) map onto the three nesting levels. Full treatment in [docs/concepts.md](docs/concepts.md).
 
 ## Budget, records, resume
 
