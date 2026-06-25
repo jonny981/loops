@@ -84,7 +84,7 @@ export interface RetrieveOptions {
    * candidates. A relevant commit OLDER than this is invisible — retrieval is not
    * unbounded, it just has a bigger window than recent-N. Reading subjects is
    * cheap, so this can be generous. For a log longer than any practical window,
-   * run consolidation: the rolling roadmap commit stays in-window and indexes the
+   * run consolidation: the consolidated-ledger commit stays in-window and indexes the
    * old history. Default 100.
    */
   candidates?: number;

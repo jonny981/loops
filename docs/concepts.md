@@ -101,12 +101,12 @@ the memory granularity *matches* the nesting level:
 |---|---|---|---|
 | **scratch** (working memory + handoff) | within an iteration | a sub-loop's attempts | `.loops/ledger.md` + `.loops/prompt.md`, transient → a commit body |
 | **milestone commit** | a converged unit | a sub-loop, merged back | a commit body |
-| **consolidated roadmap** | the whole process | the Tend loop's state | a commit body (`consolidateJob`) |
+| **consolidated ledger** | the whole process | the Tend loop's state | a commit body (`consolidateJob`) |
 
 All three ultimately live in **git commit bodies** — a prompt (the why) welded to a
 diff. The scratch files are only *write-ahead buffers* (working memory + handoff)
 that crystallise into the next commit body and reset; milestones are commit bodies;
-the roadmap is a commit body (an empty-tree commit). Nothing durable is a side file.
+the ledger is a commit body (an empty-tree commit). Nothing durable is a side file.
 A commit body does not expire at the next turn: welded to its diff, it is a permanent
 record any later agent can look back to, as far back as it wants — recent-N surfaces
 the nearby ones, retrieval selects the relevant ones however old. A Tend loop grounds
@@ -127,16 +127,21 @@ As the log grows, *reading* it has to scale, and there is a progression:
   full **way** — the diff welded to the why, the alternatives ruled out, the
   constraints that held, and what not to repeat. (Same noisy log: 5/6.) Use it for
   long-horizon (Sweep/Tend) work; recent-N is the wrong default there.
-- **consolidation** (`consolidateJob`) — fold milestones into a rolling synthesised
-  roadmap (done / current state / open threads), committed as a **commit body** (an
-  empty-tree commit), so grounding surfaces it like any milestone; the prior roadmap
-  is read back from the last consolidation commit. The *coarse* tier: synthesised
-  state, not found commits. Where retrieval *finds* the relevant past commit,
-  consolidation *maintains* the process's working state — what a Tend
-  loop needs to stay coherent over an unbounded horizon, and emergent across many
-  commits rather than held in any one. The Tend benchmark is where it is measured
-  and tuned: how often to consolidate, how tight the roadmap, whether to retrieve
-  over the roadmap or the raw commits.
+- **consolidation** (`consolidateJob`) — fold the history into a **decision-preserving
+  consolidated ledger**: the current state, the open threads, and every accrued
+  decision kept verbatim, committed as a **commit body** (an empty-tree commit), so
+  grounding surfaces it like any milestone; the prior ledger is read back from the
+  last consolidation commit. The *coarse* tier, and the one retrieval cannot stand in
+  for: top-k retrieval — vector or model — fetches the *k most relevant* commits, not
+  *everything you have decided*, so when the work must honour many accrued decisions
+  retrieval hits a hard ceiling at k while consolidation folds them all into bounded
+  space (and degrades gracefully as the count grows, not off a cliff). A naive
+  progress *summary* fails the same way from the other side — it compresses the
+  specifics away; the consolidated ledger is tuned to preserve them. This is what a
+  Tend loop needs to stay coherent over an unbounded horizon — emergent across many
+  commits rather than held in any one. The Tend benchmark is where it is measured and
+  tuned: how often to consolidate, how tight the ledger, whether to retrieve over the
+  ledger or the raw commits.
 
 ## Two halves: memory *and* enforcement
 

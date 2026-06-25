@@ -1,18 +1,24 @@
 /**
- * Consolidation — the "sleep-time" / roadmap step (Letta's reflection, DiffMem's
- * consolidate). A long run accumulates many milestone commits; consolidation
- * folds them into a concise, rolling ROADMAP: what is done, the current state,
- * the open threads. That roadmap is the COARSE level of memory — the milestone
- * commits are the mid level and the draft is the fine level, so multi-granularity
- * falls out of git rather than a new tier to maintain.
+ * Consolidation — the "sleep-time" step (Letta's reflection, DiffMem's consolidate).
+ * A long run accumulates many milestone commits; consolidation folds them into one
+ * bounded CONSOLIDATED LEDGER: the current state, the open threads, and every binding
+ * decision preserved. It is the COARSE tier of the ledger — `ledger.md` is the fine
+ * tier and the milestone commit bodies are the mid tier, so multi-granularity falls
+ * out of git rather than a new artifact to maintain.
  *
- * The roadmap is a COMMIT BODY, not a tracked file — the same shape as every other
- * memory in loops (a prompt, the "way", welded to a diff and read back by
- * grounding). Each consolidation commits the updated roadmap as the body of an
- * empty-tree commit, so grounding and retrieval surface it like any milestone; the
- * prior roadmap is read back from the last consolidation commit's body. Small on
- * purpose: one model call that MERGES new milestones into the prior roadmap, not a
- * changelog.
+ * It is decision-PRESERVING, not a progress summary: a fresh context must be able to
+ * honour every convention and constraint the project settled, so consolidation keeps
+ * exact values verbatim while dropping narrative. (A naive summary that compresses
+ * the decisions away lets downstream work silently violate them — measured: top-k
+ * retrieval and a progress summary both miss accrued decisions; only a decision-
+ * preserving ledger keeps them in bounded space.)
+ *
+ * The consolidated ledger is a COMMIT BODY, not a tracked file — the same shape as
+ * every other memory in loops (welded to a diff, read back by grounding). Each
+ * consolidation commits the updated ledger as the body of an empty-tree commit, so
+ * grounding and retrieval surface it like any milestone; the prior ledger is read
+ * back from the last consolidation commit's body. One model call that MERGES new
+ * commits into the prior ledger, not a changelog.
  */
 
 import type { Job, JobContext, Outcome, Workspace } from './types.ts';
@@ -21,29 +27,41 @@ import { log, commit } from './git.ts';
 import { LoopError } from './errors.ts';
 import { readPrompt, readLedger } from './draft.ts';
 
-const ROADMAP_SYSTEM =
-  'You maintain a concise project ROADMAP from a stream of milestone commits. ' +
-  'Output short markdown: what is done, the current state, and the open threads. ' +
-  'Keep it tight — it is the coarse memory, not a changelog. MERGE the new ' +
-  'milestones into the prior roadmap; do not just append.';
+const CONSOLIDATE_SYSTEM =
+  "You maintain a project's CONSOLIDATED LEDGER from its commit history — the bounded " +
+  'coarse memory a fresh context reads to continue safely. Capture the current state ' +
+  'and the open threads, and PRESERVE every binding decision, convention and constraint ' +
+  'with its exact values verbatim (downstream work must honour them, so dropping or ' +
+  'generalising even one is a failure). Tight markdown; MERGE new commits into the ' +
+  'prior ledger, deduplicate, omit only narrative — never omit a decision.';
 
 export interface ConsolidateOptions {
   /** Recent milestones to fold in. Default 30. */
   max?: number;
-  /** The roadmap so far, to update in place. */
+  /** The consolidated ledger so far, to update in place. */
   prior?: string;
-  /** Engine for the (one) summarisation call. Default the run engine. */
+  /** Engine for the (one) consolidation call. Default the run engine. */
   engine?: EngineRef;
   model?: string;
 }
 
-function firstLine(s: string): string {
-  return s.split('\n').find((l) => l.trim()) ?? '';
+/** A compact, heading-stripped snippet of a commit body — the decision content, not
+ *  the "## Why" heading a naive first-line grab would return. */
+function digest(body: string, n = 280): string {
+  const text = body
+    .split('\n')
+    .filter((l) => l.trim() && !l.trimStart().startsWith('#'))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > n ? `${text.slice(0, n).trimEnd()}…` : text;
 }
 
 /**
- * Fold the recent ledger into a concise roadmap (one model call). Returns the
- * roadmap text; the caller decides where it lives (see `consolidateJob`).
+ * Fold the recent history into one decision-preserving consolidated ledger (a single
+ * model call). Returns the ledger text; the caller decides where it lives (see
+ * `consolidateJob`). Each commit is offered as its subject plus a body digest, so the
+ * exact decisions — not just the headings — reach the consolidation.
  */
 export async function consolidate(
   ctx: JobContext,
@@ -54,10 +72,10 @@ export async function consolidate(
     max: opts.max ?? 30,
     signal: ctx.signal,
   });
-  const milestones = records
+  const entries = records
     .map(
       (r) =>
-        `- ${r.sha.slice(0, 7)} ${r.subject}${r.body ? `: ${firstLine(r.body)}` : ''}`,
+        `- ${r.sha.slice(0, 7)} ${r.subject}${r.body ? `\n  ${digest(r.body)}` : ''}`,
     )
     .join('\n');
 
@@ -65,10 +83,10 @@ export async function consolidate(
   const result = await engine.run(
     {
       prompt:
-        (opts.prior ? `CURRENT ROADMAP:\n${opts.prior}\n\n` : '') +
-        `RECENT MILESTONES (newest first):\n${milestones || '(none)'}\n\n` +
-        `Output the updated roadmap.`,
-      system: ROADMAP_SYSTEM,
+        (opts.prior ? `CURRENT LEDGER:\n${opts.prior}\n\n` : '') +
+        `COMMITS (newest first):\n${entries || '(none)'}\n\n` +
+        `Output the updated consolidated ledger.`,
+      system: CONSOLIDATE_SYSTEM,
       model: opts.model,
       maxTokens: 1000,
     },
@@ -80,7 +98,7 @@ export async function consolidate(
 
 // ── Fine-grained compaction (the commit body) ───────────────────────────────
 // The same fold, one scale down: where `consolidate` compresses a stream of
-// milestone commits into a roadmap, `compactLedger` compresses ONE run's verbose
+// milestone commits into a consolidated ledger, `compactLedger` compresses ONE run's verbose
 // working log (`ledger.md`) into the tight summary that rides in the commit body.
 
 const COMPACT_SYSTEM =
@@ -153,35 +171,35 @@ export async function composeCommitBody(
 
 export interface ConsolidateJobConfig extends ConsolidateOptions {
   label?: string;
-  /** Commit subject; also how the prior roadmap is found. Default `consolidate: roadmap`. */
+  /** Commit subject; also how the prior ledger is found. Default `consolidate: ledger`. */
   subject?: string;
 }
 
 /**
- * Consolidate and commit the roadmap AS A COMMIT BODY. Reads the prior roadmap from
- * the last consolidation commit's body, folds in the recent ledger, and commits the
- * updated roadmap as the body of an empty-tree commit — so the coarse memory is
- * durable and grounded-on like any milestone, never a tracked file.
+ * Consolidate and commit the CONSOLIDATED LEDGER as a commit body. Reads the prior
+ * ledger from the last consolidation commit's body, folds in the recent history, and
+ * commits the updated ledger as the body of an empty-tree commit — so the coarse
+ * memory is durable and grounded-on like any milestone, never a tracked file.
  */
 export function consolidateJob(config: ConsolidateJobConfig = {}): Job {
   return async (ctx) => {
     const label = config.label ?? 'consolidate';
-    const subject = config.subject ?? 'consolidate: roadmap';
+    const subject = config.subject ?? 'consolidate: ledger';
     const path = [...ctx.path];
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
     try {
-      // The prior roadmap is the body of the most recent consolidation commit —
-      // the roadmap lives in git's memory (commit bodies), not a tracked file.
+      // The prior ledger is the body of the most recent consolidation commit — the
+      // consolidated ledger lives in git's memory (commit bodies), not a tracked file.
       const recent = await log({ cwd: ctx.workspace.dir, max: 50, signal: ctx.signal });
       const prior = recent.find((r) => r.subject === subject)?.body || undefined;
-      const roadmap = await consolidate(ctx, { ...config, prior });
+      const ledger = await consolidate(ctx, { ...config, prior });
       const sha = await commit(
-        { subject, body: roadmap, allowEmpty: true },
+        { subject, body: ledger, allowEmpty: true },
         { cwd: ctx.workspace.dir, signal: ctx.signal },
       );
       const outcome: Outcome = {
         status: 'pass',
-        summary: sha ? `roadmap ${sha.slice(0, 7)}` : 'roadmap unchanged',
+        summary: sha ? `ledger ${sha.slice(0, 7)}` : 'ledger unchanged',
         data: { sha: sha ?? null },
       };
       ctx.emit({ kind: 'job:end', ts: Date.now(), path, label, outcome });

@@ -72,7 +72,7 @@ export const triage = loop({
       prompt: 'Pick the most important OPEN item you have not handled yet, and handle it.',
     }),
     commitJob({ subject: (_c, last) => `handle: ${last?.summary}` }),
-    // Coarse memory: every 10 turns, fold the log into a rolling roadmap commit
+    // Coarse memory: every 10 turns, fold the log into a rolling ledger commit
     // body, so recent-N grounding still sees a SUMMARY of the whole horizon.
     fnJob('consolidate', async (ctx) =>
       ctx.iteration % 10 === 0 ? consolidateJob({})(ctx) : { status: 'pass' }),

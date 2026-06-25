@@ -97,7 +97,7 @@ export {
   type RetrieveOptions,
 } from './core/ground.ts';
 
-// Consolidation — fold the commit log into a rolling roadmap (the coarse memory),
+// Consolidation — fold the commit log into a consolidated ledger (the coarse memory),
 // and the one-scale-down fold of a run's working log into the commit body
 export {
   consolidate,
