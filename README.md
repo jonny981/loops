@@ -4,7 +4,7 @@
 
 `loops` is a tiny, nestable job primitive for driving agents in **convergence loops**. Each iteration runs with a **fresh context**; the loop stops only when a gate _you_ define says it's done — a deterministic check (the tests really pass), a model judge with a confidence threshold, a k-of-n jury, or any mix. Compose loops and DAGs both ways, run them against any model backend behind a one-method `Engine`, and watch it all in a live terminal UI.
 
-A fresh context every turn would cause amnesia — a clean-slate iteration re-walking a dead end an earlier one already ruled out — so the core is **Ledger**: the loop writes its reasoning to git as it works and grounds the next turn on that log. Fresh context kills rot; the Ledger kills amnesia.
+A fresh context every turn would cause amnesia — a clean-slate iteration re-walking a dead end an earlier one already ruled out — so the core is **Ledger**: the loop writes its reasoning to git as it works and grounds the next turn on that log. No vector database, no embeddings, no index to sync or let go stale — **git is the memory.** And where most "agent memory" is built to recall a _conversation_, the Ledger is built to keep your _decisions_ consistent across long work. Fresh context kills rot; the Ledger kills amnesia.
 
 ![status: alpha](https://img.shields.io/badge/status-alpha-orange)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
