@@ -32,6 +32,40 @@ export default loop({
 
 ---
 
+## A whole engineering team, defined as files
+
+The primitives compose into something bigger than a single loop: an **engineering team** that builds a multi-component service, holds it coherent across components, and converges only when each piece clears a bar one agent can't impose on itself — an adversarial, multi-model review.
+
+```ts
+// An engineer is "done" only when the tests pass AND an adversarial panel across THREE
+// models fails to refute it — each reviewer a named persona, k-of-2 consensus, dimensional.
+const reviewed = (name) => [
+  commandSucceeds('node', [`test-${name}.mjs`]),                         // deterministic truth
+  quorum(2, ...['opus', 'sonnet', 'haiku'].map((model) =>
+    agentCheck({ agent: reviewer, model, threshold: 0.8,
+      question: `Try to REFUTE that ${name} meets its contract. Approve only if you cannot.`,
+      dimensions: ['correctness', 'security', 'edge cases'] }))),
+];
+const engineer = (name) =>
+  loop({ name, body: agentJob({ agent: engineerFor(name), prompt: brief(name), ground: true }),
+         until: reviewed(name), commit: true, max: 8 });
+
+export default dag({
+  name: 'build-service',
+  nodes: {
+    store:     engineer('store'),
+    api:       { needs: ['store'],                job: engineer('api') },
+    serialize: { needs: ['store'], isolate: true, job: engineer('serialize') }, // parallel worktree
+    client:    { needs: ['api', 'serialize'],     job: engineer('client') },
+  },
+  isolation: 'worktree',
+});
+```
+
+The `dag` is the manager (toposort + dispatch). Each node is a Converge loop — an engineer driving its component to its tests **and** a three-model adversarial review. `isolate` runs engineers in parallel worktrees that land back on pass. `ground: true` carries the contracts only `store` decides (stable ids, the `SSv1|` snapshot wire tag) to the engineers downstream of it. (`reviewer`, `engineerFor`, and `brief` are `AgentDef`s and briefs loaded from markdown — see [Agents](#agents--define-a-specialist-once).)
+
+A single autonomous agent grades its own homework. This team **structurally cannot**: "done" means past an independent, multi-model, dimensional review it never applies to itself. That enforced honest-convergence gate is the deepest idea here; memory is one free pillar underneath it. The whole team is a handful of markdown personas plus the ~25 lines above — runnable in [`examples/build-service.loop.ts`](examples/build-service.loop.ts).
+
 ## Why loops?
 
 Agents rarely nail it in one shot. The reliable pattern is a **convergence loop**: do a bit of work, check whether you're _actually_ done, and if not, go again. Two things make or break it, and `loops` is built around both:

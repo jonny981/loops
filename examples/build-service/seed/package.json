@@ -1,0 +1,5 @@
+{
+  "name": "build-service-workspace",
+  "private": true,
+  "type": "module"
+}
