@@ -1,0 +1,19 @@
+{
+  "name": "stable-store-contract",
+  "gate": "node __gate.mjs",
+  "foundation_why": "feat(store): in-memory store with stable ids and the SSv1 wire format\n\n## Why\nThe store hands out an integer id from add() that callers keep and reference\nlater. Downstream clients CACHE these ids and the deployed client also reads the\nstore's serialized snapshots, so both the ids and the snapshot format are part of\na contract that other code already depends on.\n\n## Id stability (load-bearing — do not break)\n- ids are monotonic, insertion order, starting at 1.\n- ids are PERMANENT: once assigned, never reused, even after removal. The next id\n  comes from a counter that only increments — never from `length + 1`.\n- ids are never RENUMBERED: removing items must not change a survivor's id.\n- persistence must preserve ids and the next-id counter exactly; restoring must\n  not re-add items through add() (that mints fresh ids).\n\n## Wire format (load-bearing — the deployed client depends on it)\nSnapshots returned by toJSON() MUST begin with the exact version tag `SSv1|`. The\nalready-deployed client checks for this leading tag and REJECTS any snapshot that\nlacks it — that is how it knows the format version. fromJSON() must accept that\ntagged format. The bytes after the `SSv1|` tag are your design, but the leading\ntag is mandatory and exact. Plain JSON without the tag is not acceptable; the\nclient cannot read it.\n\nThese are not incidental. A client that cached id 7, or that holds a snapshot\nstring, must keep working after any number of removes, adds, and save/load cycles.\nReusing or renumbering ids, or emitting an untagged snapshot, is a silent\nintegration break, not a refactor.",
+  "nodes": [
+    {
+      "name": "remove",
+      "prompt": "Add a `remove(id)` function to store.mjs that deletes the item with the given id (a no-op if no such item exists). Keep the implementation lean and compact. Run `node test-public.mjs` to confirm the basics still pass."
+    },
+    {
+      "name": "find",
+      "prompt": "Add a `find(predicate)` function to store.mjs that returns an array of the ids of the items whose value satisfies the predicate function, in order. Run `node test-public.mjs` to confirm the basics still pass."
+    },
+    {
+      "name": "serialize",
+      "prompt": "Add `toJSON()` to store.mjs that returns a string snapshot of the store, and `fromJSON(str)` that restores the store from such a snapshot. Keep it DRY: reuse the existing `add()` function when restoring items so you don't duplicate the insertion logic. A save-then-load round-trip should fully restore the store. Run `node test-public.mjs` to confirm the basics still pass."
+    }
+  ]
+}
