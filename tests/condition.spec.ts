@@ -5,7 +5,9 @@ import {
   loop,
   fnJob,
   agentCheck,
+  gateJob,
   mockVerdict,
+  MockEngine,
   quorum,
   commandSucceeds,
 } from '../src/api.ts';
@@ -52,6 +54,37 @@ describe('conditions', () => {
       withVerdict('yes', 0.5),
     );
     expect(outcome.status).toBe('exhausted');
+  });
+
+  const withText = (text: string): RunOptions => ({
+    engine: 'mock',
+    engines: { mock: () => new MockEngine(() => text) },
+  });
+
+  it('agentCheck (confidenceTag) opens at/above the % threshold and carries findings', async () => {
+    const { outcome } = await run(
+      gateJob('review', agentCheck({ confidenceTag: true, question: 'sound?', threshold: 0.8 })),
+      withText('store.mjs reuses a freed id at line 4.\n<confidence>90%</confidence>'),
+    );
+    expect(outcome.status).toBe('pass');
+    expect(outcome.summary).toContain('90%');
+    expect(outcome.summary).toContain('reuses a freed id'); // findings reach the gate reason
+  });
+
+  it('agentCheck (confidenceTag) stays closed below the threshold', async () => {
+    const { outcome } = await run(
+      gateJob('review', agentCheck({ confidenceTag: true, question: 'sound?', threshold: 0.8 })),
+      withText('A concrete concern remains at line 9.\n<confidence>60%</confidence>'),
+    );
+    expect(outcome.status).toBe('fail');
+  });
+
+  it('agentCheck (confidenceTag) fails closed when the tag is missing', async () => {
+    const { outcome } = await run(
+      gateJob('review', agentCheck({ confidenceTag: true, question: 'sound?', threshold: 0.8 })),
+      withText('Looks fine to me but I forgot to rate it.'),
+    );
+    expect(outcome.status).toBe('fail');
   });
 
   it('accepts one-or-many mixed conditions (predicate + agentCheck)', async () => {

@@ -261,9 +261,12 @@ export interface AgentCheckConfig {
   engine?: EngineRef;
   /**
    * What the validator sees. By default: the last outcome's summary/data plus
-   * the shared state. Override to feed something bespoke.
+   * the shared state. Override to feed something bespoke — may be async, since a
+   * judge often gathers evidence (read the artifact, ground on the history, run a
+   * probe) before ruling. A blind judge cannot honestly confirm correctness, so
+   * give it the thing it is meant to be reviewing.
    */
-  context?: (ctx: JobContext, last: Outcome | undefined) => string;
+  context?: (ctx: JobContext, last: Outcome | undefined) => string | Promise<string>;
   maxTokens?: number;
   /**
    * Score these named dimensions (0..1 each) instead of a single yes/no
@@ -273,6 +276,15 @@ export interface AgentCheckConfig {
    * `['intent match', 'evidence quality', 'outcome coherence']`.
    */
   dimensions?: string[];
+  /**
+   * Parse a free-form review that closes with `<confidence>N%</confidence>`
+   * (N is 0-100) instead of forcing a JSON shape. The gate opens at/above
+   * `threshold`; the reviewer's prose before the tag becomes the gate's `reason`,
+   * so a failing review carries its findings to the next iteration (`lastReview`).
+   * More robust than scraping JSON, and the natural fit for a report-then-rate
+   * reviewer persona. Takes precedence over `dimensions`.
+   */
+  confidenceTag?: boolean;
 }
 
 interface Verdict {
@@ -386,6 +398,35 @@ const VALIDATOR_SYSTEM =
   'as zero). Respond with ONLY a single JSON object and no other text:\n' +
   '{"verdict":"yes"|"no","confidence":<number 0..1>,"reason":"<one sentence>"}';
 
+const CONFIDENCE_TAG_SYSTEM =
+  'You are a rigorous, report-only reviewer. Do not edit anything and do not imply you ' +
+  'will. Assess the evidence against the stated condition, listing each concern tied to a ' +
+  'concrete location and a concrete failure scenario (not a vibe). Judge against the stated ' +
+  'contract, not an ideal: do not penalise the absence of hardening the contract does not ' +
+  'require, and when the evidence meets the contract and you cannot name a concrete fault, ' +
+  'say so plainly. Close with a single final line and nothing after it: ' +
+  '`<confidence>N%</confidence>` — N is an integer 0-100, where 100 means you found no ' +
+  'genuine contract violation or real bug, and below 100 means at least one concrete, ' +
+  'addressable concern is open.';
+
+/**
+ * Pull the last `<confidence>N%</confidence>` from a review. The prose before the
+ * tag is the findings, carried into the gate `reason` so a failing review delivers
+ * its concerns to the next iteration. `N` may be a percent (0-100) or a fraction.
+ */
+function parseConfidenceTag(
+  text: string,
+): { confidence: number; findings: string } | null {
+  const re = /<confidence>\s*([0-9]+(?:\.[0-9]+)?)\s*%?\s*<\/confidence>/gi;
+  let m: RegExpExecArray | null;
+  let last: RegExpExecArray | null = null;
+  while ((m = re.exec(text)) !== null) last = m;
+  if (!last) return null;
+  let n = parseFloat(last[1]!);
+  if (n > 1) n = n / 100; // percent → fraction
+  return { confidence: clamp01(n), findings: text.slice(0, last.index).trim() };
+}
+
 /** System prompt for the multi-dimension scoring variant of `agentCheck`. */
 function validatorScoreSystem(dimensions: string[]): string {
   return (
@@ -451,20 +492,29 @@ function parseScores(text: string, dimensions: string[]): ScoreVerdict {
  */
 export function agentCheck(config: AgentCheckConfig): Condition {
   const threshold = config.threshold ?? 0.8;
-  const dimensions = config.dimensions?.length ? config.dimensions : undefined;
+  const confidenceTag = config.confidenceTag === true;
+  const dimensions =
+    !confidenceTag && config.dimensions?.length ? config.dimensions : undefined;
   return async (ctx, last) => {
     const engine = config.engine
       ? ctx.resolveEngine(config.engine)
       : ctx.engine;
-    const contextText = (config.context ?? defaultContext)(ctx, last);
+    const contextText = await (config.context ?? defaultContext)(ctx, last);
+    const closing = confidenceTag
+      ? 'Write your review now, then close with `<confidence>N%</confidence>`.'
+      : `Return the JSON ${dimensions ? 'scores' : 'verdict'} now.`;
     const prompt =
       `CONDITION TO EVALUATE:\n${config.question}\n\n` +
       `EVIDENCE:\n${contextText}\n\n` +
-      `Return the JSON ${dimensions ? 'scores' : 'verdict'} now.`;
+      closing;
 
     // The validator's output contract stays authoritative (last); an optional
     // agent persona is prepended so the judge has a stance, not just a question.
-    const baseSystem = dimensions ? validatorScoreSystem(dimensions) : VALIDATOR_SYSTEM;
+    const baseSystem = confidenceTag
+      ? CONFIDENCE_TAG_SYSTEM
+      : dimensions
+        ? validatorScoreSystem(dimensions)
+        : VALIDATOR_SYSTEM;
     const system = config.agent ? `${resolveSystem(config.agent)}\n\n${baseSystem}` : baseSystem;
 
     let result;
@@ -475,7 +525,8 @@ export function agentCheck(config: AgentCheckConfig): Condition {
           prompt,
           system,
           model: config.model ?? config.agent?.model,
-          maxTokens: config.maxTokens ?? 512,
+          // A report-then-rate reviewer needs room for findings before the tag.
+          maxTokens: config.maxTokens ?? (confidenceTag ? 2048 : 512),
         },
         (e) => {
           if (e.type === 'usage') {
@@ -494,6 +545,23 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       // phase is left to the caller (loop.ts) — this condition may be a
       // start/until/stopOn/review gate and cannot know which.
       throw LoopError.from(e, { code: 'ENGINE', path: ctx.path });
+    }
+
+    if (confidenceTag) {
+      const parsed = parseConfidenceTag(result.text);
+      if (!parsed)
+        return {
+          met: false,
+          confidence: 0,
+          reason: `no <confidence> tag: ${result.text.slice(0, 140)}`,
+        };
+      const pct = Math.round(parsed.confidence * 100);
+      const need = Math.round(threshold * 100);
+      return {
+        met: parsed.confidence >= threshold,
+        confidence: parsed.confidence,
+        reason: `confidence ${pct}% (need ${need}%)${parsed.findings ? ` — ${parsed.findings.slice(0, 280)}` : ''}`,
+      };
     }
 
     if (dimensions) {

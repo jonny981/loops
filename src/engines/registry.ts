@@ -75,6 +75,11 @@ export class EngineRegistry {
         'anthropic-api',
       ),
     );
+    // A genuinely different model behind the same seam — for a second-model
+    // reviewer (`engine: 'codex'`). Read-only; the heavy CLI loads lazily.
+    this.register('codex', (o) =>
+      lazy(() => import('./codex.ts').then((m) => new m.CodexEngine(o)), 'codex'),
+    );
   }
 }
 
