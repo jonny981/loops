@@ -288,7 +288,9 @@ A loop is not one shape. Three recur, and they differ in what memory does and in
 | memory's job | don't re-walk dead ends | transfer the house style | remember what's done + decided, forever |
 | `loops` shape | `loop({ until: gate, max })` | `loop`/`dag` over a worklist | `loop({ until: dynamic, max: ∞ })` |
 
-They **nest**: GitHub triage is Tend ∘ Converge (pick the next ticket, classify it, dispatch a Converge loop to a test gate); OEM research is Sweep ∘ Converge (each item is itself a multi-step build that must converge). Because a `loop` and a `dag` are both `Job`s, dispatch is just a body that selects a sub-`Job` — wrap it in `isolated()` when each needs its own worktree. The Ledger's three tiers (draft → milestone commits → consolidated roadmap) map onto the three nesting levels. Full treatment in [docs/concepts.md](docs/concepts.md).
+They **nest**: GitHub triage is Tend ∘ Converge (pick the next ticket, classify it, dispatch a Converge loop to a test gate); OEM research is Sweep ∘ Converge (each item is itself a multi-step build that must converge). Because a `loop` and a `dag` are both `Job`s, dispatch is just a body that selects a sub-`Job` — wrap it in `isolated()` when each needs its own worktree. The Ledger's three tiers (draft → milestone commits → consolidated roadmap) map onto the three nesting levels.
+
+There is no `converge()` / `sweep()` / `tend()` in the API — they are patterns, not primitives. Copy-paste recipes for each (and the nested dispatch) are in [docs/patterns.md](docs/patterns.md); the full treatment is in [docs/concepts.md](docs/concepts.md).
 
 ## Budget, records, resume
 
