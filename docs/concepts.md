@@ -93,15 +93,19 @@ runs the Job, and lands its work back on pass.
 The Ledger composes through the nesting via the **land-back merge boundary**, and
 the memory granularity *matches* the nesting level:
 
-| tier | granularity | nesting level | mechanism |
+| tier | granularity | nesting level | where it lives |
 |---|---|---|---|
-| **draft** | within an iteration | a sub-loop's attempts | `.loops/prompt.md` |
-| **milestone commit** | a converged unit | a sub-loop, merged back | `commit` |
-| **consolidated roadmap** | the whole process | the Tend loop's state | `consolidateJob` → `ROADMAP.md` |
+| **draft** | within an iteration | a sub-loop's attempts | `.loops/prompt.md`, transient → a commit body |
+| **milestone commit** | a converged unit | a sub-loop, merged back | a commit body |
+| **consolidated roadmap** | the whole process | the Tend loop's state | a commit body (`consolidateJob`) |
 
-A Tend loop grounds on **milestones** (each = a sub-loop that converged and landed
-back — it sees outcomes, not raw sub-iterations); the sub-loop grounds on its own
-**drafts**. The merge is where a sub-loop's work becomes visible to the process.
+All three ultimately live in **git commit bodies** — a prompt (the why) welded to a
+diff, read back by grounding. The draft is only a *write-ahead buffer* that
+crystallises into the next commit body and resets; milestones are commit bodies;
+the roadmap is a commit body (an empty-tree commit). Nothing durable is a side
+file. A Tend loop grounds on **milestones** (each = a sub-loop that converged and
+landed back — it sees outcomes, not raw sub-iterations); the sub-loop grounds on
+its own **draft**. The merge is where a sub-loop's work becomes visible.
 
 ## Scaling the read: recent-N → retrieval → consolidation
 
@@ -116,10 +120,12 @@ As the log grows, *reading* it has to scale, and there is a progression:
   full **way** — the diff welded to the why, the alternatives ruled out, the
   constraints that held, and what not to repeat. (Same noisy log: 5/6.) Use it for
   long-horizon (Sweep/Tend) work; recent-N is the wrong default there.
-- **consolidation** (`consolidateJob` → `ROADMAP.md`) — fold milestones into a
-  rolling synthesised roadmap (done / current state / open threads). The *coarse*
-  tier: synthesised state, not found commits. Where retrieval *finds* the relevant
-  past commit, consolidation *maintains* the process's working state — what a Tend
+- **consolidation** (`consolidateJob`) — fold milestones into a rolling synthesised
+  roadmap (done / current state / open threads), committed as a **commit body** (an
+  empty-tree commit), so grounding surfaces it like any milestone; the prior roadmap
+  is read back from the last consolidation commit. The *coarse* tier: synthesised
+  state, not found commits. Where retrieval *finds* the relevant past commit,
+  consolidation *maintains* the process's working state — what a Tend
   loop needs to stay coherent over an unbounded horizon, and emergent across many
   commits rather than held in any one. The Tend benchmark is where it is measured
   and tuned: how often to consolidate, how tight the roadmap, whether to retrieve

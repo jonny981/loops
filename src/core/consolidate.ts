@@ -6,17 +6,18 @@
  * commits are the mid level and the draft is the fine level, so multi-granularity
  * falls out of git rather than a new tier to maintain.
  *
- * It is a committed file (`ROADMAP.md` by default), so it is durable and the
- * retrieval grounding can surface it like any other commit. Small on purpose: one
- * model call that MERGES new milestones into the prior roadmap, not a changelog.
+ * The roadmap is a COMMIT BODY, not a tracked file — the same shape as every other
+ * memory in loops (a prompt, the "way", welded to a diff and read back by
+ * grounding). Each consolidation commits the updated roadmap as the body of an
+ * empty-tree commit, so grounding and retrieval surface it like any milestone; the
+ * prior roadmap is read back from the last consolidation commit's body. Small on
+ * purpose: one model call that MERGES new milestones into the prior roadmap, not a
+ * changelog.
  */
-
-import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import type { Job, JobContext, Outcome } from './types.ts';
 import type { EngineRef } from '../engines/engine.ts';
-import { log, stageAll, commit } from './git.ts';
+import { log, commit } from './git.ts';
 import { LoopError } from './errors.ts';
 
 const ROADMAP_SYSTEM =
@@ -78,42 +79,36 @@ export async function consolidate(
 
 export interface ConsolidateJobConfig extends ConsolidateOptions {
   label?: string;
-  /** Roadmap file, relative to the workspace. Default `ROADMAP.md`. */
-  file?: string;
-  /** Commit subject. Default `docs(ledger): roadmap`. */
+  /** Commit subject; also how the prior roadmap is found. Default `consolidate: roadmap`. */
   subject?: string;
 }
 
 /**
- * Consolidate and commit the roadmap. Reads the prior roadmap from `file`, folds
- * in the recent ledger, writes it back, and commits — so the coarse memory is
- * durable and grounded-on like any milestone.
+ * Consolidate and commit the roadmap AS A COMMIT BODY. Reads the prior roadmap from
+ * the last consolidation commit's body, folds in the recent ledger, and commits the
+ * updated roadmap as the body of an empty-tree commit — so the coarse memory is
+ * durable and grounded-on like any milestone, never a tracked file.
  */
 export function consolidateJob(config: ConsolidateJobConfig = {}): Job {
   return async (ctx) => {
     const label = config.label ?? 'consolidate';
+    const subject = config.subject ?? 'consolidate: roadmap';
     const path = [...ctx.path];
-    const file = config.file ?? 'ROADMAP.md';
-    const abs = join(ctx.workspace.dir, file);
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
     try {
-      let prior: string | undefined;
-      try {
-        prior = readFileSync(abs, 'utf8');
-      } catch {
-        /* first roadmap */
-      }
+      // The prior roadmap is the body of the most recent consolidation commit —
+      // the roadmap lives in git's memory (commit bodies), not a tracked file.
+      const recent = await log({ cwd: ctx.workspace.dir, max: 50, signal: ctx.signal });
+      const prior = recent.find((r) => r.subject === subject)?.body || undefined;
       const roadmap = await consolidate(ctx, { ...config, prior });
-      writeFileSync(abs, `${roadmap}\n`);
-      await stageAll({ cwd: ctx.workspace.dir, signal: ctx.signal });
       const sha = await commit(
-        { subject: config.subject ?? 'docs(ledger): roadmap', body: '' },
+        { subject, body: roadmap, allowEmpty: true },
         { cwd: ctx.workspace.dir, signal: ctx.signal },
       );
       const outcome: Outcome = {
         status: 'pass',
         summary: sha ? `roadmap ${sha.slice(0, 7)}` : 'roadmap unchanged',
-        data: { sha: sha ?? null, file },
+        data: { sha: sha ?? null },
       };
       ctx.emit({ kind: 'job:end', ts: Date.now(), path, label, outcome });
       return outcome;

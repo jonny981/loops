@@ -172,7 +172,7 @@ Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is th
   agentJob({ label: 'work', prompt: 'Continue the task.', ground: true });
   ```
 
-- **Scaling the read — retrieval, then consolidation.** Recent-N grounding is the default, but on a long, noisy log the relevant commit falls out of the window. `ground: { retrieve: true }` has a cheap model select the relevant commits by subject instead — use it for long-horizon work. For an indefinite process, `consolidateJob` folds milestones into a rolling `ROADMAP.md` (the coarse memory tier).
+- **Scaling the read — retrieval, then consolidation.** Recent-N grounding is the default, but on a long, noisy log the relevant commit falls out of the window. `ground: { retrieve: true }` has a cheap model select the relevant commits by subject instead — use it for long-horizon work. For an indefinite process, `consolidateJob` folds milestones into a rolling roadmap, committed as a commit body (the coarse memory tier — grounded like any milestone, never a side file).
 
   ```ts
   agentJob({ label: 'work', prompt: 'Continue.', ground: { retrieve: true } });
