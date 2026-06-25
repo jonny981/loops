@@ -154,7 +154,7 @@ agentCheck({
 
 Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is the core that closes the gap: the loop writes its reasoning to git as it works and reads it back before the next turn. No parallel database — git _is_ the memory. (`Ledger` is the engine; "the ledger" is the commit log it reads and writes.)
 
-- **The draft — write the way.** As agents work they append the _why_ (intent, alternatives, constraints) to a durable, shared file (`.loops/progress.md`, kept out of git). It survives context decay over a long task and is shared across a fanned-out team, so no single agent has to remember everything at commit time.
+- **The draft — write the prompt for the next agent.** As agents work they append the _why_ (intent, alternatives, constraints) to a durable, shared file (`.loops/prompt.md`, kept out of git). It is not a backward progress log: grounding injects it into the next context's prompt, and it becomes the commit body at the next milestone. It survives context decay over a long task and is shared across a fanned-out team, so no single agent has to remember everything at commit time.
 
   ```ts
   appendDraft(ctx.workspace, { heading: 'Why', body: 'tried a token refresh; the gate still failed on scope' });

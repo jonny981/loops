@@ -46,9 +46,9 @@ describe('grounded agentJob (read automation)', () => {
     expect(prompt).toContain('the ledger');
     expect(prompt).toContain('feat: prior milestone');
     expect(prompt).toContain('shipped A');
-    expect(prompt).toContain('why so far');
+    expect(prompt).toContain('The prompt so far');
     expect(prompt).toContain('mid-run: trying approach B');
-    expect(prompt).toContain('Record your reasoning');
+    expect(prompt).toContain('Write the prompt for whoever continues this');
     // the caller's prompt is still there, last
     expect(prompt).toContain('CONTINUE THE TASK');
     expect(prompt.indexOf('the ledger')).toBeLessThan(prompt.indexOf('CONTINUE THE TASK'));

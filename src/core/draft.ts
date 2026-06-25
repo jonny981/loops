@@ -1,17 +1,21 @@
 /**
- * The draft — loops' staged commit body, the write-ahead log for the "way".
+ * The draft (`.loops/prompt.md`) — the prompt being written for whoever continues
+ * this work. It is forward-looking, not a backward progress log: grounding injects
+ * it verbatim into the next context's prompt (a later iteration, or a downstream
+ * node), and `commitJob` crystallises it into the commit body. Same artifact, two
+ * stages — the prompt for the next reader, then the permanent record.
  *
- * `commitJob` writes the way welded to the diff, but the way cannot be trusted
- * to survive in a single agent's head: context decays over a long unit of work,
- * and when work fans out to sub-agents no one holds all the reasoning at the
- * end. So the why is captured durably, AS IT HAPPENS, in a file every agent on a
- * team reads and appends to. `commitJob` composes the commit body FROM this
- * file, then clears it at the boundary (crystallise, then reset).
+ * The why cannot be trusted to survive in a single agent's head: context decays
+ * over a long unit of work, and when work fans out to sub-agents no one holds all
+ * the reasoning at the end. So the why is captured durably, AS IT HAPPENS, in a
+ * file every agent on a team reads and appends to. `commitJob` composes the commit
+ * body FROM this file, then clears it at the boundary (crystallise, then reset).
  *
- * This is Tandem's progress.md, minus the hook scaffolding (the loop enforces
- * the commit boundary the Stop/guard hooks were simulating), plus worktree
- * isolation: the draft lives in the workspace, so concurrent teams get isolated
- * drafts automatically while sub-agents within a team share one.
+ * This is Tandem's progress.md reframed as the next agent's prompt, minus the hook
+ * scaffolding (the loop enforces the commit boundary the Stop/guard hooks were
+ * simulating), plus worktree isolation: the draft lives in the workspace, so
+ * concurrent teams get isolated drafts automatically while sub-agents within a
+ * team share one.
  *
  * The whole `.loops/` scratch dir is kept out of git (self-managed .gitignore),
  * so `commitJob`'s `git add -A` never stages the draft. The draft is the draft;
@@ -31,7 +35,7 @@ import { join, dirname } from 'node:path';
 import type { Workspace } from './types.ts';
 
 const DRAFT_DIR = '.loops';
-const DRAFT_FILE = 'progress.md';
+const DRAFT_FILE = 'prompt.md';
 
 /** Absolute path to a workspace's draft (the staged commit body). */
 export function draftPath(workspace: Workspace): string {

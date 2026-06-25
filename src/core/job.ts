@@ -93,15 +93,18 @@ async function withGrounding(
   if (opts.includeDraft !== false) {
     const draft = readDraft(ctx.workspace);
     if (draft)
-      parts.push(`## Work in progress this run (the draft — why so far)\n\n${draft}`);
+      parts.push(`## The prompt so far (what earlier work left for you)\n\n${draft}`);
   }
 
   if (opts.recordInstruction !== false) {
     parts.push(
-      `## Record your reasoning\n` +
-        `As you work, append the why (intent, alternatives, constraints, what ` +
-        `changed) to \`${draftPath(ctx.workspace)}\`. It becomes the commit body ` +
-        `at the next milestone.`,
+      `## Write the prompt for whoever continues this\n` +
+        `As you work, append the why — intent, alternatives you ruled out and why, ` +
+        `constraints you discovered, what you changed — to \`${draftPath(ctx.workspace)}\`. ` +
+        `This is not a progress log: the next agent to touch this work (a later ` +
+        `iteration, or a downstream node) reads it as the start of their prompt, and ` +
+        `it becomes the commit body at the next milestone. Write it for them — what ` +
+        `they need so they do not repeat your dead ends or break your decisions.`,
     );
   }
 
