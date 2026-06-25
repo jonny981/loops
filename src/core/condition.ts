@@ -25,6 +25,7 @@ import { execa } from 'execa';
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
 import { assertBudget } from './budget.ts';
+import { resolveSystem, type AgentDef } from './agent.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -248,6 +249,14 @@ export interface AgentCheckConfig {
   threshold?: number;
   /** Small/cheap model recommended. A bare string — provider-agnostic. */
   model?: string;
+  /**
+   * Give the judge a persona — an `AgentDef` whose resolved system (persona +
+   * skills) is prepended to the validator's scoring instructions, so a reviewer
+   * can be a named specialist (e.g. an adversarial reviewer) instead of an
+   * anonymous yes/no. The validator's output contract stays authoritative (it
+   * comes last); `model` falls back to the agent's `model`. Mirrors `agentJob`.
+   */
+  agent?: AgentDef;
   /** Engine for validation: a registered name, your own `Engine`, or default. */
   engine?: EngineRef;
   /**
@@ -453,16 +462,19 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       `EVIDENCE:\n${contextText}\n\n` +
       `Return the JSON ${dimensions ? 'scores' : 'verdict'} now.`;
 
+    // The validator's output contract stays authoritative (last); an optional
+    // agent persona is prepended so the judge has a stance, not just a question.
+    const baseSystem = dimensions ? validatorScoreSystem(dimensions) : VALIDATOR_SYSTEM;
+    const system = config.agent ? `${resolveSystem(config.agent)}\n\n${baseSystem}` : baseSystem;
+
     let result;
     try {
       assertBudget(ctx); // count validator calls against the run's token budget
       result = await engine.run(
         {
           prompt,
-          system: dimensions
-            ? validatorScoreSystem(dimensions)
-            : VALIDATOR_SYSTEM,
-          model: config.model,
+          system,
+          model: config.model ?? config.agent?.model,
           maxTokens: config.maxTokens ?? 512,
         },
         (e) => {

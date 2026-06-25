@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import {
   run,
   agentJob,
+  agentCheck,
+  gateJob,
   defineAgent,
   defineSkill,
   fromFile,
@@ -85,5 +87,29 @@ describe('AgentDef', () => {
     const req = cap.req();
     expect(req.system).toBe('override system');
     expect(req.model).toBe('sonnet');
+  });
+
+  it('agentCheck takes a persona from an AgentDef, keeping the validator contract last', async () => {
+    const repo = await tmpRepo();
+    let seenSystem = '';
+    let seenModel: string | undefined;
+    const engine = new MockEngine((r: AgentRequest) => {
+      seenSystem = r.system ?? '';
+      seenModel = r.model;
+      return JSON.stringify({ verdict: 'yes', confidence: 0.95, reason: 'ok' });
+    });
+    const reviewer = defineAgent({
+      name: 'reviewer',
+      system: 'You are an adversarial reviewer.',
+      model: 'haiku',
+      skills: [defineSkill({ name: 'refute', instructions: 'Try to REFUTE the claim.' })],
+    });
+    const opts: RunOptions = { engine: 'mock', engines: { mock: () => engine }, cwd: repo };
+    await run(gateJob('review', agentCheck({ agent: reviewer, question: 'Is it correct?' })), opts);
+
+    expect(seenSystem).toContain('adversarial reviewer'); // persona
+    expect(seenSystem).toContain('Try to REFUTE the claim.'); // skill folded in
+    expect(seenSystem.indexOf('adversarial reviewer')).toBeLessThan(seenSystem.indexOf('JSON')); // validator contract comes last
+    expect(seenModel).toBe('haiku'); // model falls back to the agent's
   });
 });
