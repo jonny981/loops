@@ -56,7 +56,8 @@ const K = Number(process.env.BENCH_K ?? 2);
 const MODEL = process.env.BENCH_MODEL || 'sonnet';
 const CACHE = process.env.BENCH_SWE_CACHE || join(tmpdir(), 'loops-swe-cache');
 const OUT_DIR = process.env.BENCH_SWE_OUT || join(tmpdir(), 'loops-swe-out');
-const ENGINE = 'claude-cli';
+// claude-cli locally; set BENCH_ENGINE=agent-sdk on a headless box (API-key auth).
+const ENGINE = process.env.BENCH_ENGINE || 'claude-cli';
 
 type Arm = 'off' | 'on';
 
