@@ -100,13 +100,32 @@ NOT import loops — raw `claude -p` per node — in two modes (`bench/baseline.
 value is ergonomics, not capability.** Stated plainly because it is true. The
 caveat that keeps it from being a flat loss: this is the easiest case for the
 baseline — a one-commit, 1593-char log, cheap to paste and impossible to miss.
-loops' actual differentiators (retrieval, a bounded context budget, automatic
-per-node injection) do nothing when the log is one commit. The decisive open test
-is a long, noisy log where the dump is too big to paste and the why is buried:
-does `ground: {retrieve: true}` (a cheap model selecting the relevant commits)
-beat naive dump there? That separates capability from convenience; until it is
-run, loops' honest claim on cross-node memory is "the automatic, bounded substrate
-for deep graphs," not "the only way."
+
+### Noisy log: retrieval vs recent-N vs naive dump
+
+The follow-up buries the SSv1 foundation under 15 unrelated commits, so it falls
+out of recent-N's default 10-commit window (`bench/graph.ts` BENCH_NOISE, plus
+`bench/baseline.ts` for the dump arm). Haiku, 6 trials, contract task:
+
+| approach | held | reading |
+|---|---|---|
+| loops recent-N (default) | **0/6** | the buried contract is outside the window — total failure |
+| loops retrieval (`{retrieve:true}`) | 5/6 (83%) | a cheap model finds it by subject — rescues the default |
+| vanilla, naive full-log dump | **6/6 (100%)** | 16 commits still fit; pasting all reliably includes it |
+
+Two honest reads at once. **The win is internal: retrieval (83%) vs recent-N (0%)
+— loops' default grounding is the wrong choice for a long/noisy log, and one flag
+fixes it.** But **retrieval did not beat brute-force dump (83% vs 100%)**, so the
+capability claim over a vanilla orchestrator is still unproven: at 16 commits the
+whole log fits in context, so retrieval's only edge (selectivity to avoid bloat)
+does not matter, and it costs more (70k vs 63k tokens) with its own failure mode
+(the selection model can pick wrong). Retrieval's real advantage appears only when
+the log is too big to paste — hundreds of commits — which is precisely the **Tend**
+regime, untested here. The decisive capability test is 200 noise commits, not 15.
+
+So loops' honest claim on cross-node memory remains "the automatic, bounded,
+tunable substrate for long-horizon graphs" (recent-N → retrieval → consolidation
+as the log grows), not "the only way" — until the dump-infeasible scale is run.
 
 ## SWE-bench detail (the comparable number)
 
