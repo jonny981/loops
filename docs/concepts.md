@@ -97,7 +97,7 @@ the memory granularity *matches* the nesting level:
 |---|---|---|---|
 | **draft** | within an iteration | a sub-loop's attempts | `.loops/prompt.md` |
 | **milestone commit** | a converged unit | a sub-loop, merged back | `commit` |
-| **consolidated roadmap** | the whole process | the Tend loop's state | `consolidateJob` → `LEDGER.md` |
+| **consolidated roadmap** | the whole process | the Tend loop's state | `consolidateJob` → `ROADMAP.md` |
 
 A Tend loop grounds on **milestones** (each = a sub-loop that converged and landed
 back — it sees outcomes, not raw sub-iterations); the sub-loop grounds on its own
@@ -116,7 +116,7 @@ As the log grows, *reading* it has to scale, and there is a progression:
   full **way** — the diff welded to the why, the alternatives ruled out, the
   constraints that held, and what not to repeat. (Same noisy log: 5/6.) Use it for
   long-horizon (Sweep/Tend) work; recent-N is the wrong default there.
-- **consolidation** (`consolidateJob` → `LEDGER.md`) — fold milestones into a
+- **consolidation** (`consolidateJob` → `ROADMAP.md`) — fold milestones into a
   rolling synthesised roadmap (done / current state / open threads). The *coarse*
   tier: synthesised state, not found commits. Where retrieval *finds* the relevant
   past commit, consolidation *maintains* the process's working state — what a Tend

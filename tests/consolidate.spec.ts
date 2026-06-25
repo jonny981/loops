@@ -28,8 +28,8 @@ describe('consolidate (roadmap, the coarse memory)', () => {
     expect(outcome.status).toBe('pass');
 
     // the roadmap was written and committed
-    expect(existsSync(join(repo, 'LEDGER.md'))).toBe(true);
-    expect(readFileSync(join(repo, 'LEDGER.md'), 'utf8')).toContain('auth + tokens');
+    expect(existsSync(join(repo, 'ROADMAP.md'))).toBe(true);
+    expect(readFileSync(join(repo, 'ROADMAP.md'), 'utf8')).toContain('auth + tokens');
     const [top] = await log({ cwd: repo, max: 1 });
     expect(top?.subject).toBe('docs(ledger): roadmap');
   });

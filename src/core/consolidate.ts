@@ -6,7 +6,7 @@
  * commits are the mid level and the draft is the fine level, so multi-granularity
  * falls out of git rather than a new tier to maintain.
  *
- * It is a committed file (`LEDGER.md` by default), so it is durable and the
+ * It is a committed file (`ROADMAP.md` by default), so it is durable and the
  * retrieval grounding can surface it like any other commit. Small on purpose: one
  * model call that MERGES new milestones into the prior roadmap, not a changelog.
  */
@@ -78,7 +78,7 @@ export async function consolidate(
 
 export interface ConsolidateJobConfig extends ConsolidateOptions {
   label?: string;
-  /** Roadmap file, relative to the workspace. Default `LEDGER.md`. */
+  /** Roadmap file, relative to the workspace. Default `ROADMAP.md`. */
   file?: string;
   /** Commit subject. Default `docs(ledger): roadmap`. */
   subject?: string;
@@ -93,7 +93,7 @@ export function consolidateJob(config: ConsolidateJobConfig = {}): Job {
   return async (ctx) => {
     const label = config.label ?? 'consolidate';
     const path = [...ctx.path];
-    const file = config.file ?? 'LEDGER.md';
+    const file = config.file ?? 'ROADMAP.md';
     const abs = join(ctx.workspace.dir, file);
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
     try {
