@@ -37,6 +37,8 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 
+import { addNoise } from './noise.ts';
+
 import {
   run,
   sequence,
@@ -54,6 +56,12 @@ const OUT = resolveIn(process.env.BENCH_OUT || 'results-graph.json');
 const MODEL = process.env.BENCH_MODEL || undefined;
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 1);
 const ENGINE = 'claude-cli';
+/** Bury the foundation commit under N unrelated commits (the noisy-log test). */
+const NOISE = Number(process.env.BENCH_NOISE ?? 0);
+/** ON-arm grounding mode: 'recent' (recent-N) or 'retrieve' (cheap model selects). */
+const GROUND = (process.env.BENCH_GROUND || 'recent') as 'recent' | 'retrieve';
+/** Which arms to run (default both). e.g. BENCH_ARMS=on for the ON variants only. */
+const ARMS = (process.env.BENCH_ARMS || 'off,on').split(',') as Arm[];
 
 type Arm = 'off' | 'on';
 
@@ -89,17 +97,22 @@ async function prepareRepo(task: GraphTask): Promise<string> {
   await git(['add', '-A']);
   // The seed commit body IS node 1's "way" — the rationale ON grounds on, OFF ignores.
   await git(['commit', '-q', '-F', '-'], task.foundation_why);
+  // Optionally bury it under unrelated commits — the noisy-log test. With NOISE>10
+  // the foundation falls out of recent-N's window, so only retrieval can find it.
+  if (NOISE > 0) await addNoise(dir, NOISE);
   return dir;
 }
 
-/** The node chain: each node = an agent turn then a commit. Only `ground` varies. */
+/** The node chain: each node = an agent turn then a commit. Only grounding varies. */
 function chainJob(task: GraphTask, arm: Arm): Job {
+  // ON grounds; GROUND picks recent-N vs retrieval (a cheap model selects commits).
+  const ground = arm === 'on' ? (GROUND === 'retrieve' ? { retrieve: true } : true) : false;
   const steps: Job[] = [];
   for (const node of task.nodes) {
     steps.push(
       agentJob({
         label: node.name,
-        ground: arm === 'on', // ← the single isolated variable: read the upstream why
+        ground,
         prompt: node.prompt,
         outcome: (text) => ({ status: 'pass', summary: text.slice(0, 200) }),
       }),
@@ -141,11 +154,13 @@ async function main(): Promise<void> {
   console.log(
     `Graph A/B — "${task.name}" · ${task.nodes.length}-node chain × ${TRIALS} trial(s) · ` +
       `engine ${ENGINE}, model ${MODEL ?? '(cli default)'}\n` +
-      `nodes: ${task.nodes.map((n) => n.name).join(' → ')} (seeded foundation carries the why)`,
+      `nodes: ${task.nodes.map((n) => n.name).join(' → ')}` +
+      (NOISE > 0 ? ` · NOISE ${NOISE} commits · grounding=${GROUND}` : '') +
+      ` · arms=${ARMS.join(',')}`,
   );
 
   const arms: { arm: Arm; trials: TrialResult[] }[] = [];
-  for (const arm of ['off', 'on'] as Arm[]) {
+  for (const arm of ARMS) {
     const trials: TrialResult[] = [];
     for (let t = 0; t < TRIALS; t++) {
       process.stdout.write(`  ${arm.toUpperCase().padEnd(3)} trial ${t + 1}/${TRIALS} … `);

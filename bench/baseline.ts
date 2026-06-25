@@ -23,6 +23,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 
+import { addNoise } from './noise.ts';
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TASK_DIR = join(HERE, 'graph-tasks/stable-store-contract');
 
@@ -30,6 +32,7 @@ type Mode = 'nomem' | 'gitdump';
 const MODE = (process.env.BENCH_MODE || 'gitdump') as Mode;
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 10);
 const MODEL = process.env.BENCH_MODEL || 'haiku';
+const NOISE = Number(process.env.BENCH_NOISE ?? 0);
 
 interface Task {
   gate: string;
@@ -49,6 +52,7 @@ async function prepareRepo(): Promise<string> {
   await git(['config', 'user.name', 'loops bench']);
   await git(['add', '-A']);
   await git(['commit', '-q', '-F', '-'], task.foundation_why);
+  if (NOISE > 0) await addNoise(dir, NOISE);
   return dir;
 }
 
