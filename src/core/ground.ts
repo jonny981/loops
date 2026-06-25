@@ -79,7 +79,14 @@ export async function groundingText(
 export interface RetrieveOptions {
   /** The task/intent to find relevant prior commits for. */
   intent: string;
-  /** How many recent commits to offer as candidates. Default 50. */
+  /**
+   * The recall window: how many recent commits to offer the selector as
+   * candidates. A relevant commit OLDER than this is invisible — retrieval is not
+   * unbounded, it just has a bigger window than recent-N. Reading subjects is
+   * cheap, so this can be generous. For a log longer than any practical window,
+   * run consolidation: the rolling roadmap commit stays in-window and indexes the
+   * old history. Default 100.
+   */
   candidates?: number;
   /** Max commits to inject. Default 8. */
   max?: number;
@@ -121,7 +128,7 @@ export async function retrieveLedger(
 ): Promise<string> {
   const records = await log({
     cwd: ctx.workspace.dir,
-    max: opts.candidates ?? 50,
+    max: opts.candidates ?? 100,
     signal: ctx.signal,
   });
   if (!records.length) return '';
