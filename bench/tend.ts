@@ -77,10 +77,13 @@ async function triageStats(dir: string): Promise<{ distinct: number; total: numb
 }
 
 function parsePicked(text: string): Outcome {
-  const m = /PICKED:\s*(item-\d+)/i.exec(text);
-  return m
-    ? { status: 'pass', summary: m[1]!, data: { item: m[1] } }
-    : { status: 'fail', summary: 'no PICKED line', data: { item: 'unknown' } };
+  // Prefer the explicit PICKED line (allow markdown around it); fall back to the
+  // last item id mentioned, since the pick is usually stated last.
+  const explicit = /PICKED:\s*\**\s*(item-\d{2})/i.exec(text)?.[1];
+  const id = (explicit ?? (text.match(/item-\d{2}/gi) ?? []).pop())?.toLowerCase();
+  return id
+    ? { status: 'pass', summary: id, data: { item: id } }
+    : { status: 'fail', summary: 'no item parsed', data: { item: 'unknown' } };
 }
 
 const ground = (mode: Mode) =>
@@ -91,12 +94,13 @@ function tendLoop(mode: Mode): Job {
     label: 'triage',
     ground: ground(mode),
     prompt: () =>
-      `You are triaging a backlog. The FULL backlog (it does not change):\n${BACKLOG}\n\n` +
-      `You have been working through it over many turns. Triage exactly ONE item you ` +
-      `have NOT already triaged. Your prior triage decisions are in the ledger above — ` +
-      `read them and pick an item that is not there yet, choosing by importance.\n\n` +
-      `Output the FIRST line as exactly:  PICKED: <id>\n` +
-      `then one line: the priority (high/med/low) and the action.`,
+      `You are triaging a backlog. The FULL backlog (it never changes):\n${BACKLOG}\n\n` +
+      `Your prior triage decisions appear in the ledger above (lines like ` +
+      `"triage: item-NN"). Pick exactly ONE item that is NOT already in your ledger, ` +
+      `choosing the most important one remaining.\n\n` +
+      `Respond with EXACTLY these two lines and nothing else:\n` +
+      `PICKED: item-NN\n` +
+      `ACTION: <high|med|low> — <one-line action>`,
     outcome: (text) => parsePicked(text),
   });
   const commitStep = commitJob({

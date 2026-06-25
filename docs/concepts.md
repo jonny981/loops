@@ -111,8 +111,11 @@ As the log grows, *reading* it has to scale, and there is a progression:
   on a long/noisy log**: the load-bearing commit falls out of the window. (Noisy
   log: 0/6.)
 - **retrieval** (`ground: { retrieve: true }`) — a cheap model selects the
-  *relevant* commits by subject, reaching past the window. (Same noisy log: 5/6.)
-  Use it for long-horizon (Sweep/Tend) work; recent-N is the wrong default there.
+  *relevant* commits by subject (a set, up to 8 by default), reaching past the
+  window. What it injects is not just a diff: each retrieved commit carries the
+  full **way** — the diff welded to the why, the alternatives ruled out, the
+  constraints that held, and what not to repeat. (Same noisy log: 5/6.) Use it for
+  long-horizon (Sweep/Tend) work; recent-N is the wrong default there.
 - **consolidation** (`consolidateJob` → `LEDGER.md`) — fold milestones into a
   rolling synthesised roadmap (done / current state / open threads). The *coarse*
   tier: synthesised state, not found commits. Where retrieval *finds* the relevant
