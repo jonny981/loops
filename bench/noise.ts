@@ -26,12 +26,29 @@ const NOISE_DECISIONS: { subject: string; body: string }[] = [
   { subject: 'ci: run tests on push', body: '## Why\nBroken main slipped through twice last month.' },
 ];
 
-/** Add N noise commits to a repo (cycling the list), each touching DECISIONS.md. */
-export async function addNoise(dir: string, n: number): Promise<void> {
+const FILLER =
+  'We weighed the alternatives, considered the blast radius, and chose the option ' +
+  'with the least operational risk given the current constraints and the team bandwidth. ';
+
+/** Pad a body to ~bodyChars with plausible filler, so the log can be made large. */
+function padBody(body: string, bodyChars: number): string {
+  if (bodyChars <= 0) return body;
+  let out = body;
+  while (out.length < bodyChars) out += '\n' + FILLER;
+  return out.slice(0, bodyChars);
+}
+
+/**
+ * Add N noise commits to a repo (cycling the list), each touching DECISIONS.md.
+ * `bodyChars` fattens each body — at scale the full log becomes too big to paste,
+ * which is the regime where retrieval beats a naive dump.
+ */
+export async function addNoise(dir: string, n: number, bodyChars = 0): Promise<void> {
   for (let i = 0; i < n; i++) {
     const d = NOISE_DECISIONS[i % NOISE_DECISIONS.length]!;
-    appendFileSync(join(dir, 'DECISIONS.md'), `\n## ${d.subject}\n\n${d.body}\n`);
+    const body = padBody(d.body, bodyChars);
+    appendFileSync(join(dir, 'DECISIONS.md'), `\n## ${d.subject}\n\n${body}\n`);
     await execa('git', ['add', '-A'], { cwd: dir });
-    await execa('git', ['commit', '-q', '-F', '-'], { cwd: dir, input: `${d.subject}\n\n${d.body}` });
+    await execa('git', ['commit', '-q', '-F', '-'], { cwd: dir, input: `${d.subject}\n\n${body}` });
   }
 }

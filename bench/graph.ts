@@ -58,6 +58,8 @@ const TRIALS = Number(process.env.BENCH_TRIALS ?? 1);
 const ENGINE = 'claude-cli';
 /** Bury the foundation commit under N unrelated commits (the noisy-log test). */
 const NOISE = Number(process.env.BENCH_NOISE ?? 0);
+/** Chars per noise commit body — fatten to make the full log too big to paste. */
+const NOISE_SIZE = Number(process.env.BENCH_NOISE_SIZE ?? 0);
 /** ON-arm grounding mode: 'recent' (recent-N) or 'retrieve' (cheap model selects). */
 const GROUND = (process.env.BENCH_GROUND || 'recent') as 'recent' | 'retrieve';
 /** Which arms to run (default both). e.g. BENCH_ARMS=on for the ON variants only. */
@@ -99,7 +101,7 @@ async function prepareRepo(task: GraphTask): Promise<string> {
   await git(['commit', '-q', '-F', '-'], task.foundation_why);
   // Optionally bury it under unrelated commits — the noisy-log test. With NOISE>10
   // the foundation falls out of recent-N's window, so only retrieval can find it.
-  if (NOISE > 0) await addNoise(dir, NOISE);
+  if (NOISE > 0) await addNoise(dir, NOISE, NOISE_SIZE);
   return dir;
 }
 

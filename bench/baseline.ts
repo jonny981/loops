@@ -33,6 +33,8 @@ const MODE = (process.env.BENCH_MODE || 'gitdump') as Mode;
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 10);
 const MODEL = process.env.BENCH_MODEL || 'haiku';
 const NOISE = Number(process.env.BENCH_NOISE ?? 0);
+const NOISE_SIZE = Number(process.env.BENCH_NOISE_SIZE ?? 0);
+let dumpChars = 0; // size of the pasted git log (the cost the dump pays)
 
 interface Task {
   gate: string;
@@ -52,7 +54,7 @@ async function prepareRepo(): Promise<string> {
   await git(['config', 'user.name', 'loops bench']);
   await git(['add', '-A']);
   await git(['commit', '-q', '-F', '-'], task.foundation_why);
-  if (NOISE > 0) await addNoise(dir, NOISE);
+  if (NOISE > 0) await addNoise(dir, NOISE, NOISE_SIZE);
   return dir;
 }
 
@@ -64,6 +66,7 @@ async function runNode(dir: string, prompt: string): Promise<void> {
     full =
       `Project history (most recent first), for context:\n\n${log.stdout}\n\n` +
       `---\n\n${prompt}`;
+    dumpChars = Math.max(dumpChars, full.length); // the cost the dump pays per node
   }
   await execa(
     'claude',
@@ -91,7 +94,8 @@ async function runTrial(): Promise<boolean> {
 async function main(): Promise<void> {
   console.log(
     `Head-to-head baseline — vanilla orchestrator (NO loops), mode=${MODE}, ` +
-      `model=${MODEL}, ${TRIALS} trials\nnodes: ${task.nodes.map((n) => n.name).join(' → ')}`,
+      `model=${MODEL}, ${TRIALS} trials, noise=${NOISE}×${NOISE_SIZE || 'small'}\n` +
+      `nodes: ${task.nodes.map((n) => n.name).join(' → ')}`,
   );
   let held = 0;
   for (let t = 0; t < TRIALS; t++) {
@@ -100,7 +104,11 @@ async function main(): Promise<void> {
     if (ok) held++;
     console.log(ok ? 'INVARIANT HELD' : 'fence broken');
   }
-  console.log(`\n${MODE} → ${((held / TRIALS) * 100).toFixed(0)}% held (${held}/${TRIALS})`);
+  const dumpTok = Math.round(dumpChars / 4); // ~4 chars/token
+  console.log(
+    `\n${MODE} → ${((held / TRIALS) * 100).toFixed(0)}% held (${held}/${TRIALS})` +
+      (MODE === 'gitdump' ? `  ·  pasted log ≈ ${dumpChars.toLocaleString()} chars (~${dumpTok.toLocaleString()} tokens) per node` : ''),
+  );
 }
 
 main().catch((e) => {
