@@ -25,13 +25,24 @@ attempt 2 has prior reasoning to ground on.
 | convergence suite (haiku, 40 runs) | 100% | 100% | +0pp | +72% |
 | SWE-bench Lite requests (sonnet, n=6) | 100% (6/6) | 100% (6/6) | +0pp | +58% |
 | **SWE-bench Lite requests (haiku, n=6)** | **67% (4/6)** | **100% (6/6)** | **+33pp** | **+6%** |
-| graph cross-node (haiku, 3-node, n=10) | 70% (7/10) | 80% (8/10) | +10pp (within noise) | +33% |
+| graph cross-node, judgment fence (haiku, n=10) | 70% (7/10) | 80% (8/10) | +10pp (within noise) | +33% |
+| **graph cross-node, contract (haiku, n=10)** | **0% (0/10)** | **90% (9/10)** | **+90pp** | **+35%** |
 
 The first three are **ceiling effects**: the model solves everything in one
-attempt, both arms max out, the Ledger only adds cost. The fourth opens headroom
-— a weaker model on real bugs — and the Ledger converts it. The fifth (cross-node)
-is directionally positive but **inconclusive at n=10** — a single-instance gap (see
-below).
+attempt, both arms max out, the Ledger only adds cost. The rest open headroom and
+the Ledger converts it: a weaker model recovering from its own failed attempts
+(SWE-bench, +33pp), and — most cleanly — a downstream node honouring an upstream
+decision it could not otherwise know (graph contract, +90pp, p ≈ 0.0001).
+
+## The two faces of the Ledger
+
+| face | mechanism | evidence |
+|---|---|---|
+| cross-**iteration** | recover from your own failed attempts | SWE-bench haiku +33pp (strict superset, zero regression) |
+| cross-**node** | carry an upstream decision a downstream node can't otherwise know | graph contract +90pp |
+
+Both require headroom (a regime where one attempt / the files alone are not
+enough). On single-node, one-shot work — the floor — the Ledger is only a tax.
 
 ## Cross-node (graph) detail
 
@@ -49,12 +60,29 @@ always act on it). The mechanism is real at the trial level — we observed the 
 prevent a break — but the aggregate is not a claim.
 
 The sharper, more faithful test of what graphs actually need is a cross-node
-**contract**: an arbitrary upstream convention (a wire format, a field naming, a
-protocol version) the downstream node cannot guess. There OFF cannot hold (it never
-saw the convention) and ON holds whenever grounding surfaces it and the agent
-applies it — a wide, noise-robust gap that measures the real question: does the
-Ledger propagate cross-node decisions. (A contract-based `stable-store-contract`
-variant follows.)
+**contract**: an arbitrary upstream convention the downstream node cannot guess.
+Task `stable-store-contract` adds one — node 1's commit specifies that snapshots
+must begin with the exact wire-format tag `SSv1|` that the deployed client
+requires. The serialize node cannot invent it; it lives only in the why.
+
+Result (haiku, 10 trials/arm): **OFF held 0/10, ON held 9/10 — +90pp, p ≈ 0.0001.**
+This is the cross-node mechanism, clean:
+
+- OFF = 0/10 is by construction — an unguessable convention is unguessable. That is
+  the point, not a trick: real upstream conventions (wire formats, field names,
+  protocol versions) are unguessable downstream. The 0/10 also proves zero
+  contamination — no OFF agent reached the why via `git log`.
+- ON = 9/10, not 10/10, is what makes it a real test rather than a tautology:
+  grounding *delivered* the contract, but the agent still had to *apply* it, and
+  once (trial 8) it did not. The lift measures end-to-end delivery AND application.
+- ON cost +35% tokens — and several OFF trials burned *more* tokens flailing
+  without the contract and still failed.
+
+The judgment-fence variant is the honest floor of the graph regime (a careful
+agent often re-derives the right thing); the contract variant is the honest
+ceiling (an upstream decision that genuinely cannot be re-derived). Real graph
+work sits between them, and the deeper the graph, the more boundaries the why must
+cross, the more the Ledger compounds.
 
 ## SWE-bench detail (the comparable number)
 
@@ -100,9 +128,12 @@ ceiling: sonnet one-shots these six, so there is no failure for memory to recove
 
 The lift scales with the number of context boundaries the work crosses (loop
 iterations, fan-out across agents, horizon beyond one context). Single-node,
-one-shot work is the floor; deep agent graphs — many nodes, each needing the
-*why* of upstream nodes, not just their files — are where the value should
-compound. That is the next measurement.
+one-shot work is the floor — the Ledger is only a tax there. The value lives in
+the *why that crosses boundaries and is not in the files*: an agent recovering
+from its own prior attempts (cross-iteration) or honouring an upstream node's
+decision (cross-node). Both are now measured. Deep agent graphs stack many such
+boundaries, so the lift should compound with depth — the next measurement is a
+longer chain with several fence-bearing nodes.
 
 ## Reproduce
 
@@ -119,4 +150,9 @@ npx tsx bench/report.ts bench/results-hard.json
 # DOCKER_HOST / DOCKER_CONFIG setup and the eval command)
 BENCH_SWE_INSTANCES=<instances.json> BENCH_K=2 BENCH_MODEL=haiku \
   npx tsx bench/swebench.ts
+
+# Graph cross-node (the judgment-fence floor and the contract ceiling)
+BENCH_TRIALS=10 BENCH_MODEL=haiku BENCH_OUT=results-graph.json npx tsx bench/graph.ts
+BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 BENCH_MODEL=haiku \
+  BENCH_OUT=results-graph-contract.json npx tsx bench/graph.ts
 ```
