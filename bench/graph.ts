@@ -62,6 +62,8 @@ const NOISE = Number(process.env.BENCH_NOISE ?? 0);
 const NOISE_SIZE = Number(process.env.BENCH_NOISE_SIZE ?? 0);
 /** ON-arm grounding mode: 'recent' (recent-N) or 'retrieve' (cheap model selects). */
 const GROUND = (process.env.BENCH_GROUND || 'recent') as 'recent' | 'retrieve';
+/** Retrieval candidate window — must cover the log to find an old commit. Default 50. */
+const RETRIEVE_CANDIDATES = Number(process.env.BENCH_RETRIEVE_CANDIDATES ?? 0);
 /** Which arms to run (default both). e.g. BENCH_ARMS=on for the ON variants only. */
 const ARMS = (process.env.BENCH_ARMS || 'off,on').split(',') as Arm[];
 
@@ -108,7 +110,10 @@ async function prepareRepo(task: GraphTask): Promise<string> {
 /** The node chain: each node = an agent turn then a commit. Only grounding varies. */
 function chainJob(task: GraphTask, arm: Arm): Job {
   // ON grounds; GROUND picks recent-N vs retrieval (a cheap model selects commits).
-  const ground = arm === 'on' ? (GROUND === 'retrieve' ? { retrieve: true } : true) : false;
+  // RETRIEVE_CANDIDATES sizes the retrieval window — it must cover the log to find
+  // an old commit (default 50 misses a foundation buried under more noise than that).
+  const retrieve = RETRIEVE_CANDIDATES ? { candidates: RETRIEVE_CANDIDATES } : true;
+  const ground = arm === 'on' ? (GROUND === 'retrieve' ? { retrieve } : true) : false;
   const steps: Job[] = [];
   for (const node of task.nodes) {
     steps.push(
