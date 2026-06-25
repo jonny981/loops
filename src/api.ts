@@ -39,6 +39,16 @@ export {
   type GroundConfig,
 } from './core/job.ts';
 
+// Agent definitions — job-specific agents (persona in markdown, structure in TS)
+export {
+  defineAgent,
+  defineSkill,
+  fromFile,
+  resolveSystem,
+  type AgentDef,
+  type Skill,
+} from './core/agent.ts';
+
 // Git substrate (the convergence ledger)
 export {
   isRepo,

@@ -22,9 +22,17 @@ import {
 } from './draft.ts';
 import { composeCommitBody } from './consolidate.ts';
 import { groundingText, retrieveLedger } from './ground.ts';
+import { resolveSystem, type AgentDef } from './agent.ts';
 
 export interface AgentJobConfig {
-  label: string;
+  /** Job label (for events). Defaults to the agent's name, then `'agent'`. */
+  label?: string;
+  /**
+   * A reusable agent definition — supplies `system` (persona + skills), `model`, and
+   * `tools` (the job's `system`/`model`/`allowedTools` override it when also set). The
+   * persona lives in markdown via `fromFile`; this is the typed wrapper around it.
+   */
+  agent?: AgentDef;
   /** The prompt, or a function of the context (e.g. include the iteration). */
   prompt: string | ((ctx: JobContext) => string | Promise<string>);
   system?: string | ((ctx: JobContext) => string);
@@ -152,7 +160,8 @@ const TERMINAL = (text: string): Outcome => ({
 export function agentJob(config: AgentJobConfig): Job {
   return async (ctx) => {
     const path = [...ctx.path];
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label: config.label });
+    const label = config.label ?? config.agent?.name ?? 'agent';
+    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
 
     const engine = ctx.resolveEngine(config.engine);
     const userPrompt =
@@ -162,8 +171,15 @@ export function agentJob(config: AgentJobConfig): Job {
     const prompt = config.ground
       ? await withGrounding(ctx, userPrompt, config.ground)
       : userPrompt;
+    // System precedence: an explicit `system` overrides the agent's (persona + skills).
     const system =
-      typeof config.system === 'function' ? config.system(ctx) : config.system;
+      config.system !== undefined
+        ? typeof config.system === 'function'
+          ? config.system(ctx)
+          : config.system
+        : config.agent
+          ? resolveSystem(config.agent)
+          : undefined;
 
     let result;
     const toolUses = new Map<string, number>();
@@ -173,9 +189,9 @@ export function agentJob(config: AgentJobConfig): Job {
         {
           prompt,
           system,
-          model: config.model,
+          model: config.model ?? config.agent?.model,
           maxTokens: config.maxTokens,
-          allowedTools: config.allowedTools,
+          allowedTools: config.allowedTools ?? config.agent?.tools,
           cwd: config.cwd ?? ctx.workspace.dir,
           timeoutMs: config.timeoutMs,
         },
@@ -235,7 +251,7 @@ export function agentJob(config: AgentJobConfig): Job {
         kind: 'job:end',
         ts: Date.now(),
         path,
-        label: config.label,
+        label,
         outcome,
       });
       return outcome;
@@ -247,7 +263,7 @@ export function agentJob(config: AgentJobConfig): Job {
     // to the recordInstruction's belt).
     if (config.ground)
       appendLedger(ctx.workspace, {
-        label: config.label,
+        label,
         iteration: ctx.iteration,
         text: result.text,
         tools: summariseTools(toolUses),
@@ -260,7 +276,7 @@ export function agentJob(config: AgentJobConfig): Job {
       kind: 'job:end',
       ts: Date.now(),
       path,
-      label: config.label,
+      label,
       outcome,
     });
     return outcome;

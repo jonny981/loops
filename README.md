@@ -209,6 +209,30 @@ await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
 
 That's the whole contract: implement `run`, register a name. A managed/durable runner could be a drop-in engine too.
 
+## Agents — define a specialist once
+
+Instead of a wall of inline prompt, define each agent as a reusable, job-specific **`AgentDef`** — the persona and methodologies live in editable **markdown files**, the structure and types live in TypeScript. The `.ts` is the strongly-typed wrapper around the `.md`:
+
+```ts
+import { defineAgent, defineSkill, fromFile, agentJob } from 'loops';
+
+const tdd = defineSkill({ name: 'tdd', instructions: fromFile(new URL('./skills/tdd.md', import.meta.url)) });
+
+const storeEngineer = defineAgent({
+  name: 'store-engineer',
+  system: fromFile(new URL('./agents/store-engineer.md', import.meta.url)), // the persona, as markdown
+  model: 'sonnet',
+  tools: ['edit', 'bash'],
+  capabilities: ['storage engine', 'id stability'],
+  skills: [tdd],                                  // methodologies fold into the system
+  failureModes: [{ mode: 'tests-flaky', recovery: 'isolate the flake, retry once' }],
+});
+
+agentJob({ agent: storeEngineer, prompt: 'Build the store to its tests.', ground: true });
+```
+
+`agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work — TDD, writing-plans), not a worker. This is what turns a `dag` into a named **team** — `storeEngineer`, `apiEngineer`, `securityReviewer` as small files — orchestrated by the DAG and gated by `quorum(...)`.
+
 ## Environments — test the running thing
 
 A gate is only as honest as what it tests. `commandSucceeds('npm', ['test'])` checks files on disk; to check that the thing _works_ you need it running. The **Environment** axis is where code runs — local services or a per-branch cloud preview — so `until` can gate on the live preview, not just static files. It is the third provider axis:
