@@ -152,6 +152,27 @@ light repos that build arm64-native; resolve@2 via `bench/swebench.ts`.
 **Sonnet:** 6/6 both arms — a credible resolve-rate on real SWE-bench bugs, but a
 ceiling: sonnet one-shots these six, so there is no failure for memory to recover.
 
+## Sweep: does the Ledger keep a batch consistent? (`bench/sweep.ts`)
+
+The second loop archetype (each iteration a fresh independent task — the OEM
+pipeline). N profile docs must follow a house style (`profile:v2` marker + ordered
+sections + a table) that lives ONLY in a seed commit. ON grounds each item; OFF
+sees only files. Haiku, 6 docs × 3 sweeps:
+
+| | conforming | marker | sections | table |
+|---|---|---|---|---|
+| ON | **100% (18/18)** | 100% | 100% | 100% |
+| OFF | 17% (3/18) | 28% | 17% | 17% |
+
+The real finding is **consistency**: ON is uniform across all three independent
+batches; OFF is erratic (3/6, 0/6, 0/6). The Ledger holds the catalog to one house
+format; without it the batch drifts. Two caveats: the marker is unguessable so OFF
+is low partly by construction; and OFF's marker rate (28%) exceeds its structure
+rate (17%), meaning some OFF agents found the convention by running `git log`
+themselves (bypassPermissions) — so OFF is not perfectly blind, which makes the
+gap conservative but softens "OFF cannot see it." The clean claim: systematic
+grounding gives uniform conformance, ad-hoc exploration gives erratic conformance.
+
 ## Honest limits
 
 - **n = 6, single trial per arm.** The +33pp is a strong directional signal (strict
