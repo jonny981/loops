@@ -143,6 +143,29 @@ As the log grows, *reading* it has to scale, and there is a progression:
   tuned: how often to consolidate, how tight the ledger, whether to retrieve over the
   ledger or the raw commits.
 
+## The hard case: decisions that change
+
+A decision is rarely made once. It evolves — `X → X′ → X″` — as the work teaches you
+more, and the agent doing step 50 must act on the *current* value, not a stale one. This
+is where memory strategies diverge **by construction**:
+
+- **Keyword search / `git log` grep** returns *every* mention of the decision — `X`,
+  `X′`, and `X″` — and nothing in a match says which is current. On a history too long to
+  read end to end, reading more makes it worse, not better.
+- **Similarity retrieval (vector RAG)** ranks by *relevance*, not *recency*. A superseded
+  `X` is as similar to the query as the current `X″`, so stale versions surface on equal
+  footing — and a larger `top-k` surfaces *more* of them.
+- **Append-only fact stores** (a memory layer whose default write *accumulates* rather
+  than overwrites) keep `X`, `X′`, `X″` side by side — the same ambiguity, now in a
+  database.
+
+Consolidation is the tier the others structurally lack: it folds the history into a
+bounded ledger that carries the *current* state of each decision, where a later revision
+supersedes an earlier one. Retrieval *finds* commits; consolidation *resolves* them into
+where things actually stand. Keeping evolving decisions coherent over a long horizon is
+what agentic work needs — and the axis a recall-the-conversation memory benchmark never
+tests.
+
 ## Two halves: memory *and* enforcement
 
 Memory is one half of `loops`. The other is **enforcement of how the graph
