@@ -70,6 +70,9 @@ export {
   type MergeSynthesisResult,
 } from './core/merge.ts';
 
+// Worktree isolation as a composable Job wrapper (for dynamic dispatch)
+export { isolated, type IsolatedOptions } from './core/isolated.ts';
+
 // The draft — the staged commit body (the write-ahead "way")
 export {
   appendDraft,
