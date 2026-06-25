@@ -84,6 +84,30 @@ ceiling (an upstream decision that genuinely cannot be re-derived). Real graph
 work sits between them, and the deeper the graph, the more boundaries the why must
 cross, the more the Ledger compounds.
 
+### Head-to-head: loops vs a vanilla orchestrator (no loops)
+
+The graph A/B above is loops' own ablation (ON vs OFF). To check it is not a
+strawman, the same contract task was run through a vanilla orchestrator that does
+NOT import loops — raw `claude -p` per node — in two modes (`bench/baseline.ts`):
+
+| approach | held | reading |
+|---|---|---|
+| vanilla, no memory | 0/10 | memory matters — workspace files alone don't carry the contract |
+| vanilla, naive `git log` pasted into every prompt | **10/10** | brute-force history access honours the contract |
+| loops + Ledger (structured grounding) | 9/10 | matched, marginally behind (the −1 is application variance, not truncation) |
+
+**On this task, structured grounding does not beat "just paste the git log" — its
+value is ergonomics, not capability.** Stated plainly because it is true. The
+caveat that keeps it from being a flat loss: this is the easiest case for the
+baseline — a one-commit, 1593-char log, cheap to paste and impossible to miss.
+loops' actual differentiators (retrieval, a bounded context budget, automatic
+per-node injection) do nothing when the log is one commit. The decisive open test
+is a long, noisy log where the dump is too big to paste and the why is buried:
+does `ground: {retrieve: true}` (a cheap model selecting the relevant commits)
+beat naive dump there? That separates capability from convenience; until it is
+run, loops' honest claim on cross-node memory is "the automatic, bounded substrate
+for deep graphs," not "the only way."
+
 ## SWE-bench detail (the comparable number)
 
 SWE-bench hides the tests from the agent by design, so one attempt genuinely often
