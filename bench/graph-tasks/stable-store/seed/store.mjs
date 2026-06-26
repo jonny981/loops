@@ -16,6 +16,20 @@ export function all() {
   return items.map((it) => it.value);
 }
 
+export function remove(id) {
+  items = items.filter((it) => it.id !== id);
+}
+
+export function toJSON() {
+  return JSON.stringify({ items, nextId });
+}
+
+export function fromJSON(str) {
+  const { items: saved, nextId: savedId } = JSON.parse(str);
+  items = saved;
+  nextId = savedId;
+}
+
 export function _reset() {
   items = [];
   nextId = 1;

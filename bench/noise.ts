@@ -46,9 +46,12 @@ function padBody(body: string, bodyChars: number): string {
 export async function addNoise(dir: string, n: number, bodyChars = 0): Promise<void> {
   for (let i = 0; i < n; i++) {
     const d = NOISE_DECISIONS[i % NOISE_DECISIONS.length]!;
-    const body = padBody(d.body, bodyChars);
-    appendFileSync(join(dir, 'DECISIONS.md'), `\n## ${d.subject}\n\n${body}\n`);
+    // Make every commit DISTINCT (subject + body carry the index), so a vector-RAG
+    // selector ranks them individually instead of seeing byte-identical duplicates.
+    const subject = `${d.subject} (#${i + 1})`;
+    const body = padBody(`Decision ${i + 1}. ${d.body}`, bodyChars);
+    appendFileSync(join(dir, 'DECISIONS.md'), `\n## ${subject}\n\n${body}\n`);
     await execa('git', ['add', '-A'], { cwd: dir });
-    await execa('git', ['commit', '-q', '-F', '-'], { cwd: dir, input: `${d.subject}\n\n${body}` });
+    await execa('git', ['commit', '-q', '-F', '-'], { cwd: dir, input: `${subject}\n\n${body}` });
   }
 }

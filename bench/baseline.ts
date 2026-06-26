@@ -24,11 +24,13 @@ import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 
 import { addNoise } from './noise.ts';
+import { ragGroundingText } from './rag.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TASK_DIR = join(HERE, 'graph-tasks/stable-store-contract');
 
-type Mode = 'nomem' | 'gitdump';
+// nomem = workspace only; gitdump = paste the whole log; rag = vector-RAG top-k.
+type Mode = 'nomem' | 'gitdump' | 'rag';
 const MODE = (process.env.BENCH_MODE || 'gitdump') as Mode;
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 10);
 const MODEL = process.env.BENCH_MODEL || 'haiku';
@@ -68,11 +70,18 @@ async function runNode(dir: string, prompt: string): Promise<void> {
       `---\n\n${prompt}`;
     dumpChars = Math.max(dumpChars, full.length); // the cost the dump pays per node
   }
-  await execa(
-    'claude',
-    ['-p', '--permission-mode', 'bypassPermissions', '--model', MODEL],
-    { cwd: dir, input: full, reject: false, stdin: undefined },
-  );
+  // A dump bigger than the context window makes this call fail (or, defensively,
+  // time out) — that IS the capability result, so swallow it and let the gate
+  // reflect that the node did nothing.
+  try {
+    await execa(
+      'claude',
+      ['-p', '--permission-mode', 'bypassPermissions', '--model', MODEL],
+      { cwd: dir, input: full, reject: false, timeout: 600_000, stdin: undefined },
+    );
+  } catch {
+    /* overflow / timeout / error → node no-op; fence breaks honestly */
+  }
 }
 
 async function gatePasses(dir: string): Promise<boolean> {
