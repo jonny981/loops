@@ -31,11 +31,9 @@ import { execa } from 'execa';
 
 import {
   run,
-  loop,
   sequence,
   agentJob,
   commitJob,
-  never,
   type Job,
   type RunResult,
 } from '../src/api.ts';
@@ -92,32 +90,35 @@ const PROMPT = (inst: Instance, iter: number) =>
   `Edit the source files to resolve the issue. Do NOT modify or add test files — ` +
   `the hidden test suite will judge your fix. When unsure, read the surrounding code first.`;
 
-/** K fresh attempts on the same checkout; `until: never` forces all K to run. */
-function armJob(inst: Instance, arm: Arm): Job {
-  const agent = (ground: boolean) =>
-    agentJob({
-      label: 'fix',
-      ground,
-      prompt: (c) =>
-        PROMPT(inst, c.iteration) +
-        (ground
-          ? `\n\nIf a prior attempt was wrong, say why so this attempt does not repeat it.`
-          : ''),
-      outcome: (text) => ({ status: 'fail', summary: text.slice(0, 200) }),
-    });
-  return loop({
-    name: `swe-${inst.instance_id}`,
-    max: K,
-    until: never, // no test gate (tests are hidden) — run all K attempts
-    body:
-      arm === 'on'
-        ? sequence(
-            'attempt',
-            agent(true),
-            commitJob({ subject: (c) => `attempt ${c.iteration}: ${inst.instance_id}`, allowEmpty: true }),
-          )
-        : agent(false),
+/**
+ * One attempt (1-based `k`). Each attempt is its own run so we can capture its diff
+ * for pass@K (resolved if ANY attempt passes) — the final cumulative diff alone
+ * penalises a later attempt that regresses a correct earlier one. For ON, the attempt
+ * grounds in the prior attempts' commits (the git log persists across runs on the
+ * shared checkout) and commits its own work. The retry framing tells a grounded
+ * attempt to BUILD ON the prior, not to assume it was wrong — the latter makes a weak
+ * model talk itself out of a correct first attempt.
+ */
+function attemptJob(inst: Instance, arm: Arm, k: number): Job {
+  const ground = arm === 'on';
+  const agent = agentJob({
+    label: 'fix',
+    ground,
+    prompt: () =>
+      PROMPT(inst, k) +
+      (ground && k > 1
+        ? `\n\nBuild on the prior attempt; only change course if you find a concrete, ` +
+          `named problem with it. Do not rewrite code that already works.`
+        : ''),
+    outcome: (text) => ({ status: 'fail', summary: text.slice(0, 200) }),
   });
+  return ground
+    ? sequence(
+        'attempt',
+        agent,
+        commitJob({ subject: () => `attempt ${k}: ${inst.instance_id}`, allowEmpty: true }),
+      )
+    : agent;
 }
 
 async function captureDiff(dir: string, base: string): Promise<string> {
@@ -125,16 +126,29 @@ async function captureDiff(dir: string, base: string): Promise<string> {
   return r.stdout ?? '';
 }
 
-async function runArm(inst: Instance, arm: Arm): Promise<{ patch: string; result: RunResult }> {
+interface ArmRun {
+  patches: string[]; // diff vs base after each attempt (for pass@K)
+  finalPatch: string; // cumulative diff after the last attempt (resolve@K-final)
+  tokens: number; // total across attempts
+  result: RunResult; // the last attempt's run (for the dead-engine check)
+}
+
+async function runArm(inst: Instance, arm: Arm): Promise<ArmRun> {
   const dir = await prepareRepo(inst);
+  const patches: string[] = [];
+  let tokens = 0;
+  let result!: RunResult;
   try {
-    const result = await run(armJob(inst, arm), {
-      cwd: dir,
-      engine: ENGINE,
-      engineOptions: { permissionMode: 'bypassPermissions', defaultModel: MODEL },
-    });
-    const patch = await captureDiff(dir, inst.base_commit);
-    return { patch, result };
+    for (let k = 1; k <= K; k++) {
+      result = await run(attemptJob(inst, arm, k), {
+        cwd: dir,
+        engine: ENGINE,
+        engineOptions: { permissionMode: 'bypassPermissions', defaultModel: MODEL },
+      });
+      tokens += result.stats.totalInputTokens + result.stats.totalOutputTokens;
+      patches.push(await captureDiff(dir, inst.base_commit));
+    }
+    return { patches, finalPatch: patches[patches.length - 1] ?? '', tokens, result };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -151,32 +165,54 @@ async function main(): Promise<void> {
 
   mkdirSync(OUT_DIR, { recursive: true });
   const predPath = (arm: Arm) => join(OUT_DIR, `predictions-${arm}.jsonl`);
-  // Truncate prior runs.
-  for (const arm of ['off', 'on'] as Arm[]) appendFileSync(predPath(arm), '', { flag: 'w' });
+  const attemptPath = (arm: Arm, k: number) => join(OUT_DIR, `predictions-${arm}-a${k}.jsonl`);
+  // Truncate prior runs (the final + each attempt's file).
+  for (const arm of ['off', 'on'] as Arm[]) {
+    appendFileSync(predPath(arm), '', { flag: 'w' });
+    for (let k = 1; k <= K; k++) appendFileSync(attemptPath(arm, k), '', { flag: 'w' });
+  }
 
   console.log(
     `SWE-bench resolve@${K} — ${insts.length} instance(s), model ${MODEL}, engine ${ENGINE}\n` +
       `predictions → ${OUT_DIR}`,
   );
 
+  // Circuit breaker: a rate-limited / logged-out claude-cli returns in ~5s with
+  // no output tokens and no edit. Left unchecked the run writes a full set of
+  // empty predictions that score 0/6 — fake data indistinguishable from a real
+  // null result. Two such runs in a row means the engine is dead; abort loudly
+  // (exit 3) so the caller stops instead of burning the rest of the matrix.
+  let deadStreak = 0;
   for (const inst of insts) {
     console.log(`\n■ ${inst.instance_id} (${inst.repo})`);
     for (const arm of ['off', 'on'] as Arm[]) {
       process.stdout.write(`  ${arm.toUpperCase().padEnd(3)} … `);
-      const { patch, result } = await runArm(inst, arm);
-      const tok = result.stats.totalInputTokens + result.stats.totalOutputTokens;
+      const { patches, finalPatch, tokens, result } = await runArm(inst, arm);
+      const sizes = patches.map((p) => (p.trim() ? p.split('\n').length : 0)).join(',');
       console.log(
-        `${patch ? `${patch.split('\n').length} diff lines` : 'EMPTY patch'} · ` +
-          `${result.stats.loops[0]?.iterations ?? '?'} iter · ${tok} tok · ${(result.stats.elapsedMs / 1000).toFixed(0)}s`,
+        `${finalPatch ? `${finalPatch.split('\n').length} diff lines` : 'EMPTY patch'} · ` +
+          `attempts [${sizes}] · ${tokens} tok · ${(result.stats.elapsedMs / 1000).toFixed(0)}s`,
       );
-      appendFileSync(
-        predPath(arm),
-        JSON.stringify({
-          instance_id: inst.instance_id,
-          model_name_or_path: `loops-${arm}`,
-          model_patch: patch,
-        }) + '\n',
-      );
+      const rec = (path: string, p: string) =>
+        appendFileSync(
+          path,
+          JSON.stringify({
+            instance_id: inst.instance_id,
+            model_name_or_path: `loops-${arm}`,
+            model_patch: p,
+          }) + '\n',
+        );
+      rec(predPath(arm), finalPatch);
+      patches.forEach((p, i) => rec(attemptPath(arm, i + 1), p));
+      const dead =
+        !finalPatch.trim() && result.stats.totalOutputTokens === 0 && result.stats.elapsedMs < 20_000;
+      deadStreak = dead ? deadStreak + 1 : 0;
+      if (deadStreak >= 2) {
+        console.error(
+          '\nENGINE DEAD: 2 consecutive empty/0-token runs (likely usage limit or logout). Aborting.',
+        );
+        process.exit(3);
+      }
     }
   }
 
