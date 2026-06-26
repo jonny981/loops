@@ -21,8 +21,7 @@ CFG="$(mktemp -d)"; printf '{}' > "$CFG/config.json"; export DOCKER_CONFIG="$CFG
 # Absolutise inputs, then run from a gitignored scratch dir so the harness's report
 # (<model>.<run_id>.json) and logs/ land there, not in the repo root.
 abspath() { printf '%s/%s' "$(cd "$(dirname "$1")" && pwd)" "$(basename "$1")"; }
-PY="$(command -v "$PY" || abspath "$PY")"
-DATASET="$(abspath "$DATASET")"; PRED="$(abspath "$PRED")"
+PY="$(abspath "$PY")"; DATASET="$(abspath "$DATASET")"; PRED="$(abspath "$PRED")"
 EVAL_DIR="$(dirname "$0")/eval"; mkdir -p "$EVAL_DIR"; cd "$EVAL_DIR"
 
 # --namespace none builds env+instance images locally (these instances have no prebuilt
