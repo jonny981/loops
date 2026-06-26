@@ -56,8 +56,8 @@ describe('grounded agentJob (read automation)', () => {
     // live handoff
     expect(prompt).toContain('Handoff so far');
     expect(prompt).toContain('handoff: B beat A on idempotency');
-    // the leave-memory instruction
-    expect(prompt).toContain('Leave memory for whoever continues this');
+    // the leave-memory instruction (lean)
+    expect(prompt).toContain('Leave memory for the next agent');
     // the caller's prompt is still there, last
     expect(prompt).toContain('CONTINUE THE TASK');
     expect(prompt.indexOf('the commit log')).toBeLessThan(prompt.indexOf('CONTINUE THE TASK'));

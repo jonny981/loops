@@ -41,7 +41,11 @@ export function childContext(
     log: parent.log,
     depth: over.depth,
     path: over.path,
-    iteration: over.iteration ?? 0,
+    // Inherit the enclosing iteration by default. A `loop` always passes one
+    // explicitly; a `dag`/`sequence` does not, so without this a node nested in a
+    // loop would reset to 0 — the "Attempt 0" confound where a retry body could not
+    // see which attempt it was on. A top-level dag still gets 0 (the root's value).
+    iteration: over.iteration ?? parent.iteration,
     lastOutcome: over.lastOutcome,
     lastReview: over.lastReview,
   };

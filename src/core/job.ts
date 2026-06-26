@@ -83,19 +83,16 @@ export interface GroundConfig {
   retrieve?: boolean | { candidates?: number; model?: string };
 }
 
-/** The "leave memory behind" instruction, naming this workspace's scratch files. */
+/** The "leave memory behind" instruction, naming this workspace's scratch files.
+ *  Lean on purpose: it rides on every grounded turn, so it stays a few tight lines —
+ *  the binding signals (the commit log, working memory, handoff) carry the content. */
 function recordBlock(ctx: JobContext): string {
   return (
-    `## Leave memory for whoever continues this\n` +
-    `Two gitignored scratch files in \`.loops/\` carry the work forward:\n` +
-    `- \`${ledgerPath(ctx.workspace)}\` — your WORKING NOTES, for yourself and any ` +
-    `concurrent peers. Jot what you try and what you find as you go (the harness also ` +
-    `records each turn here automatically).\n` +
-    `- \`${promptPath(ctx.workspace)}\` — the HANDOFF for the next agent. Before you ` +
-    `finish, write the why: what you changed, what you ruled out and why, constraints ` +
-    `you hit, and what is left. The next context reads it as the start of its prompt, ` +
-    `and it becomes the commit body at the next milestone. Write it so they do not ` +
-    `repeat your dead ends or break your decisions.`
+    `## Leave memory for the next agent\n` +
+    `Two gitignored \`.loops/\` files carry the work forward — write to them as you go:\n` +
+    `- \`${ledgerPath(ctx.workspace)}\` — working notes (what you try and find; the harness also auto-records each turn).\n` +
+    `- \`${promptPath(ctx.workspace)}\` — the handoff: the why, what you ruled out, the constraints, and what is left. ` +
+    `It seeds the next agent's prompt and becomes the commit body, so write it so they don't repeat your dead ends or break your decisions.`
   );
 }
 

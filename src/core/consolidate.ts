@@ -121,14 +121,21 @@ function truncate(s: string, n: number): string {
 export interface CompactOptions {
   engine?: EngineRef;
   model?: string;
-  /** Truncation fallback length when the model call is skipped or fails. Default 2000. */
+  /**
+   * The size budget for the working log in the commit body. A log already within
+   * it is kept VERBATIM (no model call); only a longer one is compacted, with this
+   * as the truncation fallback. Default 2000.
+   */
   maxChars?: number;
 }
 
 /**
  * Compress a verbose working log (the ledger) into a tight summary for the commit
- * body — one cheap model call. Falls back to truncation when there is no usable
- * reply or the call throws, so a commit never fails on compaction. '' in, '' out.
+ * body — one cheap model call. A short log (already within `maxChars`) is kept
+ * verbatim: compaction only earns its keep on a long log, and summarising a few
+ * lines just risks dropping the faithful "way" the commit body exists to preserve.
+ * Falls back to truncation when there is no usable reply or the call throws, so a
+ * commit never fails on compaction. '' in, '' out.
  */
 export async function compactLedger(
   ctx: JobContext,
@@ -138,6 +145,8 @@ export async function compactLedger(
   const trimmed = text.trim();
   if (!trimmed) return '';
   const max = opts.maxChars ?? 2000;
+  // Already within budget — keep it verbatim, faithful, and spend no model call.
+  if (trimmed.length <= max) return trimmed;
   try {
     const engine = opts.engine ? ctx.resolveEngine(opts.engine) : ctx.engine;
     const result = await engine.run(
