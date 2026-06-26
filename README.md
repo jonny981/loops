@@ -34,21 +34,29 @@ export default loop({
 
 ## A whole engineering team, defined as files
 
-The primitives compose into something bigger than a single loop: an **engineering team** that builds a multi-component service, holds it coherent across components, and converges only when each piece clears a bar one agent can't impose on itself — an adversarial, multi-model review.
+The primitives compose into something bigger than a single loop: an **engineering team** that builds a multi-component service, holds it coherent across components, and converges only when each piece clears a bar one agent can't impose on itself — a report-only **review battery** of distinct lenses, including a genuinely different model.
 
 ```ts
-// An engineer is "done" only when the tests pass AND an adversarial panel across THREE
-// models fails to refute it — each reviewer a named persona, k-of-2 consensus, dimensional.
-const reviewed = (name) => [
-  commandSucceeds('node', [`test-${name}.mjs`]),                         // deterministic truth
-  quorum(2, ...['opus', 'sonnet', 'haiku'].map((model) =>
-    agentCheck({ agent: reviewer, model, threshold: 0.8,
-      question: `Try to REFUTE that ${name} meets its contract. Approve only if you cannot.`,
-      dimensions: ['correctness', 'security', 'edge cases'] }))),
-];
+// Five report-only lenses, each a markdown persona that closes with `<confidence>N%</confidence>`.
+// The adversarial lens runs on a DIFFERENT model (codex / GPT-5): any reviewer, any model.
+const battery = (name) =>
+  reviewPanel(name, [
+    ['adversarial', { engine: 'codex' }], // genuinely different priors
+    ['security',    { model: 'opus' }],
+    ['correctness', { model: 'sonnet' }],
+    ['conformance', { model: 'opus' }],
+    ['simplicity',  { model: 'haiku' }],
+  ]);
+
 const engineer = (name) =>
-  loop({ name, body: agentJob({ agent: engineerFor(name), prompt: brief(name), ground: true }),
-         until: reviewed(name), commit: true, max: 8 });
+  loop({
+    name,
+    body: agentJob({ agent: engineerFor(name), prompt: brief(name), ground: true }),
+    until: commandSucceeds('node', [`test-${name}.mjs`]), // deterministic truth
+    review: battery(name), // unanimous; a failing review hands its findings to the next iteration
+    commit: true,
+    max: 8,
+  });
 
 export default dag({
   name: 'build-service',
@@ -62,9 +70,9 @@ export default dag({
 });
 ```
 
-The `dag` is the manager (toposort + dispatch). Each node is a Converge loop — an engineer driving its component to its tests **and** a three-model adversarial review. `isolate` runs engineers in parallel worktrees that land back on pass. `ground: true` carries the contracts only `store` decides (stable ids, the `SSv1|` snapshot wire tag) to the engineers downstream of it. (`reviewer`, `engineerFor`, and `brief` are `AgentDef`s and briefs loaded from markdown — see [Agents](#agents--define-a-specialist-once).)
+The `dag` is the manager (toposort + dispatch). Each node is a Converge loop: the engineer builds to its `test` (`until`), then the **review battery** runs in the `review` slot — five report-only lenses with near-disjoint blind spots, each judging the actual source against the recorded contracts and closing with a `<confidence>N%</confidence>`. Because a reviewer is just an `AgentDef` and `agentCheck` takes an `engine` and `model`, **any reviewer runs on any model** — the adversarial lens on codex (GPT-5) for a true second-model signal, the rest spread across Claude. A failing review is not a dead end: its findings thread into the next iteration as `lastReview`, so the engineer fixes concrete concerns — the build → review → fix-up loop, with no human in it. `isolate` runs engineers in parallel worktrees that land back on pass; `ground: true` carries the contracts only `store` decides (stable ids, the `SSv1|` wire tag) to the engineers and reviewers downstream.
 
-A single autonomous agent grades its own homework. This team **structurally cannot**: "done" means past an independent, multi-model, dimensional review it never applies to itself. That enforced honest-convergence gate is the deepest idea here; memory is one free pillar underneath it. The whole team is a handful of markdown personas plus the ~25 lines above — runnable in [`examples/build-service.loop.ts`](examples/build-service.loop.ts).
+A single autonomous agent grades its own homework. This team **structurally cannot**: "done" means past an independent, multi-lens, multi-model review battery it never applies to itself. That enforced honest-convergence gate is the deepest idea here; memory is one free pillar underneath it. The whole team — engineers and reviewers — is a folder of markdown personas plus the wiring above, runnable in [`examples/build-service.loop.ts`](examples/build-service.loop.ts).
 
 ## Why loops?
 
@@ -223,6 +231,7 @@ The agent launch only ever touches the `Engine` interface, so the loop knows not
 | `claude-cli`    | `claude` subprocess (`execa`)    | fresh process per call; uses host Claude auth, no key       |
 | `agent-sdk`     | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call; host Claude auth                  |
 | `anthropic-api` | `@anthropic-ai/sdk`              | token-level streaming; cheapest for judges; needs a key     |
+| `codex`         | `codex exec` subprocess (GPT-5)  | a genuinely different model for a second-model reviewer; read-only |
 | `mock`          | scripted, offline                | for tests and examples                                      |
 
 Select per-run (`--engine`, `RunOptions.engine`) or per-job/condition (`engine:` takes a name **or** a ready-made `Engine`). Bring your own in ~10 lines:
