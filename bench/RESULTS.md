@@ -3,8 +3,10 @@
 What the Ledger (loops' git-memory: grounding + per-iteration commits) does to
 convergence, measured by running each task twice — Ledger ON vs OFF — same model,
 same gate, varying only the memory. The currency is **ON − OFF**, the way GCC
-isolates its git-context layer (+6.2pp on SWE-bench Verified, Claude Sonnet 80.2%
-vs 74.0%, arXiv 2508.00031).
+isolates its git-context layer (arXiv 2508.00031): on SWE-bench Verified, Claude
+Sonnet reaches 80.2% with full GCC vs **67.2%** with no structured memory — a
+**+13.0pp same-scaffold ablation**. (The widely-quoted "+6.2pp" is GCC vs the
+competing Folding-Agent baseline at 74.0%, not a memory-off ablation.)
 
 All runs are live (real `claude-cli` editing real files), not the offline mock.
 
@@ -229,9 +231,11 @@ grounding gives uniform conformance, ad-hoc exploration gives erratic conformanc
 - **Hardware bounds the difficulty band.** This is an arm64 Mac; only the light
   repos (`requests`, `flask`) build native, so the heavy, harder instances
   (django/sympy/…) where the effect should be larger were out of reach.
-- The effect is **small and regime-dependent**, consistent with GCC needing 500
-  instances to show +6.2pp. The git-memory thesis is real and independently
-  converged on (GCC, Letta, DiffMem), not a novel moat. loops' edge is being
+- The effect is **regime-dependent**, and GCC measured its lift at N=500 on the
+  full Verified set (a clean +13.0pp same-scaffold ablation) — the rigor bar loops'
+  n=6 Lite slice has not yet met. The git-memory thesis is real and independently
+  converged on (GCC's COMMIT/BRANCH/MERGE context manager; Letta's 2026 git-backed
+  "Context Repositories"; DiffMem's git+markdown store), not a novel moat. loops' edge is being
   small, legible, fast, and engine/workspace/environment agnostic — plus a
   validated instrument to measure the lift properly at scale.
 

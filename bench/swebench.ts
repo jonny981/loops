@@ -1,9 +1,10 @@
 /**
  * SWE-bench resolve@K — the literature-comparable arm of the Ledger A/B.
  *
- * GCC (arXiv 2508.00031) isolates its git-context layer as a controlled A/B on
- * SWE-bench (Claude Sonnet 80.2% with vs 74.0% without = +6.2pp). This runs the
- * same kind of A/B for loops' Ledger, on SWE-bench Lite instances.
+ * GCC (arXiv 2508.00031) isolates its git-context layer as a controlled ablation on
+ * SWE-bench Verified (Claude Sonnet 80.2% with full GCC vs 67.2% with no structured
+ * memory = +13.0pp same-scaffold; the quoted +6.2pp is vs the Folding-Agent competitor
+ * at 74.0%). This runs the same kind of A/B for loops' Ledger, on SWE-bench Lite.
  *
  * SWE-bench forbids showing the agent the tests, so there is no honest gate to
  * converge on during editing. Instead each instance gets K fresh attempts on the
