@@ -100,13 +100,14 @@ dag({
 ## Author → validate → run
 
 ```bash
-loops validate path/to/feature.loop.ts   # offline pre-flight: loads + checks, no model calls, no spend
+loops validate path/to/feature.loop.ts   # offline pre-flight: loads + prints the shape, no model calls, no spend
+loops describe path/to/feature.loop.ts   # print the loop's shape (gate, body, nodes) without running
 loops run path/to/feature.loop.ts         # live Ink TUI
 loops run path/to/feature.loop.ts --no-tui # plain streamed logs
 loops run path/to/feature.loop.ts --json   # NDJSON event stream (parse this from an agent)
 ```
 
-Always `loops validate` first. It imports and constructs the loop (catching syntax, import, and bad-export errors) without running it, so you fix authoring mistakes for free before spending a single agent turn.
+Always `loops validate` first. It imports and constructs the loop (catching syntax, import, and bad-export errors) without running it, so you fix authoring mistakes for free before spending a single agent turn. It also prints the loop's shape (its gate, body, and dag nodes), so you can confirm you built what you intended. `loops describe` prints that shape on its own.
 
 `loops run` works from any repo, including one that uses `loops` as a submodule or dependency. The recipe's folder must be an ES module scope (a `package.json` with `{"type":"module"}`); repos that consume `loops` already have this. If a load fails with an ES-module error, that scope is what is missing.
 

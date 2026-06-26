@@ -80,7 +80,8 @@ describe('running a loop from outside the package tree', () => {
       dir,
     );
     expect(code).toBe(0);
-    expect(out).toContain('runnable loop');
+    expect(out).toContain('loads');
+    expect(out).toMatch(/loop "oot-smoke"/); // validate prints the loop's shape
   }, 30_000);
 
   it('validate fails with an agent-grade error on a broken recipe', async () => {

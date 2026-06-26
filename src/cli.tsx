@@ -20,6 +20,7 @@ import { installSignalHandlers } from './runtime/signals.ts';
 import { jsonReporter, plainReporter, printSummary } from './reporters.ts';
 import { buildJobFromFlags, parseDuration } from './config.ts';
 import { loop } from './core/loop.ts';
+import { jobMeta, renderPlan } from './core/describe.ts';
 import type { Job, LoopConfig } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
 
@@ -389,17 +390,29 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command('validate')
     .argument('<file>', 'a loop-definition file to check')
     .description(
-      'load a .loop.ts and confirm it yields a runnable loop, without executing it — the cheap, no-model pre-flight an agent runs before `loops run`',
+      'load a .loop.ts and print its shape without running it: the cheap, no-model pre-flight an agent runs before `loops run`',
     )
     .action(async (file: string) => {
       // loadJob imports + constructs the Job (so it catches syntax, import,
       // transform, and bad-export errors) but never calls run(), so no agent
       // turns fire. A failure throws the same agent-grade error `run` would,
       // and the top-level handler reports it with exit code 1.
-      const { title } = await loadJob(file);
+      const { job } = await loadJob(file);
+      const plan = renderPlan(jobMeta(job));
       process.stdout.write(
-        `✓ ${file}\n  loads and yields a runnable loop ("${title}"). Not executed.\n`,
+        `✓ ${file} loads (not executed)\n${plan.map((l) => `  ${l}`).join('\n')}\n`,
       );
+    });
+
+  program
+    .command('describe')
+    .argument('<file>', 'a loop-definition file')
+    .description(
+      "print a loop's shape (its gate, body, and dag nodes) without running it",
+    )
+    .action(async (file: string) => {
+      const { job } = await loadJob(file);
+      process.stdout.write(`${renderPlan(jobMeta(job)).join('\n')}\n`);
     });
 
   await program.parseAsync(argv);

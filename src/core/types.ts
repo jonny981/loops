@@ -122,6 +122,20 @@ export interface JobContext {
 
 export type Job = (ctx: JobContext) => Promise<Outcome>;
 
+/**
+ * The introspectable shape of a `Job`, attached by the builders (`loop`, `dag`,
+ * `agentJob`, ...) and read back by `loops validate` / `loops describe` and any
+ * agent that wants to inspect a loop without running it. Held in a side table
+ * (see `core/describe.ts`), so the `Job` type stays a plain function. `kind`
+ * names the builder; the rest is builder-specific (a loop carries its gate and
+ * body, a dag carries its nodes).
+ */
+export interface JobMeta {
+  kind: 'loop' | 'dag' | 'agent' | 'fn' | (string & {});
+  name?: string;
+  [key: string]: unknown;
+}
+
 export interface ConditionResult {
   met: boolean;
   /** 0..1 when an agent decided this; undefined for deterministic checks. */

@@ -26,6 +26,7 @@ import type {
 } from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
+import { setMeta, jobMeta } from './describe.ts';
 import {
   isRepo,
   stageAll,
@@ -122,7 +123,7 @@ export function dag(config: DagConfig): Job {
       ? config.concurrency
       : names.length || 1;
 
-  return async (parent: JobContext): Promise<Outcome> => {
+  const job: Job = async (parent: JobContext): Promise<Outcome> => {
     const path = [...parent.path, config.name];
     const depth = parent.depth + 1;
     const ts = () => Date.now();
@@ -494,6 +495,21 @@ export function dag(config: DagConfig): Job {
     parent.emit({ kind: 'dag:end', ts: ts(), path, outcome });
     return outcome;
   };
+
+  return setMeta(job, {
+    kind: 'dag',
+    name: config.name,
+    nodes: Object.entries(config.nodes).map(([name, v]) => {
+      const node = typeof v === 'function' ? undefined : v;
+      const nodeJob = node ? node.job : (v as Job);
+      return {
+        name,
+        needs: node?.needs ?? [],
+        isolate: node?.isolate ?? false,
+        job: jobMeta(nodeJob),
+      };
+    }),
+  });
 }
 
 /** Run jobs strictly in order; stop at the first non-pass. Sugar over `dag`. */

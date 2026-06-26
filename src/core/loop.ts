@@ -24,6 +24,7 @@
 import type { JobContext, LoopConfig, Outcome, Job } from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
+import { setMeta, jobMeta, describeConditions } from './describe.ts';
 import { commitJob, type CommitJobConfig } from './job.ts';
 import { LoopError, type LoopPhase } from './errors.ts';
 import { isLimitError, waitMsFor } from './limits.ts';
@@ -75,7 +76,7 @@ export function loop(config: LoopConfig): Job {
   const stopOn = config.stopOn ? toCondition(config.stopOn) : undefined;
   const onError = config.retry?.onError ?? 'continue';
 
-  return async (parent: JobContext): Promise<Outcome> => {
+  const job: Job = async (parent: JobContext): Promise<Outcome> => {
     const path = [...parent.path, config.name];
     const depth = parent.depth + 1;
     const ts = () => Date.now();
@@ -466,6 +467,18 @@ export function loop(config: LoopConfig): Job {
       );
     }
   };
+
+  return setMeta(job, {
+    kind: 'loop',
+    name: config.name,
+    max: config.max,
+    start: describeConditions(config.start),
+    gate: describeConditions(config.until),
+    stopOn: describeConditions(config.stopOn),
+    review: !!config.review,
+    commit: !!config.commit,
+    body: jobMeta(config.body),
+  });
 }
 
 /** Sleep that resolves early (does not reject) when the signal aborts. */

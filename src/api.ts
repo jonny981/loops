@@ -9,6 +9,7 @@
 // Core types
 export type {
   Job,
+  JobMeta,
   JobContext,
   Outcome,
   OutcomeStatus,
@@ -39,6 +40,10 @@ export {
   type CommitJobConfig,
   type GroundConfig,
 } from './core/job.ts';
+
+// Job introspection — read a loop's shape without running it (powers `loops
+// validate` / `loops describe`, and lets an agent inspect what it authored)
+export { jobMeta, renderPlan, describeConditions } from './core/describe.ts';
 
 // Agent definitions — job-specific agents (persona in markdown, structure in TS)
 export {

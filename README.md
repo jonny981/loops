@@ -134,7 +134,8 @@ loops run \
 **Definition-file mode**: full power and nesting. A `.loop.ts` file `export default`s a `Job`:
 
 ```bash
-loops validate examples/confidence-gate.loop.ts      # offline pre-flight: load + check, no model calls
+loops validate examples/confidence-gate.loop.ts      # offline pre-flight: load + print the shape, no model calls
+loops describe examples/confidence-gate.loop.ts      # print the loop's shape (gate, body, nodes) without running
 loops run examples/confidence-gate.loop.ts           # live Ink TUI
 loops run examples/confidence-gate.loop.ts --no-tui  # plain streamed logs
 loops run examples/confidence-gate.loop.ts --json    # NDJSON event stream
@@ -142,7 +143,7 @@ loops run examples/confidence-gate.loop.ts --json    # NDJSON event stream
 
 > `loops run <file>` **imports and executes** that file's module, like `node <file>`. Only run definition files you trust.
 
-**Authoring is agent-native.** Both commands work from any repo, including one that consumes `loops` as a submodule or dependency (the recipe's folder just needs an ES module scope, which such repos already have). `loops validate <file>` is the cheap, no-model pre-flight an agent runs before `loops run`: it loads and checks the loop and reports a fix-oriented error if anything is wrong, without spending a single agent turn. The authoring guide an agent reads to compose a loop is [`skills/author-loop/SKILL.md`](skills/author-loop/SKILL.md).
+**Authoring is agent-native.** Both commands work from any repo, including one that consumes `loops` as a submodule or dependency (the recipe's folder just needs an ES module scope, which such repos already have). `loops validate <file>` is the cheap, no-model pre-flight an agent runs before `loops run`: it loads the loop, reports a fix-oriented error if anything is wrong, and prints the loop's shape (its gate, body, and dag nodes), all without spending a single agent turn. `loops describe <file>` prints that same shape on its own, so an agent can see exactly what it just authored. The authoring guide an agent reads to compose a loop is [`skills/author-loop/SKILL.md`](skills/author-loop/SKILL.md).
 
 **Offline demo** (no network, no key; uses the mock engine):
 

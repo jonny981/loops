@@ -24,6 +24,7 @@ import { execa } from 'execa';
 
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
+import { setLabel, setMeta } from './describe.ts';
 import { assertBudget } from './budget.ts';
 import { resolveSystem, type AgentDef } from './agent.ts';
 import { GhForge } from './forge.ts';
@@ -123,7 +124,7 @@ export function commandSucceeds(
   args: string[] = [],
   opts: { cwd?: string; timeoutMs?: number } = {},
 ): Condition {
-  return async (ctx) => {
+  return setLabel(async (ctx) => {
     try {
       const r = await execa(command, args, {
         cwd: opts.cwd ?? ctx.workspace.dir,
@@ -145,7 +146,7 @@ export function commandSucceeds(
         reason: `\`${command}\` failed to run: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
-  };
+  }, `${command}${args.length ? ` ${args.join(' ')}` : ''}`);
 }
 
 /**
@@ -238,7 +239,7 @@ export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
       message: `quorum requires 1 <= k <= inputs (got k=${k}, n=${inputs.length})`,
     });
   const conds = inputs.map((i) => toCondition(i));
-  return async (ctx, last) => {
+  return setLabel(async (ctx, last) => {
     const settled = await Promise.allSettled(conds.map((c) => c(ctx, last)));
     const results: ConditionResult[] = settled.map((s) =>
       s.status === 'fulfilled'
@@ -260,7 +261,7 @@ export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
       confidence,
       reason: `quorum ${held.length}/${inputs.length} held (need ${k})`,
     };
-  };
+  }, `quorum ${k}/${inputs.length}`);
 }
 
 // ── Agent-validated condition ──────────────────────────────────────────────
@@ -518,7 +519,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
   const confidenceTag = config.confidenceTag === true;
   const dimensions =
     !confidenceTag && config.dimensions?.length ? config.dimensions : undefined;
-  return async (ctx, last) => {
+  return setLabel(async (ctx, last) => {
     const engine = config.engine
       ? ctx.resolveEngine(config.engine)
       : ctx.engine;
@@ -626,7 +627,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       confidence: v.confidence,
       reason: `${v.verdict} @ ${v.confidence.toFixed(2)} (need ${threshold}) — ${v.reason}`,
     };
-  };
+  }, `judge "${config.question}" >=${threshold}`);
 }
 
 /**
@@ -636,7 +637,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
  */
 export function gateJob(label: string, condition: ConditionInput): Job {
   const cond = toCondition(condition);
-  return async (ctx) => {
+  return setMeta(async (ctx) => {
     ctx.emit({ kind: 'job:start', ts: Date.now(), path: [...ctx.path], label });
     const r = await cond(ctx, ctx.lastOutcome);
     const outcome: Outcome = {
@@ -652,5 +653,5 @@ export function gateJob(label: string, condition: ConditionInput): Job {
       outcome,
     });
     return outcome;
-  };
+  }, { kind: 'gate', name: label });
 }

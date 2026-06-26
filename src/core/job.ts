@@ -6,6 +6,7 @@
  */
 
 import type { Outcome, Job, JobContext } from './types.ts';
+import { setMeta } from './describe.ts';
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
 import { assertBudget } from './budget.ts';
@@ -188,7 +189,7 @@ const TERMINAL = (text: string): Outcome => ({
 
 /** Run one fresh agent turn through whichever engine is selected. */
 export function agentJob(config: AgentJobConfig): Job {
-  return async (ctx) => {
+  const job: Job = async (ctx) => {
     const path = [...ctx.path];
     const label = config.label ?? config.agent?.name ?? 'agent';
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
@@ -316,6 +317,12 @@ export function agentJob(config: AgentJobConfig): Job {
     });
     return outcome;
   };
+
+  return setMeta(job, {
+    kind: 'agent',
+    name: config.label ?? config.agent?.name ?? 'agent',
+    ground: !!config.ground,
+  });
 }
 
 export interface CommitJobConfig {
@@ -474,7 +481,7 @@ export function fnJob(
   label: string,
   fn: (ctx: JobContext) => Outcome | Promise<Outcome>,
 ): Job {
-  return async (ctx) => {
+  const job: Job = async (ctx) => {
     const path = [...ctx.path];
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
     let outcome: Outcome;
@@ -499,4 +506,6 @@ export function fnJob(
     ctx.emit({ kind: 'job:end', ts: Date.now(), path, label, outcome });
     return outcome;
   };
+
+  return setMeta(job, { kind: 'fn', name: label });
 }
