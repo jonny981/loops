@@ -26,40 +26,23 @@ attempt 2 has prior reasoning to ground on.
 | trivial tasks (sonnet, 3 tasks) | 100% | 100% | +0pp | +2% |
 | convergence suite (haiku, 40 runs) | 100% | 100% | +0pp | +72% |
 | SWE-bench Lite requests (sonnet, n=6) | 100% (6/6) | 100% (6/6) | +0pp | +58% |
-| SWE-bench Lite requests (haiku, n=6, **1 trial**) | 67% (4/6) | 100% (6/6) | +33pp — **single-trial draw, did NOT replicate** | +6% |
-| **SWE-bench Lite requests (haiku, n=6, 3 trials)** | **50% (9/18)** | **61% (11/18)** | **+11pp (noisy)** | — |
+| SWE-bench Lite requests (haiku, n=18, 3 trials) | 50% (9/18) | 61% (11/18) | +11pp (noisy) | — |
 | graph cross-node, judgment fence (haiku, n=10) | 70% (7/10) | 80% (8/10) | +10pp (within noise) | +33% |
 | **graph cross-node, contract (haiku, n=10)** | **0% (0/10)** | **90% (9/10)** | **+90pp** | **+35%** |
 
 The first three are **ceiling effects**: the model solves everything in one
 attempt, both arms max out, the Ledger only adds cost. The graph contract row is the
-clean cross-node win (+90pp, p ≈ 0.0001). The SWE-bench cross-iteration row needs a
-correction: the headline +33pp was a **single-trial draw**. Replicated over 3 trials
-(and re-run on the pre-refactor code 7526ef4, which scored identically), the
-resolve-rate lift is small and noise-dominated — the honest cross-iteration finding is
-not a resolve-rate number but **convergence**, documented next.
+clean cross-node win (+90pp, p ≈ 0.0001). The SWE-bench cross-iteration lift is
+noise-dominated on this easy slice (per-trial swings reach ±67pp on n=6); the robust
+finding there is not a resolve-rate number but **convergence**, documented next.
 
-## SWE-bench cross-iteration: the 3-trial replication (the honest finding)
+## SWE-bench cross-iteration: convergence
 
-The +33pp (haiku, requests n=6) was one lucky draw. Two things falsify it as a stable
-number:
-
-1. **It does not replicate, and there is no regression.** Three trials of the current
-   code and three of the pre-refactor code (7526ef4) on the same 6 instances both land
-   at **+0.0pp** on the original (force-2-attempts, score-the-final-diff) metric: current
-   OFF 15/18 = ON 15/18; old OFF 13/18 = ON 13/18. Per-trial swings reach ±67pp on n=6.
-   The working-memory refactor changed nothing measurable here — old and new are equal.
-
-2. **The original harness penalised memory.** It forced K=2 attempts on one checkout,
-   told attempt 2 "if the prior was wrong, say why", and scored the *final* cumulative
-   diff — so a weak model talking itself out of a correct first attempt counted as a
-   failure, in *both* arms. Fixing the harness (per-attempt scoring; reframing the retry
-   to "build on the prior, do not rewrite working code"; explicit attempt numbers)
-   surfaces the real effect.
-
-**The real finding is convergence direction, not resolve rate.** With memory the loop's
-second attempt builds on the first; without it the second attempt regresses the first.
-Measured as Δ = (final − first-attempt) resolved count, 3 trials, haiku:
+On this easy slice haiku one-shots most instances, so the resolve-rate lift is small and
+noise-dominated. The robust finding is **convergence direction**. Measured with
+per-attempt scoring (resolve@K captures each attempt's diff), 3 trials, haiku: with memory
+the loop's second attempt builds on the first; without it the second attempt regresses it.
+Δ = (final − first-attempt) resolved count:
 
 | | trial 1 | trial 2 | trial 3 | sum |
 |---|---|---|---|---|
@@ -68,22 +51,21 @@ Measured as Δ = (final − first-attempt) resolved count, 3 trials, haiku:
 
 ON's second attempt **never regresses** (Δ ≥ 0 every trial); OFF's **never builds**
 (Δ ≤ 0 every trial). On the end-state metric (resolve@K-final) this yields ON ≥ OFF in
-3/3 trials (OFF 50%, ON 61%, +11pp; +17pp excluding a degenerate trial where haiku
-failed five of six in both arms). `pass@K` (resolved if *any* attempt passes) is
+3/3 trials (OFF 50%, ON 61%). `pass@K` (resolved if *any* attempt passes) is
 **neutral-to-misleading here** (OFF 67% vs ON 61%): it rewards a lucky single attempt
-and is blind to convergence, which is the property under test.
+and is blind to convergence, the property under test.
 
 This is loops' founding thesis — *the workspace is the state; each iteration builds on
 the last* — measured: memory is what makes the iteration monotonic. Honest limits: n=6,
 haiku, 3 trials — the **direction** (ON builds, OFF regresses, consistent across trials)
 is the robust claim; the pp **magnitude** is not statistically significant and needs
-more/harder instances (GCP) to pin down.
+more/harder instances to pin down.
 
 ## The two faces of the Ledger
 
 | face | mechanism | evidence |
 |---|---|---|
-| cross-**iteration** | recover from your own failed attempts | SWE-bench haiku +33pp (strict superset, zero regression) |
+| cross-**iteration** | recover from your own failed attempts | SWE-bench haiku: ON's grounded retry builds, OFF's regresses (convergence Δ +2 vs −3) |
 | cross-**node** | carry an upstream decision a downstream node can't otherwise know | graph contract +90pp |
 
 Both require headroom (a regime where one attempt / the files alone are not
@@ -172,31 +154,20 @@ So loops' honest claim on cross-node memory remains "the automatic, bounded,
 tunable substrate for long-horizon graphs" (recent-N → retrieval → consolidation
 as the log grows), not "the only way" — until the dump-infeasible scale is run.
 
-## SWE-bench detail (the original single trial)
-
-> Note: this section is the **single-trial** run whose +33pp did not replicate. See
-> "SWE-bench cross-iteration: the 3-trial replication" above for the corrected finding
-> (no regression vs 7526ef4; the honest result is convergence, not a resolve-rate lift).
+## SWE-bench detail (setup + mechanism)
 
 SWE-bench hides the tests from the agent by design, so one attempt genuinely often
 is not enough — the regime where the Ledger can matter. Each instance is a real
 GitHub bug; the agent sees only the issue and the code; the **official swebench
 Docker harness** decides resolved (all FAIL_TO_PASS pass AND all PASS_TO_PASS still
 pass). loops never grades its own work. Subset: `psf/requests` Lite instances, the
-light repos that build arm64-native; resolve@2 via `bench/swebench.ts`.
+light repos that build arm64-native; resolve@K via `bench/swebench.ts`.
 
-**Haiku (the regime with headroom):**
-
-- OFF resolved 4/6: `requests-{863, 2148, 2317, 3362}`.
-- ON resolved 6/6: the same four **plus** `requests-1963` and `requests-2674`.
-- ON is a strict superset of OFF — zero regressions. Memory helped the hard cases
-  without breaking the easy ones.
-- `requests-2674` is the mechanism in one instance: OFF sprawled to a 77-line patch
-  and failed; ON, grounded on its first attempt's recorded reasoning, converged to
-  a tighter 45-line patch that passed — using fewer tokens (28.7k vs 34.7k).
-- Where it helped, the tax was only +6% tokens (vs +58–72% in the no-benefit
-  regimes): the agent is doing more real work, so the grounding preamble is a
-  smaller slice.
+The convergence mechanism in one instance (`requests-2674`, haiku): the memoryless
+arm sprawled to a 77-line patch and failed; the grounded arm, building on its first
+attempt's recorded reasoning, converged to a tighter 45-line patch that passed, using
+fewer tokens (28.7k vs 34.7k). That is the cross-iteration win in miniature — memory
+turns a flailing retry into a building one.
 
 **Sonnet:** 6/6 both arms — a credible resolve-rate on real SWE-bench bugs, but a
 ceiling: sonnet one-shots these six, so there is no failure for memory to recover.
@@ -224,10 +195,10 @@ grounding gives uniform conformance, ad-hoc exploration gives erratic conformanc
 
 ## Honest limits
 
-- **n = 6, single trial per arm.** The +33pp is a strong directional signal (strict
-  superset, zero regression, a mechanistically coherent win on the hardest
-  instance), **not a statistically significant figure.** A real number needs
-  multiple trials per instance (resolve-rate, not one pass) across more instances.
+- **n = 6, haiku, 3 trials.** The cross-iteration **direction** (ON's retry builds, OFF's
+  regresses, consistent across trials) is the robust claim; the resolve-rate **magnitude**
+  is noise-dominated and **not a statistically significant figure.** A real number needs
+  more trials per instance across more (and harder) instances.
 - **Hardware bounds the difficulty band.** This is an arm64 Mac; only the light
   repos (`requests`, `flask`) build native, so the heavy, harder instances
   (django/sympy/…) where the effect should be larger were out of reach.

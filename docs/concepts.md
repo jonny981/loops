@@ -37,7 +37,8 @@ measured:
 
 - **Cross-iteration** — *recover from your own failed attempts.* In a retry loop,
   the why from attempt 3 stops attempt 4 re-walking the same dead end. (SWE-bench,
-  haiku: +33pp, a strict superset of the no-memory arm.)
+  haiku: the grounded retry builds on its prior attempt where the memoryless one
+  regresses.)
 - **Cross-node** — *honour an upstream node's decision you could not otherwise
   know.* A downstream agent sees an upstream node's files but not its rationale;
   the Ledger carries the *why* across the boundary. (Graph contract task: +90pp vs
@@ -186,7 +187,7 @@ the part that is hard to hand-roll.
 | regime | lift | note |
 |---|---|---|
 | one-shot / single-node | +0pp | the floor — memory is only a tax |
-| Converge, multi-attempt | +33pp | recover from your own attempts |
+| Converge, multi-attempt | builds vs regresses | the grounded retry builds on prior attempts; the memoryless one regresses |
 | cross-node, contract | +90pp | carry an upstream decision (vs no memory) |
 | cross-node vs naive log-dump | ~tie | on a small log, memory is ergonomics, not capability |
 | noisy log, retrieval vs recent-N | 83% vs 0% | the default is wrong for long horizons; retrieval fixes it |

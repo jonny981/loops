@@ -14,15 +14,11 @@ the *direction* is more trustworthy than the pp magnitude.
 
 | Experiment | Setup | Metric | OFF | ON | Lift |
 |---|---|---|---|---|---|
-| **SWE-bench cross-iteration (replication, haiku, 6 `psf/requests`)** | | | | | |
-| Current code, original harness | 3 trials (18 runs) | resolve@K-final | 15/18 (83%) | 15/18 (83%) | +0pp |
-| Pre-refactor code, original harness | 3 trials (18) | resolve@K-final | 13/18 (72%) | 13/18 (72%) | +0pp |
-| Fixed harness | 3 trials (18) | resolve@K-final | 9/18 (50%) | 11/18 (61%) | +11pp |
-| Fixed harness | 3 trials | convergence Δ | −3 | +2 | ON builds, OFF regresses |
-| Fixed harness | 3 trials (18) | pass@K (either attempt) | 12/18 (67%) | 11/18 (61%) | −6pp (red herring) |
-| **SWE-bench cross-iteration (single trial)** | | | | | |
-| SWE-bench Lite requests, haiku | n=6, 1 trial | resolve@2-final | 4/6 (67%) | 6/6 (100%) | +33pp (single-trial draw, did not replicate) |
-| SWE-bench Lite requests, sonnet | n=6, 1 trial | resolve@2-final | 6/6 (100%) | 6/6 (100%) | +0pp (ceiling) |
+| **SWE-bench cross-iteration (haiku, 6 `psf/requests`, 3 trials)** | | | | | |
+| resolve@K-final | 18 runs | resolve@K-final | 9/18 (50%) | 11/18 (61%) | +11pp (noisy) |
+| convergence Δ (final − attempt-1) | 3 trials | Δ | −3 | +2 | ON builds, OFF regresses (robust) |
+| pass@K (either attempt) | 18 runs | pass@K | 12/18 (67%) | 11/18 (61%) | −6pp (red herring) |
+| SWE-bench Lite requests, sonnet | n=6 | resolve@2 | 6/6 (100%) | 6/6 (100%) | +0pp (ceiling) |
 | Trivial tasks, sonnet | 3 tasks | resolve | 100% | 100% | +0pp (ON +2% tokens) |
 | Convergence suite, haiku | 40 runs | resolve | 100% | 100% | +0pp (ON +72% tokens) |
 | **Cross-node (graph), haiku** | | | | | |

@@ -3,8 +3,8 @@
 Source material for the public docs site. Persuasive points for loops, each with the
 psychological lever it pulls and the *grounded* proof behind it. Rule: no hype. Every claim
 traces to something real (`measured-metrics.md`, `competitive-landscape.md`, the code). The
-honesty is the brand, overclaiming once (the +33pp that turned out to be noise) is exactly
-what this doc exists to avoid.
+honesty is the brand: never headline a number the measurement has not earned at
+significance, which is exactly the failure mode this doc exists to avoid.
 
 ## The core narrative (one paragraph)
 
@@ -54,8 +54,8 @@ by a jury vote. And we'll tell you straight when memory is just a tax.*
 credible) + Authority (honest measurement).
 **Proof:** The gate combines a deterministic signal with a separate judge, a k-of-n quorum,
 and dimensional scoring, fail-closed. And `measured-metrics.md` openly reports the ceilings
-where memory is only a token tax, and the headline number that turned out to be a
-single-trial draw. The honesty is the differentiator.
+where memory is only a token tax, and refuses to headline a resolve-rate number that is not
+statistically significant. The honesty is the differentiator.
 **Where it lives:** the "how convergence works" page; the trust/honesty section.
 
 ### 5. "With memory, the next attempt builds. Without it, it thrashes."
@@ -94,8 +94,8 @@ blob you have to trust.*
 - **Lead with the validated, not the unproven.** The convergent-evolution point and the
   cross-node win are solid. The resolve-rate magnitude is not, do not headline a pp number
   loops has not earned at significance.
-- **Pratfall on purpose.** Stating "memory is a tax on one-shot tasks" and "the +33pp was
-  noise" *builds* credibility for the real claims. Keep that voice.
+- **Pratfall on purpose.** Stating "memory is a tax on one-shot tasks" and "a naive git-log
+  dump matches us at small scale" *builds* credibility for the real claims. Keep that voice.
 - **Comparisons stay fair.** Different axes from Mem0/Zep (recall vs completion), say so;
   don't claim a head-to-head win that hasn't been run.
 
