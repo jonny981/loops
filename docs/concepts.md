@@ -172,7 +172,12 @@ tests.
 Memory is one half of `loops`. The other is **enforcement of how the graph
 executes** — honest gates that loop until verified (`commandSucceeds` +
 `agentCheck`), k-of-n `quorum` judging, the dimensional gate that fails closed,
-retry/backoff, budget caps, deterministic DAG control flow, worktree isolation.
+retry/backoff, budget caps, deterministic DAG control flow, worktree isolation,
+and bounded cross-stage **feedback** — a later node sends work back to an earlier
+one (`kickback`), the dag re-runs that subgraph with the objection threaded in,
+capped so it provably terminates. A feedback cycle is a loop boundary, not a
+backward edge: the graph stays acyclic and the convergence is what ends it. See
+[patterns.md](patterns.md#feedback--a-later-stage-sends-work-back-to-an-earlier-one).
 
 This distinction matters competitively. Pasting the git log into a prompt
 replicates the *memory* half cheaply (on a small log it ties `loops`). It does not

@@ -73,8 +73,9 @@ export function dag(config: DagConfig): Job {
       edges.push([dep, name]); // dep must precede name
     }
   }
+  let order: string[];
   try {
-    toposort.array(names, edges);
+    order = toposort.array(names, edges);
   } catch (e) {
     throw new LoopError({
       code: 'CONFIG',
@@ -84,6 +85,38 @@ export function dag(config: DagConfig): Job {
   }
 
   const stopOnError = config.stopOnError ?? true;
+  const maxKickbacks = config.maxKickbacks ?? 0;
+
+  // Static graph relations for routing cross-stage feedback (kickback). All pure
+  // functions of the declared `needs` edges, computed once. `dependents` is the
+  // forward adjacency (who needs me); a kickback to a target re-runs the target
+  // plus everything reachable from it, and the target must be an ancestor.
+  const dependents = new Map<string, string[]>(names.map((n) => [n, []]));
+  for (const [dep, name] of edges) dependents.get(dep)!.push(name);
+  const ancestorsOf = (name: string): Set<string> => {
+    const seen = new Set<string>();
+    const stack = [...(nodes.get(name)!.needs ?? [])];
+    while (stack.length) {
+      const n = stack.pop()!;
+      if (seen.has(n)) continue;
+      seen.add(n);
+      stack.push(...(nodes.get(n)!.needs ?? []));
+    }
+    return seen;
+  };
+  const dirtyFrom = (target: string): Set<string> => {
+    const seen = new Set<string>([target]);
+    const stack = [target];
+    while (stack.length) {
+      const n = stack.pop()!;
+      for (const d of dependents.get(n)!)
+        if (!seen.has(d)) {
+          seen.add(d);
+          stack.push(d);
+        }
+    }
+    return seen;
+  };
   const limitN =
     config.concurrency && config.concurrency > 0
       ? config.concurrency
@@ -99,6 +132,10 @@ export function dag(config: DagConfig): Job {
     const results = new Map<string, Outcome>();
     const memo = new Map<string, Promise<Outcome>>();
     let stopped = false;
+    // When a node is kicked back to, the reason rides into its next run as
+    // `lastReview` — the same channel a loop's failed `review` uses, so grounding
+    // renders it as "## Next". Empty in the common (no-kickback) case.
+    const pendingKickback = new Map<string, Outcome>();
 
     // Each node runs under its own name in the path, so a nested job (e.g. a
     // loop) is uniquely addressable for stats/logs even across same-named siblings.
@@ -112,6 +149,7 @@ export function dag(config: DagConfig): Job {
         path: [...path, name],
         workspace,
         environment,
+        lastReview: pendingKickback.get(name),
       });
 
     // Land-back merges are serialised: concurrent nodes finishing at once must
@@ -239,7 +277,10 @@ export function dag(config: DagConfig): Job {
         phase === 'done' &&
         outcome.status !== 'pass' &&
         nodes.get(name)!.optional !== true &&
-        stopOnError
+        stopOnError &&
+        // A node requesting a kickback is going to be re-run — don't let its
+        // (provisional) non-pass abort siblings before the feedback is resolved.
+        !(maxKickbacks > 0 && outcome.kickback)
       ) {
         stopped = true;
       }
@@ -336,6 +377,87 @@ export function dag(config: DagConfig): Job {
     };
 
     await Promise.all(names.map(run));
+
+    // Cross-stage feedback: a node may return a `kickback` asking an earlier
+    // node to redo work. We re-run the target + its dependents (the cycle lives
+    // in execution, the graph stays acyclic), bounded by `maxKickbacks` so it
+    // provably terminates. The whole block is inert when `maxKickbacks` is 0, so
+    // the default path is exactly the single pass above.
+    if (maxKickbacks > 0) {
+      let used = 0;
+      const rejected = new Set<string>();
+      const emitKickback = (
+        from: string,
+        to: string,
+        reason: string,
+        accepted: boolean,
+        note?: string,
+      ) =>
+        parent.emit({
+          kind: 'dag:kickback',
+          ts: ts(),
+          path,
+          from,
+          to,
+          reason,
+          accepted,
+          note,
+        });
+      for (;;) {
+        // Honour kickbacks in topological order, skipping any already rejected.
+        const from = order.find(
+          (n) => results.get(n)?.kickback && !rejected.has(n),
+        );
+        if (!from) break;
+        const { to, reason } = results.get(from)!.kickback!;
+
+        // Validate the target: it must exist, be an ancestor, and (if the node
+        // declares `acceptsKickbackTo`) be an allowed target. An invalid target
+        // is rejected once and never reconsidered unless the node itself re-runs.
+        const allow = nodes.get(from)!.acceptsKickbackTo;
+        const note = !nodes.has(to)
+          ? `unknown node "${to}"`
+          : !ancestorsOf(from).has(to)
+            ? `"${to}" is not an ancestor of "${from}"`
+            : allow && !allow.includes(to)
+              ? `"${from}" does not accept kickback to "${to}"`
+              : undefined;
+        if (note) {
+          rejected.add(from);
+          emitKickback(from, to, reason, false, note);
+          continue;
+        }
+
+        if (used >= maxKickbacks) {
+          // Budget spent. Reject and stop — the unresolved kickback leaves the
+          // kicking node's own outcome to stand (a fail keeps the dag honest).
+          emitKickback(
+            from,
+            to,
+            reason,
+            false,
+            `kickback budget (${maxKickbacks}) exhausted`,
+          );
+          break;
+        }
+
+        used += 1;
+        emitKickback(from, to, reason, true);
+        const dirty = dirtyFrom(to);
+        for (const d of dirty) {
+          memo.delete(d); // force re-run
+          results.delete(d);
+          rejected.delete(d); // a re-run earns a fresh verdict
+        }
+        pendingKickback.set(to, {
+          status: 'fail',
+          summary: `Kicked back from "${from}": ${reason}`,
+          data: { kickback: true, from },
+        });
+        stopped = false; // a prior stopOnError must not block the re-run
+        await Promise.all(names.map(run));
+      }
+    }
 
     const requiredFailed = names.filter(
       (n) =>

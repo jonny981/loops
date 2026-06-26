@@ -47,6 +47,16 @@ export interface Outcome {
   data?: unknown;
   /** Present when `status` is driven by a failure. */
   error?: LoopError;
+  /**
+   * A request to send work back to an earlier dag node (real-team feedback: a
+   * later stage that found a problem upstream). The enclosing `dag` re-runs `to`
+   * and its transitive dependents with `reason` threaded in as `lastReview`,
+   * bounded by `DagConfig.maxKickbacks` (default 0 — ignored). A feedback cycle
+   * is a loop boundary, not a backward edge: the graph stays acyclic and the
+   * re-run budget guarantees it terminates. Use the `kickback(to, reason)`
+   * helper to produce one.
+   */
+  kickback?: { to: string; reason: string };
 }
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -217,6 +227,13 @@ export interface DagNode {
    * read-only node never needs it.
    */
   isolate?: boolean;
+  /**
+   * Restrict which upstream nodes this node may kick work back to. When set, a
+   * `kickback` whose `to` is not in this list is rejected (logged, not run); when
+   * unset, any ancestor is a valid target. A kickback to a non-ancestor is always
+   * rejected. Only consulted when the dag's `maxKickbacks` is set.
+   */
+  acceptsKickbackTo?: string[];
 }
 
 export interface DagConfig {
@@ -246,6 +263,15 @@ export interface DagConfig {
    * resolves the conflict and writes a synthesised merge body.
    */
   onConflict?: 'fail' | 'synthesize';
+  /**
+   * Total re-run budget for cross-stage feedback. When a node's outcome carries
+   * a `kickback`, the dag re-runs the target node and its transitive dependents,
+   * threading the reason in as `lastReview`. Each such re-run spends one unit of
+   * this budget; once it is exhausted, a further kickback is rejected and the dag
+   * terminates. Default 0 — kickbacks are ignored and behaviour is unchanged.
+   * This bound is what makes a feedback cycle provably terminate.
+   */
+  maxKickbacks?: number;
 }
 
 /** Per-node disposition within a DAG run. */
@@ -317,6 +343,19 @@ export type LoopEvent =
       outcome?: Outcome;
     }
   | { kind: 'dag:end'; ts: number; path: string[]; outcome: Outcome }
+  | {
+      // A node sent work back to an earlier node. `accepted` distinguishes a
+      // honoured kickback (the subgraph re-runs) from a rejected one (non-ancestor,
+      // disallowed target, or budget exhausted — `note` says which).
+      kind: 'dag:kickback';
+      ts: number;
+      path: string[];
+      from: string;
+      to: string;
+      reason: string;
+      accepted: boolean;
+      note?: string;
+    }
   | { kind: 'job:start'; ts: number; path: string[]; label: string }
   | {
       kind: 'job:end';

@@ -417,6 +417,29 @@ export function commitJob(config: CommitJobConfig): Job {
   };
 }
 
+/**
+ * Build an `Outcome` that sends work back to an earlier dag node — real-team
+ * feedback ("marketing found the contract drifted; re-run engineering"). Return
+ * it from any job or `agentJob({ outcome })` mapper. The enclosing `dag` re-runs
+ * `to` and its dependents with `reason` threaded in as `lastReview`, bounded by
+ * `DagConfig.maxKickbacks`. Defaults to a `fail` status, so an unresolved
+ * kickback (budget spent) leaves the dag failing honestly; override via `over`
+ * (e.g. `{ status: 'pass' }`) when the kicking node's own work is fine and it is
+ * only requesting an upstream revision.
+ */
+export function kickback(
+  to: string,
+  reason: string,
+  over?: Partial<Outcome>,
+): Outcome {
+  return {
+    status: 'fail',
+    summary: reason,
+    ...over,
+    kickback: { to, reason },
+  };
+}
+
 /** A deterministic step from a plain function — for glue, checks, side effects. */
 export function fnJob(
   label: string,

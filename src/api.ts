@@ -34,6 +34,7 @@ export {
   agentJob,
   fnJob,
   commitJob,
+  kickback,
   type AgentJobConfig,
   type CommitJobConfig,
   type GroundConfig,

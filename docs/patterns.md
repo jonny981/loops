@@ -119,3 +119,82 @@ The Ledger threads through the whole nesting via the land-back merge: the Tend l
 grounds on **milestones** (each = a sub-loop that converged and merged back), the
 sub-loops ground on their own **scratch files** (working memory + handoff). See
 [concepts.md](concepts.md#nesting--the-archetypes-compose).
+
+## Feedback — a later stage sends work back to an earlier one
+
+Real teams loop back: marketing reads the build and tells engineering the contract
+drifted. A feedback cycle is a **loop boundary, not a backward edge** — the graph
+stays acyclic, the cycle lives in a bounded re-run, and because every feedback cycle
+in a working org *converges* (the objection is addressed or a cap is hit), it
+terminates. There are two granularities.
+
+### Tier 1 — coarse loop-back (a downstream review gate)
+
+The whole stage that participates in the cycle is a `loop` whose gate is the
+downstream check. A failed `review` re-enters the loop body with the objection as
+`ctx.lastReview` (rendered as "## Next"), and git carries prior work forward so the
+re-run **builds** rather than restarts. No new API — `loop` already has `review`.
+
+```ts
+import { dag, loop, sequence, agentJob } from 'loops';
+
+export const ship = dag({
+  name: 'ship',
+  nodes: {
+    delivery: loop({
+      name: 'delivery',
+      body: sequence('build', spec, engineering, testing),
+      review: marketingReview, // a rejection re-runs spec→engineering→testing
+      until: testsPass,
+      maxReviewRestarts: 3, // bound the worker/reviewer standoff
+    }),
+  },
+});
+```
+
+You set how far a kickback propagates by *which* loop holds the gate: the delivery
+loop sends work back to `spec`; an outer loop wrapping more stages sends it back
+further. The cost: a coarse re-run repeats the **whole** body — a nit on engineering
+also re-runs spec and testing. Grounding makes that cheap (each re-run sees its prior
+committed work), not free.
+
+### Tier 2 — surgical kickback (re-run one subgraph)
+
+When you want to re-run only a *specific* earlier node and its dependents, a node
+returns a `kickback(to, reason)`. The enclosing `dag` marks the target plus its
+transitive dependents dirty, threads `reason` in as `lastReview`, and re-runs just
+that subgraph in topological order — bounded by `maxKickbacks`, the re-run budget
+that guarantees termination.
+
+```ts
+import { dag, agentJob, fnJob, kickback } from 'loops';
+
+export const ship = dag({
+  name: 'ship',
+  maxKickbacks: 2, // total re-run budget across the dag (default 0 = kickbacks off)
+  nodes: {
+    engineering: agentJob({ label: 'engineering', ground: true, prompt: buildPrompt }),
+    marketing: {
+      needs: ['engineering'],
+      acceptsKickbackTo: ['engineering'], // optional: restrict valid targets
+      job: agentJob({
+        label: 'marketing',
+        prompt: reviewPrompt,
+        // Map the review into a verdict: approve, or kick the work back upstream.
+        outcome: (text) =>
+          /off-brand/i.test(text)
+            ? kickback('engineering', text) // re-runs engineering with this note
+            : { status: 'pass', summary: 'approved' },
+      }),
+    },
+  },
+});
+```
+
+The target must be an **ancestor** (a kickback to a non-ancestor, a disallowed
+target, or one past budget is rejected and logged via a `dag:kickback` event, never
+silently dropped). The default `kickback(...)` status is `fail`, so if the budget is
+spent before the work converges, the dag fails honestly rather than shipping
+unaddressed feedback. Same idea as Tier 1's review — a downstream check sends work
+back, bounded, with the feedback threaded in — at a finer grain. The runnable offline
+version is [`examples/feedback.loop.ts`](../examples/feedback.loop.ts).
