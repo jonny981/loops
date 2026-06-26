@@ -1,26 +1,73 @@
 {
-  "name": "loops",
+  "name": "@loops-adk/core",
   "version": "0.1.0",
-  "private": true,
   "license": "MIT",
-  "description": "Run a prompt/agent in a loop with a fresh context every iteration. A single nestable loop primitive with start/stop/agent-validated conditions, review-restart, max iterations, streaming, an Ink TUI, and an exit summary.",
+  "author": "Jonny Neill",
+  "description": "Run an agent in a convergence loop with an honest done-gate. A small, nestable loop and DAG primitive: deterministic plus agent-judge conditions, git as memory, review-restart, budgets, and a live TUI.",
+  "keywords": [
+    "agent",
+    "agents",
+    "loop",
+    "loops",
+    "convergence",
+    "ai",
+    "llm",
+    "claude",
+    "orchestration"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jonny981/loops.git"
+  },
+  "homepage": "https://github.com/jonny981/loops#readme",
+  "bugs": {
+    "url": "https://github.com/jonny981/loops/issues"
+  },
   "type": "module",
+  "main": "./dist/api.js",
+  "types": "./dist/api.d.ts",
   "bin": {
     "loops": "./bin/loops.mjs"
   },
   "exports": {
-    ".": "./src/api.ts",
-    "./env/command": "./src/env/command.ts",
-    "./env/sst": "./src/env/sst.ts",
-    "./env/docker": "./src/env/docker.ts"
+    ".": {
+      "types": "./dist/api.d.ts",
+      "import": "./dist/api.js"
+    },
+    "./env/command": {
+      "types": "./dist/env/command.d.ts",
+      "import": "./dist/env/command.js"
+    },
+    "./env/sst": {
+      "types": "./dist/env/sst.d.ts",
+      "import": "./dist/env/sst.js"
+    },
+    "./env/docker": {
+      "types": "./dist/env/docker.d.ts",
+      "import": "./dist/env/docker.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "loops": "tsx src/index.ts",
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "example:poll": "tsx src/index.ts run examples/simple-poll.loop.ts --no-tui",
-    "example:gate": "tsx src/index.ts run examples/confidence-gate.loop.ts"
+    "example:gate": "tsx src/index.ts run examples/confidence-gate.loop.ts",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run typecheck"
   },
   "engines": {
     "node": ">=20"
@@ -38,6 +85,7 @@
     "picocolors": "^1.1.1",
     "react": "^19.2.7",
     "toposort": "^2.0.2",
+    "tsx": "^4.22.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -45,7 +93,7 @@
     "@types/node": "^26.0.0",
     "@types/react": "^19.2.17",
     "@types/toposort": "^2.0.7",
-    "tsx": "^4.22.4",
+    "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   }

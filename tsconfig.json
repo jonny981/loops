@@ -16,6 +16,7 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
+    "ignoreDeprecations": "6.0",
     "noEmit": true,
     "types": ["node"]
   },

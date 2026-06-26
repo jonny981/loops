@@ -22,7 +22,7 @@ There is one unit of work and two supporting types:
 A `.loop.ts` `export default`s a `Job`. Wrap it in `defineJob(...)` to pin the type.
 
 ```ts
-import { defineJob, loop, agentJob, commandSucceeds, agentCheck } from 'loops';
+import { defineJob, loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
 
 export default defineJob(
   loop({
@@ -83,7 +83,7 @@ They nest: triage is Tend ∘ Converge; a research sweep is Sweep ∘ Converge.
 ## Compose
 
 ```ts
-import { dag, sequence, parallel } from 'loops';
+import { dag, sequence, parallel } from '@loops-adk/core';
 
 dag({
   name: 'ship',

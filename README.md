@@ -14,7 +14,7 @@ Where most "agent memory" recalls a _conversation_, this keeps your _decisions_ 
 ![license MIT](https://img.shields.io/badge/license-MIT-blue)
 
 ```ts
-import { loop, agentJob, commandSucceeds, agentCheck } from 'loops';
+import { loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
 
 // Keep working until the tests pass AND a judge agrees it matches intent.
 export default loop({
@@ -33,6 +33,21 @@ export default loop({
 ```
 
 ---
+
+## Install
+
+```bash
+npm i @loops-adk/core      # Node >= 20
+```
+
+Write a loop in a `.loop.ts` file, then run it. `loops run` works from any repo that has the package installed:
+
+```bash
+loops validate your-feature.loop.ts   # offline pre-flight: prints the loop's shape, no model calls
+loops run your-feature.loop.ts         # run it (live TUI; add --no-tui or --json for headless)
+```
+
+The full CLI, the flags-only mode (no file), and the offline demo are in [Quick start](#quick-start) below.
 
 ## A whole engineering team, defined as files
 
@@ -105,9 +120,9 @@ Three things `loops` does that most loop libraries do not:
 
 Two parts are deliberately out of scope. The heartbeat that fires a loop on a schedule belongs in cron, GitHub Actions, or a workflow engine, with a `loops` job inside. Acting in external tools is the agent's own job through its tools. `loops` is the body of the loop, kept small.
 
-## Install
+## From source
 
-> **Status: alpha.** The API is still settling and `loops` is not yet on npm. Use it from git for now; an npm release is planned.
+> **Status: alpha**, the API is still settling. To work on `loops` or run it from a checkout:
 
 ```bash
 git clone https://github.com/jonny981/loops.git
@@ -116,7 +131,7 @@ npm install
 node bin/loops.mjs --help        # or: npm link  →  loops --help
 ```
 
-Requires **Node ≥ 20**. No build step: the CLI runs the TypeScript directly through [`tsx`](https://github.com/privatenumber/tsx).
+Requires **Node ≥ 20**. Running from a checkout needs no build step: the CLI runs the TypeScript source directly through [`tsx`](https://github.com/privatenumber/tsx).
 
 ## Quick start
 
@@ -270,7 +285,7 @@ The agent launch only ever touches the `Engine` interface, so the loop knows not
 Select per-run (`--engine`, `RunOptions.engine`) or per-job/condition (`engine:` takes a name **or** a ready-made `Engine`). Bring your own in ~10 lines:
 
 ```ts
-import { run, type Engine } from 'loops';
+import { run, type Engine } from '@loops-adk/core';
 
 const myEngine: Engine = {
   name: 'my-provider',
@@ -290,7 +305,7 @@ That's the whole contract: implement `run`, register a name. A managed/durable r
 Instead of a wall of inline prompt, define each agent as a reusable, job-specific **`AgentDef`**: the persona and methodologies live in editable **markdown files**, the structure and types live in TypeScript. The `.ts` is the strongly-typed wrapper around the `.md`:
 
 ```ts
-import { defineAgent, defineSkill, fromFile, agentJob } from 'loops';
+import { defineAgent, defineSkill, fromFile, agentJob } from '@loops-adk/core';
 
 const tdd = defineSkill({ name: 'tdd', instructions: fromFile(new URL('./skills/tdd.md', import.meta.url)) });
 
@@ -322,7 +337,7 @@ A gate is only as honest as what it tests. `commandSucceeds('npm', ['test'])` ch
 Like `Engine`, loops owns only the interface and the lifecycle binding; the adapter (sst, Vercel, Docker…) is yours and lives next to the deploy config it wraps; loops never depends on a deploy tool. The handle's `env` (e.g. `BASE_URL`) is injected into gate commands, so the done-check reaches the live preview.
 
 ```ts
-import { run, loop, commandSucceeds, type Environment } from 'loops';
+import { run, loop, commandSucceeds, type Environment } from '@loops-adk/core';
 
 const sstEnv: Environment = {
   name: 'sst',
@@ -341,16 +356,16 @@ Environments are **optional**: a research pipeline that never deploys just leave
 
 **Built-in adapters** (opt-in subpaths, no added dependency; they shell out to the CLI on PATH):
 
-- `loops/env/command`: `commandEnvironment`, the generic factory every IaC tool fits (deploy / read outputs / destroy). sst, terraform, pulumi, and cloudformation-via-aws-cli are all thin presets over it.
-- `loops/env/sst`: `sstEnvironment`, a per-branch sst stage (`sst deploy --stage <branch>`).
-- `loops/env/docker`: `dockerEnvironment`, a local stack via a per-branch Docker Compose project, with ephemeral-port discovery so parallel branches never collide.
+- `@loops-adk/core/env/command`: `commandEnvironment`, the generic factory every IaC tool fits (deploy / read outputs / destroy). sst, terraform, pulumi, and cloudformation-via-aws-cli are all thin presets over it.
+- `@loops-adk/core/env/sst`: `sstEnvironment`, a per-branch sst stage (`sst deploy --stage <branch>`).
+- `@loops-adk/core/env/docker`: `dockerEnvironment`, a local stack via a per-branch Docker Compose project, with ephemeral-port discovery so parallel branches never collide.
 
 SDK-bound adapters (e.g. the AWS SDK) add a real dependency, so they belong in your own package or loop definition, not the core.
 
 ## Composition: loops and DAGs
 
 ```ts
-import { dag, sequence, parallel, loop, agentJob, gateJob, agentCheck } from 'loops';
+import { dag, sequence, parallel, loop, agentJob, gateJob, agentCheck } from '@loops-adk/core';
 
 dag({
   name: 'ship',
