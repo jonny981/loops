@@ -4,3 +4,10 @@ results-*.json
 predictions-*.jsonl
 swebench-instances.json
 logs/
+
+# SWE-ContextBench: venv, generated manifests/datasets, eval scratch.
+.venv/
+contextbench/groups.json
+contextbench/related_lite.jsonl
+contextbench/__pycache__/
+contextbench/eval/
