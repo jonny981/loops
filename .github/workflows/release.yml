@@ -1,0 +1,30 @@
+name: Release
+
+# Publish to npm when a version tag is pushed. Cut a release with:
+#   npm version patch    # or minor / major — bumps package.json + tags
+#   git push --follow-tags
+# Requires an NPM_TOKEN repo secret (an npm automation token with publish rights
+# to the @loops-adk scope). Publishes with provenance (needs a public repo).
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
