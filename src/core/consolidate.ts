@@ -109,9 +109,14 @@ export async function consolidate(
 // working log (`ledger.md`) into the tight summary that rides in the commit body.
 
 const COMPACT_SYSTEM =
-  'You compress a verbose working log into a few tight lines for the next agent: ' +
-  'what was done and why, what was ruled out, what is left. Drop the play-by-play; ' +
-  'keep only what someone continuing the work needs. Output short markdown, no preamble.';
+  'You write the HANDOFF a future agent reads if it lost ALL memory of this work. Include ' +
+  'EVERYTHING it needs to continue safely, as structured markdown: ## Why (the problem and ' +
+  'the root cause), ## What (exactly what changed, and where — names, paths, signatures), ' +
+  '## Alternatives (what was ruled out and why), ## Constraints (the invariants and limits ' +
+  'that shaped it), ## Next (what is left or to watch). Preserve every decision and specific ' +
+  'value verbatim. Completeness matters more than brevity — drop only literal repetition and ' +
+  'play-by-play narration, never a decision or a detail. Omit a section only if it truly has ' +
+  'nothing. No preamble.';
 
 function truncate(s: string, n: number): string {
   const t = s.trim();
@@ -151,10 +156,10 @@ export async function compactLedger(
     const engine = opts.engine ? ctx.resolveEngine(opts.engine) : ctx.engine;
     const result = await engine.run(
       {
-        prompt: `WORKING LOG:\n${trimmed}\n\nOutput the compact summary.`,
+        prompt: `WORKING LOG:\n${trimmed}\n\nWrite the complete handoff.`,
         system: COMPACT_SYSTEM,
         model: opts.model,
-        maxTokens: 600,
+        maxTokens: 1200,
       },
       () => {},
       ctx.signal,
@@ -166,23 +171,27 @@ export async function compactLedger(
 }
 
 /**
- * Compose a commit body from a workspace's scratch files: the handoff (`prompt.md`)
- * verbatim, then a compacted working log (`ledger.md`). The handoff is already
- * curated, so it is not re-summarised; only the verbose ledger is folded. Returns ''
- * when both are empty, so callers can fall back to their own floor.
+ * Compose the commit body — the handoff: everything the next agent needs if it lost all
+ * memory of this work. Two sources, in order: the agent's OWN handoff (captured verbatim by
+ * the handoff contract into `prompt.md`), else a structured handoff DISTILLED from the
+ * working log. The second path is the guarantee — loops owns the commit step, so a terse,
+ * instruction-skipping agent still leaves a rich, structured record rather than a bare
+ * "done". Returns '' only when there is nothing at all, so callers fall back to their floor.
  */
 export async function composeCommitBody(
   ctx: JobContext,
   workspace: Workspace,
   opts: CompactOptions = {},
 ): Promise<string> {
-  const prompt = readPrompt(workspace);
-  const ledgerRaw = readLedger(workspace);
-  const ledger = ledgerRaw ? await compactLedger(ctx, ledgerRaw, opts) : '';
-  const parts: string[] = [];
-  if (prompt) parts.push(prompt);
-  if (ledger) parts.push(`## Working log\n\n${ledger}`);
-  return parts.join('\n\n');
+  // Distill the handoff from the agent's own handoff AND the working log together. Always
+  // distill the two as one body of material: a TERSE self-handoff must never shadow the far
+  // richer working log (the agent narrates the work but writes a one-line handoff), and a
+  // silent agent still gets a structured record from its log. Short material is kept verbatim.
+  const material = [readPrompt(workspace), readLedger(workspace)]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  return material ? await compactLedger(ctx, material, opts) : '';
 }
 
 export interface ConsolidateJobConfig extends ConsolidateOptions {

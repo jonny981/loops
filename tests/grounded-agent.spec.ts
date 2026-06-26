@@ -6,6 +6,7 @@ import {
   appendPrompt,
   appendLedger,
   readLedger,
+  readPrompt,
   stageAll,
   commit,
   MockEngine,
@@ -56,8 +57,9 @@ describe('grounded agentJob (read automation)', () => {
     // live handoff
     expect(prompt).toContain('Handoff so far');
     expect(prompt).toContain('handoff: B beat A on idempotency');
-    // the leave-memory instruction (lean)
-    expect(prompt).toContain('Leave memory for the next agent');
+    // the handoff contract — the guiding question + the parse marker
+    expect(prompt).toContain('lost all memory of it');
+    expect(prompt).toContain('===HANDOFF===');
     // the caller's prompt is still there, last
     expect(prompt).toContain('CONTINUE THE TASK');
     expect(prompt.indexOf('the commit log')).toBeLessThan(prompt.indexOf('CONTINUE THE TASK'));
@@ -86,6 +88,31 @@ describe('grounded agentJob (read automation)', () => {
     expect(led).toContain('### build');
     expect(led).toContain('I edited the parser and ran the tests');
     expect(led).toContain('_actions: Edit×2, Bash_');
+  });
+
+  it('splits the reply at the handoff marker: handoff → prompt.md, work → ledger.md', async () => {
+    const repo = await tmpRepo();
+    const reply =
+      'I traced the bug to a missing None check and guarded it.\n\n' +
+      '===HANDOFF===\n## Why\nparse_url raised on a missing scheme\n## What\nguarded the call\n## Next\nnothing left';
+    const opts: RunOptions = {
+      engine: 'mock',
+      engines: { mock: () => new MockEngine(() => reply) },
+      cwd: repo,
+    };
+    await run(agentJob({ label: 'fix', prompt: 'Fix it.', ground: true }), opts);
+
+    // The structured handoff lands in prompt.md — marker stripped, work-log excluded.
+    const handoff = readPrompt(ws(repo));
+    expect(handoff).toContain('## Why');
+    expect(handoff).toContain('parse_url raised on a missing scheme');
+    expect(handoff).not.toContain('===HANDOFF===');
+    expect(handoff).not.toContain('I traced the bug');
+
+    // The working log keeps the pre-marker reasoning, not the handoff sections.
+    const led = readLedger(ws(repo));
+    expect(led).toContain('I traced the bug to a missing None check');
+    expect(led).not.toContain('## Why');
   });
 
   it('is just the prompt on a fresh branch with no ledger or draft', async () => {

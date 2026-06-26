@@ -109,65 +109,72 @@ describe('ledger.md (working memory)', () => {
   });
 });
 
-describe('the commit body (handoff + working log)', () => {
-  it('keeps a SHORT working log verbatim — no lossy compaction, no model call', async () => {
-    const repo = await tmpRepo();
-    appendPrompt(ws(repo), { heading: 'Why', body: 'chose approach B for idempotency' });
-    appendLedger(ws(repo), { label: 'work', iteration: 1, text: 'tried A, hit a race; switched to B', tools: ['Edit×2', 'Bash'] });
-    write(repo, 'x.ts', 'export const x = 1;\n');
-
-    // The compaction call would hit the model on the WORKING LOG prompt — a short
-    // log must NOT trigger it (faithful verbatim, and one fewer call).
-    let compactionCalled = false;
-    const opts: RunOptions = {
-      engine: 'mock',
-      engines: {
-        mock: () =>
-          new MockEngine((req) => {
-            if (/WORKING LOG/.test(req.prompt)) {
-              compactionCalled = true;
-              return 'COMPACTED (should not happen)';
-            }
-            return '';
-          }),
-      },
-      cwd: repo,
-    };
-    const { outcome } = await run(commitJob({ subject: 'feat: x' }), opts);
-    expect(outcome.status).toBe('pass');
-
-    const [top] = await log({ cwd: repo, max: 1 });
-    expect(top?.body).toContain('chose approach B for idempotency'); // handoff verbatim
-    expect(top?.body).toContain('## Working log');
-    expect(top?.body).toContain('tried A, hit a race; switched to B'); // ledger VERBATIM
-    expect(compactionCalled).toBe(false); // short log → no model compaction
-    // both scratch files consumed at the milestone
-    expect(readPrompt(ws(repo))).toBe('');
-    expect(readLedger(ws(repo))).toBe('');
+describe('the commit body (the handoff)', () => {
+  const mockOpts = (onWorkingLog?: () => string): RunOptions => ({
+    engine: 'mock',
+    engines: {
+      mock: () =>
+        new MockEngine((req) =>
+          /WORKING LOG/.test(req.prompt) ? (onWorkingLog ? onWorkingLog() : 'DISTILLED') : '',
+        ),
+    },
+    cwd: '', // set per-test below
   });
 
-  it('compacts a LONG working log via the model (the fold still earns its keep)', async () => {
+  it('distills a structured handoff from the working log when the agent left none', async () => {
     const repo = await tmpRepo();
-    appendPrompt(ws(repo), { heading: 'Why', body: 'the handoff' });
+    // No prompt.md — the agent skipped the handoff. The working log is long enough to fold.
     const longLog = 'verbose play-by-play of what was tried. '.repeat(80); // > 2000 chars
     appendLedger(ws(repo), { label: 'work', iteration: 1, text: longLog, tools: ['Read'] });
     write(repo, 'x.ts', 'export const x = 1;\n');
 
-    const opts: RunOptions = {
-      engine: 'mock',
-      engines: {
-        mock: () =>
-          new MockEngine((req) =>
-            /WORKING LOG/.test(req.prompt) ? 'COMPACTED: switched A→B for idempotency' : '',
-          ),
-      },
+    let distilled = false;
+    const { outcome } = await run(commitJob({ subject: 'feat: x' }), {
+      ...mockOpts(() => { distilled = true; return '## Why\nthe root cause\n## What\nthe fix'; }),
       cwd: repo,
-    };
-    await run(commitJob({ subject: 'feat: x' }), opts);
+    });
+    expect(outcome.status).toBe('pass');
 
     const [top] = await log({ cwd: repo, max: 1 });
-    expect(top?.body).toContain('## Working log');
-    expect(top?.body).toContain('COMPACTED: switched A→B for idempotency'); // model fired
-    expect(top?.body).not.toContain('verbose play-by-play'); // raw log replaced by the summary
+    expect(distilled).toBe(true); // loops guarantees a handoff by distilling the log
+    expect(top?.body).toContain('## Why\nthe root cause'); // structured, not "done"
+    expect(top?.body).not.toContain('verbose play-by-play'); // the raw log is folded away
+    expect(readPrompt(ws(repo))).toBe(''); // both scratch files consumed at the milestone
+    expect(readLedger(ws(repo))).toBe('');
+  });
+
+  it("folds a TERSE self-handoff together with the working log — it must not shadow the log", async () => {
+    const repo = await tmpRepo();
+    // The agent left a one-line handoff but narrated a lot of work. The body must come from
+    // distilling BOTH, not from trusting the terse handoff verbatim.
+    appendPrompt(ws(repo), { body: '## Why\nfixed it' });
+    appendLedger(ws(repo), { label: 'work', iteration: 1, text: 'verbose reasoning. '.repeat(120), tools: ['Edit'] });
+    write(repo, 'x.ts', 'export const x = 1;\n');
+
+    let distilled = false;
+    await run(commitJob({ subject: 'feat: x' }), {
+      ...mockOpts(() => { distilled = true; return '## Why\nthe real root cause\n## What\nthe fix'; }),
+      cwd: repo,
+    });
+
+    const [top] = await log({ cwd: repo, max: 1 });
+    expect(distilled).toBe(true); // the terse handoff did not shortcut past the rich log
+    expect(top?.body).toContain('the real root cause');
+  });
+
+  it('keeps short material verbatim (no model call)', async () => {
+    const repo = await tmpRepo();
+    appendLedger(ws(repo), { label: 'work', iteration: 1, text: 'tried A, hit a race; switched to B', tools: ['Edit×2'] });
+    write(repo, 'x.ts', 'export const x = 1;\n');
+
+    let distilled = false;
+    await run(commitJob({ subject: 'feat: x' }), {
+      ...mockOpts(() => { distilled = true; return 'SHOULD NOT HAPPEN'; }),
+      cwd: repo,
+    });
+
+    const [top] = await log({ cwd: repo, max: 1 });
+    expect(top?.body).toContain('tried A, hit a race; switched to B'); // verbatim, faithful
+    expect(distilled).toBe(false); // short material → no model call
   });
 });

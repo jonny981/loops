@@ -12,13 +12,12 @@ import { assertBudget } from './budget.ts';
 import { isRepo, stageAll, commit } from './git.ts';
 import {
   appendLedger,
+  appendPrompt,
   readLedger,
   readPrompt,
   resetLedger,
   resetPrompt,
   ensureIgnored,
-  ledgerPath,
-  promptPath,
 } from './draft.ts';
 import { composeCommitBody } from './consolidate.ts';
 import { groundingText, retrieveLedger } from './ground.ts';
@@ -83,17 +82,46 @@ export interface GroundConfig {
   retrieve?: boolean | { candidates?: number; model?: string };
 }
 
-/** The "leave memory behind" instruction, naming this workspace's scratch files.
- *  Lean on purpose: it rides on every grounded turn, so it stays a few tight lines —
- *  the binding signals (the commit log, working memory, handoff) carry the content. */
-function recordBlock(ctx: JobContext): string {
+/** The marker the agent closes its reply with; the harness parses everything after it
+ *  as the handoff. A sentinel, not a file write — loops owns the turn, so the memory is
+ *  captured from the agent's own words rather than a side file a strong model skips. */
+const HANDOFF_MARK = '===HANDOFF===';
+
+/** The handoff contract appended to a grounded turn. The guiding question does the work;
+ *  the sections just scaffold the answer. The harness splits the reply at the marker into
+ *  the working log (before) and the handoff (after) — see `splitTurn`. */
+function recordBlock(): string {
   return (
-    `## Leave memory for the next agent\n` +
-    `Two gitignored \`.loops/\` files carry the work forward — write to them as you go:\n` +
-    `- \`${ledgerPath(ctx.workspace)}\` — working notes (what you try and find; the harness also auto-records each turn).\n` +
-    `- \`${promptPath(ctx.workspace)}\` — the handoff: the why, what you ruled out, the constraints, and what is left. ` +
-    `It seeds the next agent's prompt and becomes the commit body, so write it so they don't repeat your dead ends or break your decisions.`
+    `## Before you finish: the handoff\n` +
+    `Answer one question for whoever continues this: **what is everything future-you needs ` +
+    `to know about this if you lost all memory of it?** The harness keeps your answer as the ` +
+    `memory the next agent reads and as the commit body, so carry the WHY, not just the what — ` +
+    `write it so they cannot repeat your dead ends or break your decisions.\n` +
+    `End your reply with this block (keep the \`${HANDOFF_MARK}\` marker exactly; drop a ` +
+    `section only if it truly has nothing):\n\n` +
+    `${HANDOFF_MARK}\n` +
+    `## Why\n<the problem and the root cause you found>\n` +
+    `## What\n<the change you made>\n` +
+    `## Alternatives\n<what you ruled out, and why>\n` +
+    `## Constraints\n<the invariants and limits that shaped it>\n` +
+    `## Next\n<what is left, or what to watch>`
   );
+}
+
+/** Split a grounded turn's output at the handoff marker: the working log (everything
+ *  before, captured to `ledger.md`) and the handoff (everything after, captured to
+ *  `prompt.md`). No marker → the whole reply is working log and the handoff is empty. */
+function splitTurn(text: string): { work: string; handoff?: string } {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.trim().replace(/\s+/g, '').toUpperCase() === HANDOFF_MARK) {
+      return {
+        work: lines.slice(0, i).join('\n').trim(),
+        handoff: lines.slice(i + 1).join('\n').trim() || undefined,
+      };
+    }
+  }
+  return { work: text.trim() };
 }
 
 /**
@@ -141,7 +169,7 @@ async function withGrounding(
       );
   }
 
-  if (opts.recordInstruction !== false) parts.push(recordBlock(ctx));
+  if (opts.recordInstruction !== false) parts.push(recordBlock());
 
   parts.push(userPrompt);
   return parts.join('\n\n---\n\n');
@@ -260,17 +288,21 @@ export function agentJob(config: AgentJobConfig): Job {
       return outcome;
     }
 
-    // Auto-capture: when memory is on, the harness records the turn into the
-    // working memory itself — the agent's reasoning plus what it did — so the why
-    // survives even if a single agent forgets to log it (the unskippable suspenders
-    // to the recordInstruction's belt).
-    if (config.ground)
+    // Auto-capture: when memory is on, the harness records the turn from the agent's
+    // own reply — no reliance on it writing a side file. The reply is split at the
+    // handoff marker: the working log (before) goes to `ledger.md`, the structured
+    // handoff (after) to `prompt.md`. With no marker, the whole reply is working log.
+    // This is what turns a terse "done" into a real, structured memory.
+    if (config.ground) {
+      const { work, handoff } = splitTurn(result.text);
       appendLedger(ctx.workspace, {
         label,
         iteration: ctx.iteration,
-        text: result.text,
+        text: work,
         tools: summariseTools(toolUses),
       });
+      if (handoff) appendPrompt(ctx.workspace, handoff);
+    }
 
     const outcome = config.outcome
       ? await config.outcome(result.text, ctx)
