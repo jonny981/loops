@@ -242,3 +242,27 @@ BENCH_TRIALS=10 BENCH_MODEL=haiku BENCH_OUT=results-graph.json npx tsx bench/gra
 BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 BENCH_MODEL=haiku \
   BENCH_OUT=results-graph-contract.json npx tsx bench/graph.ts
 ```
+
+## SWE-ContextBench (experience reuse) — an underpowered null, and a capture fix
+
+[SWE-ContextBench](https://arxiv.org/abs/2602.08316) measures whether an agent reuses a
+base task's experience on a related task — the Ledger thesis, made by someone else (its
+headline: summarized experience beats raw-trajectory dumps). Three arms map onto loops:
+`off` = No-Context, `summary` = the committed "way" as the experience, `dump` = the raw
+trajectory. Only the related task is test-scored, by the official swebench harness.
+
+**Result (n=8 offline-test groups, sonnet, local):** no separation. `off` 1/7, `summary`
+1/6, `dump` 1/6 — all resolving only the one easy instance. A partial-credit view (mean
+FAIL_TO_PASS fraction) is identical across arms, **0.200 each**, per instance: the memory
+changed the *approach* (different diffs) but not a single *test outcome* on this slice.
+
+This is an **underpowered null, not evidence against the thesis.** Base resolve rate here
+is ~14%, and a ~+8pp effect is ~0.5 of a resolve at n=7 — statistically invisible. The
+benefiting tail (related tasks that genuinely reuse the base solution) is not sampled at
+n=8. Demonstrating the effect needs the 88-instance scale run (`bench/contextbench/RUNBOOK.md`).
+
+**What the run *did* establish (free, verified):** loops' captured handoff went from a
+constant 135 chars to **1585–5457 chars** (avg ~3400c) of structured "way" once the
+handoff contract + completeness distillation landed — the prerequisite for memory to help
+at all (an empty summary cannot). The 135c was a harness bug (a base solve's `fail` outcome
+stopping its sequence before the commit); both fixed. Reproduce / scale: `bench/contextbench/`.
