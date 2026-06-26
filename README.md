@@ -1,10 +1,12 @@
 # loops
 
-**Run an AI agent in a loop until the work is _actually_ done — then prove it.**
+**Stop prompting agents. Write the loop that prompts them. Make "done" mean _converged_, not _claimed_.**
 
-`loops` is a tiny, nestable job primitive for driving agents in **convergence loops**. Each iteration runs with a **fresh context**; the loop stops only when a gate _you_ define says it's done — a deterministic check (the tests really pass), a model judge with a confidence threshold, a k-of-n jury, or any mix. Compose loops and DAGs both ways, run them against any model backend behind a one-method `Engine`, and watch it all in a live terminal UI.
+This is the idea the whole timeline is suddenly arguing about: you stop prompting coding agents and start designing the loops that prompt them. `loops` is that idea as a small, nestable library. You write a loop that finds the work, hands it to an agent, checks the result, records what it learned, and goes again, until a gate _you_ define says it's actually finished. Compose loops and DAGs both ways, run them against any model behind a one-method `Engine`, and watch it all in a live terminal UI.
 
-A fresh context every turn would cause amnesia — a clean-slate iteration re-walking a dead end an earlier one already ruled out — so the core is **Ledger**: the loop writes its reasoning to git as it works and grounds the next turn on that log. No vector database, no embeddings, no index to sync or let go stale — **git is the memory.** And where most "agent memory" is built to recall a _conversation_, the Ledger is built to keep your _decisions_ consistent across long work. Fresh context kills rot; the Ledger kills amnesia.
+It's the disciplined descendant of the **Ralph loop**. Every iteration runs with a **fresh context** so it never rots. Progress accumulates in **git, not the chat transcript** (the agent forgets; the repo doesn't). And the loop stops only when an **honest gate** clears: a deterministic check (the tests genuinely pass) plus a separate judge in its own context window, so the model that did the work is never the one grading its own homework. That gate is the whole point. It's the structural cure for the failure everyone fears, the **"Ralph Wiggum loop"** that calls itself done on a half-finished job and bills you in silence.
+
+Where most "agent memory" is built to recall a _conversation_, this is built to keep your _decisions_ consistent across long work. No vector database, no embeddings, no index to sync or let go stale. **Git is the memory.**
 
 ![status: alpha](https://img.shields.io/badge/status-alpha-orange)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
@@ -84,6 +86,30 @@ Agents rarely nail it in one shot. The reliable pattern is a **convergence loop*
 
 Everything else — DAGs, nesting, engines, budgets, the TUI — hangs off those ideas. The whole thing is small enough to read in an afternoon.
 
+## The loop-engineering playbook, mapped
+
+The loop-engineering writeups that broke out in 2026 (Addy Osmani's _Loop Engineering_, and the threads that followed) converged on a shared anatomy: a few building blocks, one heart (the verifier), and a list of named ways loops fail. `loops` is built around that same anatomy. Here's the map, in the field's own words, and where `loops` goes further.
+
+| The playbook (their words) | In `loops` |
+| --- | --- |
+| **The gate / the verifier.** "The heart of the loop." Keep the maker away from the checker. | **Honest convergence.** A deterministic check (`commandSucceeds`) _and_ a separate judge (`agentCheck`) in its own context, hardened with a k-of-n `quorum` and a geometric-mean rubric so one weak dimension sinks the verdict. |
+| **Memory / state file.** "The agent forgets, the repo doesn't." | **Ledger.** The git commit log _is_ the memory: a structured handoff per milestone, not a flat `STATE.md` the model is trusted to keep tidy. |
+| **Sub-agents.** Maker vs checker, "too nice grading its own homework." | `agentCheck` runs in a fresh context; a `review` battery runs several lenses across several models, including a genuinely different one. |
+| **Worktrees.** Parallel agents without collisions. | `isolation: 'worktree'`: branches-as-teams, parallel writers, a `--no-ff` land-back on pass. |
+| **Skills.** Project knowledge written once, read every run. | `defineSkill` / `defineAgent`: personas and methodologies as editable markdown files. |
+| **Hard stops.** Max iterations, budget ceiling, no-progress detection. | `max` plus `budget` (a non-retryable `BUDGET` stop). No-progress detection is on the roadmap. |
+| **Automations.** The heartbeat: cron, `/loop`, hooks. | Out of scope by design. `loops` is the _body_ of the loop; put the heartbeat in cron, GitHub Actions, or Temporal and drop a `loops` job inside. |
+| **Connectors.** Act in your real tools via MCP. | Through your `Engine` and the agent's own tools. `loops` stays model- and tool-agnostic. |
+
+A useful frame from the same research wave: memory that actually compounds follows a progression, _fail → investigate → verify → distill → consult_, and `loops` enforces it structurally rather than hoping the model is diligent (see [Ledger](#ledger--memory-built-on-git) below).
+
+### Where `loops` goes further
+
+- **The gate is hardened, not hand-waved.** Everyone says "use a verifier." `loops` ships the mechanism: deterministic-plus-judge, a k-of-n quorum, a geometric-mean rubric, and a fail-closed verdict (a missing confidence scores zero, never "yes ⇒ 1.0"). It's the only library-level answer to the Ralph Wiggum loop and self-preferential bias.
+- **Nesting is a primitive, not a bespoke harness.** `loop()` and `dag()` both return a `Job`, so loops supervise loops and DAGs nest in loops, arbitrarily. The "continuous orchestration loop that oversees other threads" the discourse keeps reaching for is one line here, not a hand-rolled Mayor agent.
+- **Memory survives the squash merge.** Git-backed state is great until a squash merge flattens every rich commit body into a list of subject lines. `pullRequestJob` / `mergeJob` keep the squashed commit body a consolidation of the branch's reasoning. Nobody else even names this problem.
+- **It's the loop that works no matter which tool you're in.** The writeups are tool-bound (the Codex tab, Claude Code's `/loop`). Osmani's own wish, "a loop that still works no matter which one you happen to be sitting in," is exactly the `Engine` seam.
+
 ## Install
 
 > **Status: alpha.** The API is still settling and `loops` is not yet on npm. Use it from git for now; an npm release is planned.
@@ -113,12 +139,15 @@ loops run \
 **Definition-file mode** — full power and nesting. A `.loop.ts` file `export default`s a `Job`:
 
 ```bash
-loops run examples/confidence-gate.loop.ts          # live Ink TUI
+loops validate examples/confidence-gate.loop.ts      # offline pre-flight: load + check, no model calls
+loops run examples/confidence-gate.loop.ts           # live Ink TUI
 loops run examples/confidence-gate.loop.ts --no-tui  # plain streamed logs
 loops run examples/confidence-gate.loop.ts --json    # NDJSON event stream
 ```
 
 > `loops run <file>` **imports and executes** that file's module, like `node <file>` — only run definition files you trust.
+
+**Authoring is agent-native.** Both commands work from any repo, including one that consumes `loops` as a submodule or dependency (the recipe's folder just needs an ES module scope, which such repos already have). `loops validate <file>` is the cheap, no-model pre-flight an agent runs before `loops run`: it loads and checks the loop and reports a fix-oriented error if anything is wrong, without spending a single agent turn. The authoring guide an agent reads to compose a loop is [`skills/author-loop/SKILL.md`](skills/author-loop/SKILL.md).
 
 **Offline demo** (no network, no key — uses the mock engine):
 
@@ -195,6 +224,8 @@ agentCheck({
 ## Ledger — memory built on git
 
 Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is the core that closes the gap: the loop writes its reasoning to git as it works and reads it back before the next turn. No parallel database, no vector store — git _is_ the index: nothing to build, embed, sync, or let go stale (the commit log can't drift out of sync with the code — it _is_ the code's history). (`Ledger` is the engine; the **commit log** is the durable memory it reads and writes; `.loops/ledger.md` and `.loops/prompt.md` are the live scratch files for work in flight.)
+
+Memory that compounds (as opposed to notes that just pile up) follows a progression: _fail → investigate → verify → distill → consult_. Ledger's three tiers below trace it structurally, so a weaker model still gets disciplined memory: the **scratch files** record the failure and the investigation, the **gate** turns a fix into a verified fact, the **milestone commit** distills it into a durable decision, and **grounding** lets the next turn consult that decision instead of re-deriving it.
 
 - **Scratch files — working memory and a handoff.** Two gitignored files carry a unit of work forward. `.loops/ledger.md` is **working memory** for the agent(s) doing the work now: the harness auto-captures each grounded turn (the reasoning + a summary of actions), so the why is recorded even when no single agent holds it all at the end, and fanned-out peers share it. `.loops/prompt.md` is the **handoff** the agent distils for whoever continues: intent, alternatives ruled out, constraints, what is left. Grounding injects both into the next context; the commit body is the handoff plus a compacted working log.
 
@@ -424,6 +455,8 @@ It deliberately does **not** do durable mid-run replay (re-running a half-finish
 - [x] Environment axis — provider interface + offline mock
 - [ ] Publish to npm (with a built `dist` + `exports`)
 - [ ] Optional `wip:` autosave tier (per-iteration recovery, squashed on convergence)
+- [ ] No-progress / stall detection — the third hard stop, alongside `max` and `budget`
+- [ ] `cost per accepted change` as a first-class reported metric (the field's north-star number)
 - [ ] Calibration helpers for agent judges
 - [ ] More engine adapters (OpenAI, local models)
 - [ ] Scrollable per-iteration transcript in the TUI
