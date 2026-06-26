@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// Thin launcher: run the TypeScript CLI directly through tsx's loader so the
-// island needs no build step. `loops ...` resolves here after `npm install`.
-import { fileURLToPath } from 'node:url';
+// Thin launcher: install tsx's ESM loader globally, then run the TypeScript CLI
+// directly — no build step. Registering the loader globally (rather than a
+// scoped `tsImport`) is what lets `loops run` transform a `.loop.ts` that lives
+// OUTSIDE this package — a recipe in a consumer repo — not just files under this
+// package's own tree. `loops` resolves here after `npm install`.
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
-import { tsImport } from 'tsx/esm/api';
+import { register } from 'tsx/esm/api';
 
+register();
 const here = dirname(fileURLToPath(import.meta.url));
-await tsImport(join(here, '..', 'src', 'index.ts'), import.meta.url);
+await import(pathToFileURL(join(here, '..', 'src', 'index.ts')).href);

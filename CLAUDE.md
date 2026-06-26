@@ -72,13 +72,11 @@ Requires Node >= 20. `package.json` is `private: true` as a guard against accide
 
 ## Running .loop.ts files (the tsx loading model)
 
-`loops run <file>` imports and executes a definition file's default-exported `Job`. The `bin/loops.mjs` shim installs a **scoped** `tsImport` that only transforms files **under this package's tree**. A definition file that lives *outside* this tree (for example a recipe in a sibling directory of a parent repo) will not be transformed by the bin and fails with `Unexpected token 'export'`. For an out-of-tree recipe, run it through global tsx instead and give it its own ESM context:
+`loops run <file>` imports and executes a definition file's default-exported `Job`. `bin/loops.mjs` registers tsx's ESM loader **globally** before handing off to the CLI, so a `.loop.ts` is transformed **wherever it lives** — under this package's tree or in a consumer repo that has `loops` installed. `loops validate <file>` is the offline pre-flight: it loads and constructs the loop (catching syntax, import, transform, and bad-export errors) without running it, and reports a fix-oriented error so an authoring agent self-corrects before spending a turn.
 
-```bash
-npx tsx src/index.ts run /path/to/out-of-tree.loop.ts --no-tui
-```
+One requirement survives: the recipe's folder must be an ES module scope (a `package.json` with `{"type":"module"}`) so this library's ESM-only dependencies (execa → unicorn-magic) resolve as ESM. Repos that consume `loops` as a submodule or dependency already have this. A load that fails with an ES-module error is missing that scope, and `loadJob`'s error says so.
 
-The out-of-tree recipe also needs a sibling `package.json` with `{"type":"module"}` so this library's ESM-only dependencies (execa → unicorn-magic) resolve as ESM rather than CommonJS. This is the exact arrangement the parent repo's research recipe uses.
+The authoring guide an agent reads to compose a loop is `skills/author-loop/SKILL.md`. The run-from-anywhere contract is covered by `tests/run-anywhere.spec.ts` (it spawns the bin against a consumer-shaped out-of-tree recipe).
 
 ## Consumption
 

@@ -78,10 +78,26 @@ async function loadJob(file: string): Promise<{ job: Job; title: string }> {
       `loop file not found: ${file}\n(omit the file argument to use flags mode, or run \`loops run --help\`)`,
     );
   }
-  const mod = (await import(pathToFileURL(resolved).href)) as Record<
-    string,
-    unknown
-  >;
+  // The bin registers tsx's loader globally, so this plain import transforms a
+  // `.loop.ts` wherever it lives — inside this package or in a consumer repo that
+  // has `loops` installed. (A scoped `tsImport` only covers this package's tree,
+  // which is why an out-of-tree recipe used to die on `Unexpected token 'export'`.)
+  let mod: Record<string, unknown>;
+  try {
+    mod = (await import(pathToFileURL(resolved).href)) as Record<string, unknown>;
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : String(e);
+    const esmHint =
+      /ES Module|import statement outside a module|ERR_REQUIRE_ESM/i.test(detail)
+        ? `\n  hint: the recipe's folder is not an ES module scope. Add a package.json ` +
+          `with {"type":"module"} next to it (repos that use loops as a submodule already have this).`
+        : '';
+    throw new Error(
+      `failed to load loop file ${file}:\n  ${detail}${esmHint}\n` +
+        `(the file is imported and run like \`node <file>\`; fix the error above, or ` +
+        `run \`loops validate ${file}\` to check it without executing)`,
+    );
+  }
   const def = mod.default ?? mod.job ?? mod.loop;
   const title = path.basename(file).replace(/\.(loop\.)?(t|j)sx?$/, '');
   if (typeof def === 'function') return { job: def as Job, title };
@@ -368,6 +384,23 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .action((file: string | undefined, flags: RunFlags) =>
       execute(file, flags),
     );
+
+  program
+    .command('validate')
+    .argument('<file>', 'a loop-definition file to check')
+    .description(
+      'load a .loop.ts and confirm it yields a runnable loop, without executing it — the cheap, no-model pre-flight an agent runs before `loops run`',
+    )
+    .action(async (file: string) => {
+      // loadJob imports + constructs the Job (so it catches syntax, import,
+      // transform, and bad-export errors) but never calls run(), so no agent
+      // turns fire. A failure throws the same agent-grade error `run` would,
+      // and the top-level handler reports it with exit code 1.
+      const { title } = await loadJob(file);
+      process.stdout.write(
+        `✓ ${file}\n  loads and yields a runnable loop ("${title}"). Not executed.\n`,
+      );
+    });
 
   await program.parseAsync(argv);
 }
