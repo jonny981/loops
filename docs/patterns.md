@@ -198,3 +198,45 @@ spent before the work converges, the dag fails honestly rather than shipping
 unaddressed feedback. Same idea as Tier 1's review — a downstream check sends work
 back, bounded, with the feedback threaded in — at a finer grain. The runnable offline
 version is [`examples/feedback.loop.ts`](../examples/feedback.loop.ts).
+
+## Ship via PR — keep the squash-merge body honest
+
+loops' memory *is* the commit log: each milestone commits a structured "way" welded to
+its diff. A **squash merge** threatens that — it collapses every milestone body on the
+branch into one commit whose body GitHub defaults to a list of subject lines, so the
+reasoning is lost from the base branch's history. The fix reuses the fold loops already
+has: a PR body that is `consolidate`d from the branch's commit bodies, kept current, and
+written as the squash commit message.
+
+```ts
+import { loop, sequence, agentJob, commandSucceeds, pullRequestJob, mergeJob, forgeChecks } from 'loops';
+
+export const ship = sequence('ship',
+  loop({
+    name: 'build',
+    body: agentJob({ label: 'engineer', ground: true, prompt: buildPrompt }),
+    until: commandSucceeds('npm', ['test']),
+    commit: { subject: 'feat: the feature' }, // rich milestone bodies on the branch
+  }),
+  // Push, then open or update the PR. The body is a synthesis of the branch's commit
+  // bodies (consolidate, scoped `since: base`), refreshed each run — so it stays current.
+  pullRequestJob({ base: 'main', title: 'feat: the feature' }),
+  // Opt-in squash merge with that synthesis as the commit body, gated on CI being green.
+  mergeJob({ base: 'main', auto: true, deleteBranch: true }), // --auto: GitHub merges when checks pass
+);
+```
+
+`pullRequestJob` is **idempotent create-or-update**: run it after each milestone (or at
+convergence) and the PR description tracks the branch — that is what makes the eventual
+squash body correct. Two ways to gate the merge for "when CI passes":
+
+- `mergeJob({ auto: true })` → `gh pr merge --squash --auto` (non-blocking; GitHub lands it
+  once required checks pass — the recommended path), or
+- `mergeJob({ when: forgeChecks() })` → a synchronous loops gate that checks the PR's required
+  checks before loops issues the merge (`forgeChecks()` is a `Condition`, usable anywhere one is).
+
+`mergeJob` writes the synthesis as the squash body directly, so it survives the squash
+regardless of the repo's merge settings; body-only (drop `mergeJob`, let a human merge)
+instead relies on the repo's squash default being "PR title and description". The host is the
+injectable `Forge` seam (gh-backed by default), so the whole flow runs offline against a
+`MockForge` — see [`examples/ship-pr.loop.ts`](../examples/ship-pr.loop.ts).

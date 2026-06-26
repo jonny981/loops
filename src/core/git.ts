@@ -289,3 +289,46 @@ export async function mergeAbort(
 ): Promise<void> {
   await git(['merge', '--abort'], { cwd: repoDir, signal: opts.signal });
 }
+
+// ── Remote ──────────────────────────────────────────────────────────────────
+
+export interface PushOptions extends GitOpts {
+  /** The remote to push to. Default `origin`. */
+  remote?: string;
+  /** The branch to push. Default the branch checked out at `cwd`. */
+  branch?: string;
+  /** Set the upstream tracking ref (`-u`). Default true. */
+  setUpstream?: boolean;
+  /** Force-with-lease the push. Default false. */
+  force?: boolean;
+}
+
+export interface PushResult {
+  ok: boolean;
+  /** The combined git output, surfaced on failure (no remote, rejected, etc.). */
+  output: string;
+}
+
+/**
+ * Push the branch to a remote — the one place loops reaches past the local
+ * substrate. Honest like the rest of this module: a non-zero exit (no remote, a
+ * rejected non-fast-forward, no upstream) comes back as `{ ok: false, output }`
+ * for the caller to surface, never a throw. `--force-with-lease` is the only
+ * force offered, so a force push still refuses to clobber unseen remote work.
+ */
+export async function push(opts: PushOptions): Promise<PushResult> {
+  const branch = opts.branch ?? (await currentBranch(opts));
+  const args = ['push'];
+  if (opts.setUpstream ?? true) args.push('-u');
+  if (opts.force) args.push('--force-with-lease');
+  args.push(opts.remote ?? 'origin');
+  if (branch) args.push(branch);
+  const r = await execa('git', args, {
+    cwd: opts.cwd,
+    cancelSignal: opts.signal,
+    reject: false,
+    stdin: 'ignore',
+    all: true,
+  });
+  return { ok: (r.exitCode ?? 1) === 0, output: (r.all ?? r.stdout ?? '').trim() };
+}

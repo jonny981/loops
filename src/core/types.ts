@@ -21,6 +21,7 @@ import type { LoopError } from './errors.ts';
 import type { Budget } from './budget.ts';
 import type { CommitJobConfig } from './job.ts';
 import type { EnvHandle, Environment } from '../env/environment.ts';
+import type { Forge } from './forge.ts';
 
 /** Terminal disposition of a `Job`. */
 export type OutcomeStatus =
@@ -96,6 +97,8 @@ export interface JobContext {
   readonly workspace: Workspace;
   /** The running environment for this workspace, when one is up (gate target). */
   readonly environment?: EnvHandle;
+  /** The PR host, when one is configured — where `pullRequestJob`/`mergeJob` run. */
+  readonly forge?: Forge;
   /** 1-based iteration index within the enclosing loop; 0 outside a loop. */
   readonly iteration: number;
   /** Nesting depth (root steps are 0). */

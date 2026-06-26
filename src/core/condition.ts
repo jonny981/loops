@@ -26,6 +26,7 @@ import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
 import { assertBudget } from './budget.ts';
 import { resolveSystem, type AgentDef } from './agent.ts';
+import { GhForge } from './forge.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -144,6 +145,28 @@ export function commandSucceeds(
         reason: `\`${command}\` failed to run: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
+  };
+}
+
+/**
+ * True when the branch's open PR has all required checks green — a synchronous
+ * "CI is green" gate over the `Forge`. Use it as `mergeJob`'s `when`, or anywhere a
+ * `Condition` is taken, for the blocking path; prefer `mergeJob({ auto: true })` to
+ * hand the same gate to GitHub non-blockingly. No PR / no branch → not met.
+ */
+export function forgeChecks(): Condition {
+  return async (ctx) => {
+    const branch = ctx.workspace.branch;
+    if (!branch) return { met: false, reason: 'no branch checked out' };
+    const forge = ctx.forge ?? new GhForge();
+    const fopts = { cwd: ctx.workspace.dir, signal: ctx.signal };
+    const pr = await forge.viewPr(branch, fopts);
+    if (!pr) return { met: false, reason: `no open PR for "${branch}"` };
+    const ok = await forge.checksPass(pr, fopts);
+    return {
+      met: ok,
+      reason: ok ? 'required checks pass' : 'required checks not green',
+    };
   };
 }
 

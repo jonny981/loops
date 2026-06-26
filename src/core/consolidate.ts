@@ -38,6 +38,12 @@ const CONSOLIDATE_SYSTEM =
 export interface ConsolidateOptions {
   /** Recent milestones to fold in. Default 30. */
   max?: number;
+  /**
+   * Exclusive lower bound — fold only commits after this ref (e.g. the base
+   * branch). This scopes the fold to one line of work, exactly the set a squash
+   * merge collapses, so the consolidation can stand in as the squash body.
+   */
+  since?: string;
   /** The consolidated ledger so far, to update in place. */
   prior?: string;
   /** Engine for the (one) consolidation call. Default the run engine. */
@@ -70,6 +76,7 @@ export async function consolidate(
   const records = await log({
     cwd: ctx.workspace.dir,
     max: opts.max ?? 30,
+    since: opts.since,
     signal: ctx.signal,
   });
   const entries = records

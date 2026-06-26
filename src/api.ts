@@ -60,6 +60,7 @@ export {
   isDirty,
   commit,
   log,
+  push,
   addWorktree,
   removeWorktree,
   deleteBranch,
@@ -70,6 +71,8 @@ export {
   type CommitRecord,
   type CommitInput,
   type LogQuery,
+  type PushOptions,
+  type PushResult,
   type WorktreeHandle,
   type MergeResult,
 } from './core/git.ts';
@@ -80,6 +83,34 @@ export {
   type MergeSynthesisConfig,
   type MergeSynthesisResult,
 } from './core/merge.ts';
+
+// The Forge — the PR host seam (gh-backed by default), and PR jobs that keep a
+// PR body a faithful synthesis of the branch so the Ledger survives a squash merge
+export {
+  isForge,
+  GhForge,
+  MockForge,
+  buildViewArgs,
+  buildCreateArgs,
+  buildEditArgs,
+  buildMergeArgs,
+  buildChecksArgs,
+  type Forge,
+  type PrRef,
+  type PrInput,
+  type PrPatch,
+  type MergeOptions,
+  type ForgeOpts,
+  type MockForgeOptions,
+} from './core/forge.ts';
+export {
+  pushJob,
+  pullRequestJob,
+  mergeJob,
+  type PushJobConfig,
+  type PullRequestJobConfig,
+  type MergeJobConfig,
+} from './core/pr.ts';
 
 // Worktree isolation as a composable Job wrapper (for dynamic dispatch)
 export { isolated, type IsolatedOptions } from './core/isolated.ts';
@@ -131,6 +162,7 @@ export {
   quorum,
   always,
   never,
+  forgeChecks,
   agentCheck,
   gateJob,
   type AgentCheckConfig,

@@ -28,9 +28,13 @@ src/cli.tsx           commander CLI: flags mode + `run <file>` definition mode
 src/core/
   job.ts              the Job type + helpers (defineJob, agentJob, gateJob)
   loop.ts             loop(): start → body → until → review, with retry/delay/caps
-  dag.ts              dag()/sequence()/parallel(): toposort, needs/optional/when
+  dag.ts              dag()/sequence()/parallel(): toposort, needs/optional/when,
+                      bounded cross-stage kickback (re-run a dirty subgraph)
   condition.ts        commandSucceeds, agentCheck, quorum, all/any/not, predicate,
-                      toVerdict, the dimensional-judge geometric mean
+                      forgeChecks, toVerdict, the dimensional-judge geometric mean
+  forge.ts            Forge seam (PR host): GhForge (gh CLI) + MockForge, arg-builders
+  pr.ts               pushJob / pullRequestJob / mergeJob — keep the squash body a
+                      consolidation of the branch so the Ledger survives a squash merge
   budget.ts           Budget + assertBudget (non-retryable BUDGET LoopError)
   context.ts          JobContext (iteration, state, lastReview, signal)
   errors.ts           LoopError + terminal status taxonomy

@@ -22,6 +22,7 @@ import {
 } from './persist.ts';
 import { currentBranch } from '../core/git.ts';
 import type { Environment, EnvHandle } from '../env/environment.ts';
+import type { Forge } from '../core/forge.ts';
 import type {
   Job,
   JobContext,
@@ -57,6 +58,11 @@ export interface RunOptions {
    * at the worktree boundary are a separate, later binding.
    */
   environment?: Environment;
+  /**
+   * The PR host for `pushJob`/`pullRequestJob`/`mergeJob`. Default: `GhForge`
+   * (the `gh` CLI) when a job needs one. Pass a `MockForge` to run offline.
+   */
+  forge?: Forge;
   onEvent?: (event: LoopEvent) => void;
   /** Seed the shared, mutable run state. */
   state?: Record<string, unknown>;
@@ -206,6 +212,7 @@ export async function run(
     state: initialState,
     workspace,
     environment,
+    forge: options.forge,
     budget,
     onLimit: options.onLimit ?? 'auto',
     maxWaitMs: options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,

@@ -33,6 +33,7 @@ export function childContext(
     // boundary forks it into an isolated worktree by passing `workspace`.
     workspace: over.workspace ?? parent.workspace,
     environment: over.environment ?? parent.environment,
+    forge: parent.forge,
     budget: parent.budget,
     onLimit: parent.onLimit,
     maxWaitMs: parent.maxWaitMs,

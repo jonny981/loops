@@ -220,6 +220,12 @@ Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is th
   agentJob({ label: 'work', prompt: 'Continue.', ground: { retrieve: true } });
   ```
 
+- **Ship via PR — survive the squash.** The commit log is the memory, but a **squash merge** collapses a branch's milestone bodies into one commit whose body defaults to a list of subject lines — the reasoning lost from the base branch. `pullRequestJob` closes that: it pushes the branch and opens (or idempotently updates) a PR whose body is the same `consolidate` fold scoped to this branch — kept current as milestones land. `mergeJob` then squash-merges with that synthesis as the commit body, gated on CI (`auto: true` hands the wait to GitHub; `when: forgeChecks()` is a synchronous gate). The host is the injectable `Forge` seam (the `gh` CLI by default), so it runs offline against a `MockForge`.
+
+  ```ts
+  sequence('ship', pullRequestJob({ base: 'main' }), mergeJob({ base: 'main', auto: true }));
+  ```
+
 The Ledger has **two faces**: _cross-iteration_ (recover from your own failed attempts in a retry loop) and _cross-node_ (honour an upstream node's decision a downstream agent could not otherwise know). Both need headroom — on one-shot, single-node work memory is only a tax. See [docs/concepts.md](docs/concepts.md) for where it helps and the measured evidence in [bench/RESULTS.md](bench/RESULTS.md).
 
 ## Engines — bring any model
