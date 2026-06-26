@@ -447,6 +447,19 @@ The error taxonomy backs this: an engine classifies a throttle into a `RATE_LIMI
 
 Every mode ends with a summary: result, per-loop iterations, review tallies, token usage by model, and any errors.
 
+## Supervise a running loop
+
+Run with `--supervise` and the loop registers itself under `~/.loops/runs/`, writing its live state there as it goes. Another process reads it with no daemon and no socket, because the filesystem is the channel (the same bet the rest of the library makes).
+
+```bash
+loops run build.loop.ts --supervise   # in one terminal
+loops list                             # in another: every supervised run, with state and iteration
+loops status <runId>                   # its shape plus where it is now: iteration, last gate verdict, tokens
+loops tail <runId>                     # stream its events live
+```
+
+`list` marks a run dead if its process is gone. The read side is also on the public surface (`listRuns`, `readRunStatus`, `runEventsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
+
 ## What `loops` is (and isn't)
 
 `loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress _and its reasoning_ live in git (the Ledger), so each iteration can start clean and still know what came before. If the process dies mid-run, you re-run against the same workspace (the worktree holds the files, the scratch files hold the why, the log holds the milestones) and continue. You lose the bookkeeping, not the work.
@@ -464,7 +477,9 @@ It deliberately does **not** do durable mid-run replay (re-running a half-finish
 - [x] **Ledger**, git-memory core: the scratch files (working memory + handoff), grounding, milestone commits
 - [x] Worktree isolation (branches-as-teams) with `--no-ff` land-back
 - [x] Environment axis: provider interface + offline mock
-- [ ] Publish to npm (with a built `dist` + `exports`)
+- [x] Publish to npm (`@loops-adk/core`, built `dist` + types, CI release)
+- [x] Supervision: a file-based run registry with `loops list` / `status` / `tail`
+- [ ] Out-of-process control: `pause` / `abort` / `kickback` a running loop from outside
 - [ ] Optional `wip:` autosave tier (per-iteration recovery, squashed on convergence)
 - [ ] No-progress / stall detection: the third hard stop, alongside `max` and `budget`
 - [ ] `cost per accepted change` as a first-class reported metric

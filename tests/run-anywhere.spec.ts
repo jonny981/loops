@@ -1,26 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  symlinkSync,
-  rmSync,
-} from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // The agent-native run-from-anywhere contract: `loops run` / `loops validate`
-// must transform and execute a `.loop.ts` that lives OUTSIDE this package — a
-// recipe in a consumer repo — not just files under this package's own tree.
+// must transform and execute a `.loop.ts` that lives OUTSIDE this package's tree.
 // These spawn the real bin as a subprocess, which is the only faithful test of
-// the tsx-loader wiring (a plain in-process import would not exercise it).
+// the tsx-loader wiring (a plain in-process import would not exercise it). The
+// recipe imports loops' API by a `file:` URL into src, so the recipe and the
+// bin resolve to the same source (and so share the meta registry).
 
 const exec = promisify(execFile);
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const bin = join(repoRoot, 'bin', 'loops.mjs');
+const apiUrl = pathToFileURL(join(repoRoot, 'src', 'api.ts')).href;
 
 async function loops(
   args: string[],
@@ -35,7 +31,7 @@ async function loops(
   }
 }
 
-const RECIPE = `import { defineJob, loop, fnJob, predicate } from 'loops';
+const RECIPE = `import { defineJob, loop, fnJob, predicate } from '${apiUrl}';
 let ticks = 0;
 export default defineJob(
   loop({
@@ -54,18 +50,15 @@ describe('running a loop from outside the package tree', () => {
   let dir: string;
 
   beforeAll(() => {
-    // A consumer-shaped project: `loops` installed in node_modules (mirrors a
-    // submodule / dependency), and an ES module scope (what such repos have).
+    // An out-of-tree recipe in its own ES module scope (what a consumer repo has).
     dir = mkdtempSync(join(tmpdir(), 'loops-oot-'));
-    mkdirSync(join(dir, 'node_modules'), { recursive: true });
-    symlinkSync(repoRoot, join(dir, 'node_modules', 'loops'), 'dir');
     writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
     writeFileSync(join(dir, 'recipe.loop.ts'), RECIPE);
   });
 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('runs an out-of-tree recipe that imports "loops" to convergence', async () => {
+  it('runs an out-of-tree recipe to convergence', async () => {
     const { code, out } = await loops(
       ['run', join(dir, 'recipe.loop.ts'), '--no-tui'],
       dir,

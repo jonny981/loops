@@ -21,6 +21,13 @@ import { jsonReporter, plainReporter, printSummary } from './reporters.ts';
 import { buildJobFromFlags, parseDuration } from './config.ts';
 import { loop } from './core/loop.ts';
 import { jobMeta, renderPlan } from './core/describe.ts';
+import {
+  listRuns,
+  readRunStatus,
+  runEventsPath,
+  runsHome,
+  formatEvent,
+} from './runtime/supervisor.ts';
 import type { Job, LoopConfig } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
 
@@ -49,6 +56,7 @@ interface RunFlags {
   record?: string;
   checkpoint?: string;
   resume?: string;
+  supervise?: boolean;
   onLimit?: string;
   maxWait?: string;
   json?: boolean;
@@ -219,6 +227,7 @@ async function execute(
     recordTo: flags.record,
     checkpoint: flags.checkpoint,
     resumeFrom: flags.resume,
+    supervise: flags.supervise,
     onLimit,
     maxWaitMs,
     resumeCommand,
@@ -298,6 +307,17 @@ function printResumeGuidance(file: string | undefined, flags: RunFlags): void {
         'resumable.\n',
     );
   }
+}
+
+/** Compact relative age, e.g. `8s`, `5m`, `2h`, `3d`. */
+function relAge(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
 }
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -382,6 +402,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     )
     .option('--json', 'emit NDJSON events to stdout (no TUI)')
     .option('--no-tui', 'plain line output instead of the Ink TUI')
+    .option(
+      '--supervise',
+      'register this run in ~/.loops/runs so `loops list`/`status`/`tail` can observe it from another process',
+    )
     .action((file: string | undefined, flags: RunFlags) =>
       execute(file, flags),
     );
@@ -413,6 +437,122 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .action(async (file: string) => {
       const { job } = await loadJob(file);
       process.stdout.write(`${renderPlan(jobMeta(job)).join('\n')}\n`);
+    });
+
+  // ── Supervision: observe a run from another process (the registry is files) ──
+
+  program
+    .command('list')
+    .alias('ls')
+    .description('list supervised runs (start one with `loops run --supervise`)')
+    .action(() => {
+      const runs = listRuns();
+      if (!runs.length) {
+        process.stdout.write(
+          `no supervised runs in ${runsHome()}\n(start one with: loops run --supervise <file>)\n`,
+        );
+        return;
+      }
+      for (const r of runs) {
+        const state =
+          r.status === 'running' ? (r.alive ? 'running' : 'dead') : r.status;
+        const age = relAge(Date.now() - (r.endedAt ?? r.updatedAt));
+        process.stdout.write(
+          `${r.runId.padEnd(26)}  ${state.padEnd(9)}  iter ${String(r.live.iteration).padStart(3)}  ${age.padStart(4)}  ${r.title}\n`,
+        );
+      }
+    });
+
+  program
+    .command('status')
+    .argument('<runId>', 'a run id from `loops list`')
+    .description("show a supervised run's live state and shape")
+    .action((runId: string) => {
+      const r = readRunStatus(runId);
+      if (!r) {
+        process.stderr.write(`no run "${runId}" in ${runsHome()}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      const state =
+        r.status === 'running'
+          ? r.alive
+            ? 'running'
+            : 'dead (process gone)'
+          : r.status;
+      const g = r.live.lastGate;
+      const o = r.live.lastOutcome;
+      const lines = [
+        `${r.runId}  [${state}]`,
+        `  title:   ${r.title}`,
+        `  cwd:     ${r.cwd}`,
+        `  pid:     ${r.pid}`,
+        r.live.iteration
+          ? `  at:      ${r.live.path.join(' › ')} (iteration ${r.live.iteration})`
+          : '',
+        g
+          ? `  gate:    ${g.which} ${g.met ? 'met' : 'not met'}${g.confidence != null ? ` @ ${g.confidence.toFixed(2)}` : ''}: ${g.reason}`
+          : '',
+        o ? `  last:    ${o.status}${o.summary ? `: ${o.summary}` : ''}` : '',
+        `  tokens:  ${r.live.usage.inputTokens} in / ${r.live.usage.outputTokens} out (${r.live.usage.calls} calls)`,
+      ].filter(Boolean);
+      process.stdout.write(`${lines.join('\n')}\n`);
+      if (r.shape)
+        process.stdout.write(
+          `\n  shape:\n${renderPlan(r.shape)
+            .map((l) => `    ${l}`)
+            .join('\n')}\n`,
+        );
+    });
+
+  program
+    .command('tail')
+    .argument('<runId>', 'a run id from `loops list`')
+    .description("stream a supervised run's events live (Ctrl-C to stop)")
+    .action(async (runId: string) => {
+      const path = runEventsPath(runId);
+      if (!fs.existsSync(path)) {
+        process.stderr.write(`no run "${runId}" in ${runsHome()}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      let offset = 0;
+      let stop = false;
+      const onSig = () => {
+        stop = true;
+      };
+      process.once('SIGINT', onSig);
+      for (;;) {
+        const buf = fs.readFileSync(path, 'utf8');
+        if (buf.length > offset) {
+          // Only consume up to the last newline, so a torn read never drops a line.
+          const chunk = buf.slice(offset);
+          const lastNl = chunk.lastIndexOf('\n');
+          if (lastNl >= 0) {
+            offset += lastNl + 1;
+            for (const line of chunk.slice(0, lastNl).split('\n')) {
+              if (!line.trim()) continue;
+              try {
+                process.stdout.write(`${formatEvent(JSON.parse(line))}\n`);
+              } catch {
+                /* skip an unparseable line */
+              }
+            }
+          }
+        }
+        if (stop) break;
+        const st = readRunStatus(runId);
+        if (st && st.status !== 'running') {
+          process.stdout.write(`◂ ${st.status}\n`);
+          break;
+        }
+        if (st && !st.alive) {
+          process.stdout.write('◂ process gone (no terminal status)\n');
+          break;
+        }
+        await new Promise((res) => setTimeout(res, 200));
+      }
+      process.removeListener('SIGINT', onSig);
     });
 
   await program.parseAsync(argv);

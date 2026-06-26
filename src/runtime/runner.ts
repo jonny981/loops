@@ -20,6 +20,8 @@ import {
   loadCheckpoint,
   flushCheckpoint,
 } from './persist.ts';
+import { startSupervisor, newRunId, type Supervisor } from './supervisor.ts';
+import { jobMeta } from '../core/describe.ts';
 import { currentBranch } from '../core/git.ts';
 import type { Environment, EnvHandle } from '../env/environment.ts';
 import type { Forge } from '../core/forge.ts';
@@ -76,6 +78,12 @@ export interface RunOptions {
   recordTo?: string;
   /** Snapshot the shared run state here at each loop/dag/job boundary. */
   checkpoint?: string;
+  /**
+   * Register this run in the global registry (`~/.loops/runs/<runId>`) and write
+   * its live state there, so another process can `loops list` / `status` / `tail`
+   * it. Off by default — opt in to make a run observable from outside.
+   */
+  supervise?: boolean;
   /** Restore shared run state written by a prior `checkpoint` before starting. */
   resumeFrom?: string;
   /**
@@ -100,6 +108,8 @@ export interface RunResult {
   stats: StatsSnapshot;
   /** Final token accounting, when a budget was set. */
   budget?: { limit: number; spent: number; remaining: number };
+  /** The registry id, when the run was supervised. */
+  runId?: string;
 }
 
 export async function run(
@@ -148,10 +158,26 @@ export async function run(
   // Persistence sinks observe the same event stream as reporters. The
   // checkpointer closes over `initialState`, which is `rootCtx.state` — so it
   // always snapshots the live, mutated scratchpad.
+  const dir = options.cwd ?? process.cwd();
   const sinks: Array<(event: LoopEvent) => void> = [];
   if (options.recordTo) sinks.push(makeRecorder(options.recordTo));
   if (options.checkpoint)
     sinks.push(makeCheckpointer(options.checkpoint, initialState));
+
+  // A supervised run registers itself in the global registry (~/.loops/runs) and
+  // writes its live state there, so another process can list/status/tail it.
+  let supervisor: Supervisor | undefined;
+  if (options.supervise) {
+    const shape = jobMeta(job);
+    const title = shape?.name ?? 'run';
+    supervisor = startSupervisor({
+      runId: newRunId(title),
+      cwd: dir,
+      title,
+      shape,
+    });
+    sinks.push(supervisor.sink);
+  }
 
   const emit = (event: LoopEvent) => {
     stats.record(event);
@@ -165,7 +191,6 @@ export async function run(
 
   // The root workspace is the substrate the whole run reads and writes. Branch
   // resolution is best-effort: a non-git cwd just leaves `branch` undefined.
-  const dir = options.cwd ?? process.cwd();
   const workspace: Workspace = {
     dir,
     branch: await currentBranch({ cwd: dir, signal: controller.signal }),
@@ -186,12 +211,14 @@ export async function run(
         message: `environment "${options.environment.name}" failed to start: ${error.message}`,
         code: error.code,
       });
+      const failOutcome: Outcome = {
+        status: 'fail',
+        summary: `environment failed to start: ${error.message}`,
+        error,
+      };
+      supervisor?.finish(failOutcome);
       return {
-        outcome: {
-          status: 'fail',
-          summary: `environment failed to start: ${error.message}`,
-          error,
-        },
+        outcome: failOutcome,
         stats: stats.snapshot(),
         budget: budget
           ? {
@@ -200,6 +227,7 @@ export async function run(
               remaining: budget.remaining(),
             }
           : undefined,
+        runId: supervisor?.runId,
       };
     }
   }
@@ -247,6 +275,8 @@ export async function run(
   if (outcome.status === 'paused' && options.checkpoint)
     flushCheckpoint(options.checkpoint, initialState);
 
+  supervisor?.finish(outcome);
+
   return {
     outcome,
     stats: stats.snapshot(),
@@ -257,6 +287,7 @@ export async function run(
           remaining: budget.remaining(),
         }
       : undefined,
+    runId: supervisor?.runId,
   };
 }
 

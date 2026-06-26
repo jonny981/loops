@@ -208,6 +208,19 @@ export {
 } from './runtime/runner.ts';
 export { Stats, type StatsSnapshot } from './core/stats.ts';
 
+// Supervision — observe a supervised run from another process. The registry is
+// files (~/.loops/runs), so these are the read side a `loops list`/`status`/`tail`
+// (or an MCP server) builds on. A run opts in with `RunOptions.supervise`.
+export {
+  listRuns,
+  readRunStatus,
+  runEventsPath,
+  runsHome,
+  formatEvent,
+  type RunStatus,
+  type RunLive,
+} from './runtime/supervisor.ts';
+
 import type { Job } from './core/types.ts';
 
 /** Identity helper that pins the type of a default export to `Job`. */
