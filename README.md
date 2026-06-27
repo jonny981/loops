@@ -1,17 +1,24 @@
-# loops
+<p align="center">
+  <img src="assets/logo.png" alt="loops" width="320">
+</p>
 
-**Stop prompting agents. Write the loop that prompts them. Make "done" mean _converged_, not _claimed_.**
+<p align="center">
+  <strong>Stop prompting agents. Write the loop that prompts them. Make "done" mean <em>converged</em>, not <em>claimed</em>.</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@loops-adk/core"><img src="https://img.shields.io/npm/v/@loops-adk/core" alt="npm"></a>
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="status: alpha">
+  <img src="https://img.shields.io/badge/TypeScript-strict-3178c6" alt="TypeScript">
+  <img src="https://img.shields.io/badge/node-%3E%3D20-3c873a" alt="node &gt;=20">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
+</p>
 
 `loops` is a small, nestable library for running an agent in a convergence loop. The loop finds the work, hands it to an agent, checks the result, records what it learned, and goes again until a gate _you_ define says the work is finished. You write the loop once and it drives the agent, rather than prompting the agent by hand. Compose loops and DAGs both ways, run them against any model behind a one-method `Engine`, and watch a run in a live terminal UI.
 
 Every iteration runs with a **fresh context**, so a long run never rots. Progress accumulates in **git, not the chat transcript**: the agent forgets between turns, the repository does not. The loop stops only when an **honest gate** clears, a deterministic check (the tests genuinely pass) alongside a separate judge in its own context, so the model that did the work is never the one that grades it. The gate is the core idea. It keeps a loop from declaring itself finished on a half-built job and spending tokens with nothing to show.
 
 Where most "agent memory" recalls a _conversation_, this keeps your _decisions_ consistent across long work. No vector database, no embeddings, no index to sync or let go stale. **Git is the memory.**
-
-![status: alpha](https://img.shields.io/badge/status-alpha-orange)
-![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
-![node >=20](https://img.shields.io/badge/node-%3E%3D20-3c873a)
-![license MIT](https://img.shields.io/badge/license-MIT-blue)
 
 ```ts
 import { loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
