@@ -7,7 +7,7 @@
  *
  * OFF applies the public prompts using only the files. ON reads the same repo's
  * commit log before the serialize step. Both pass the public smoke test; only ON
- * ships snapshots the deployed-client fleet can read because it sees the
+ * ships snapshots the mixed deployed-client fleet can read because it sees the
  * `SSv1|` wire-format tag in the upstream commit body.
  *
  *   npm run bench:wow
@@ -43,8 +43,19 @@ const DEFAULT_FLEET_SIZE = 10_000;
 const FLEET_SIZE = positiveIntEnv('BENCH_WOW_FLEET', DEFAULT_FLEET_SIZE);
 const SERVICES = ['billing', 'checkout', 'admin', 'mobile', 'partner-api', 'reports', 'support', 'audit'];
 const REGIONS = ['iad', 'lhr', 'sfo', 'fra', 'syd'];
+const SERVICE_REPLAY_MIX: Record<string, { strict: number; lenient: number }> = {
+  billing: { strict: 62, lenient: 31 },
+  checkout: { strict: 56, lenient: 36 },
+  admin: { strict: 14, lenient: 54 },
+  mobile: { strict: 38, lenient: 43 },
+  'partner-api': { strict: 27, lenient: 52 },
+  reports: { strict: 19, lenient: 63 },
+  support: { strict: 0, lenient: 46 },
+  audit: { strict: 8, lenient: 59 },
+};
 
 type Arm = 'off' | 'on';
+type ClientMode = 'strict-reader' | 'lenient-reader' | 'write-only';
 
 interface GraphTask {
   name: string;
@@ -68,12 +79,17 @@ interface FleetClient {
   id: string;
   service: string;
   region: string;
+  mode: ClientMode;
 }
 
 interface FleetReplay {
   total: number;
   accepted: number;
   rejected: number;
+  unaffected: number;
+  strictReaders: number;
+  lenientReaders: number;
+  writeOnly: number;
   sampleFailures: string[];
 }
 
@@ -207,20 +223,46 @@ console.log(store.toJSON());
 }
 
 function fleetClient(index: number): FleetClient {
+  const id = `client-${String(index + 1).padStart(5, '0')}`;
+  const service = SERVICES[index % SERVICES.length];
+  const region = REGIONS[Math.floor(index / SERVICES.length) % REGIONS.length];
+  const mix = SERVICE_REPLAY_MIX[service] ?? { strict: 0, lenient: 0 };
+  const bucket = stableBucket(`${id}:${service}:${region}`);
+  const mode =
+    bucket < mix.strict
+      ? 'strict-reader'
+      : bucket < mix.strict + mix.lenient
+        ? 'lenient-reader'
+        : 'write-only';
+
   return {
-    id: `client-${String(index + 1).padStart(5, '0')}`,
-    service: SERVICES[index % SERVICES.length],
-    region: REGIONS[Math.floor(index / SERVICES.length) % REGIONS.length],
+    id,
+    service,
+    region,
+    mode,
   };
 }
 
+function stableBucket(value: string): number {
+  let hash = 2166136261;
+  for (const ch of value) {
+    hash ^= ch.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % 100;
+}
+
 function validateSnapshotForClient(snapshot: string, client: FleetClient): string | undefined {
-  if (!snapshot.startsWith('SSv1|')) {
-    return `${client.id} ${client.service}/${client.region}: missing SSv1| snapshot tag`;
+  if (client.mode === 'write-only') return undefined;
+
+  const tagged = snapshot.startsWith('SSv1|');
+  if (client.mode === 'strict-reader' && !tagged) {
+    return `${client.id} ${client.service}/${client.region} strict reader: missing SSv1| snapshot tag`;
   }
 
   try {
-    const parsed = JSON.parse(snapshot.slice('SSv1|'.length)) as {
+    const payload = tagged ? snapshot.slice('SSv1|'.length) : snapshot;
+    const parsed = JSON.parse(payload) as {
       items?: Array<{ id?: unknown; value?: unknown }>;
       nextId?: unknown;
     };
@@ -238,11 +280,27 @@ function validateSnapshotForClient(snapshot: string, client: FleetClient): strin
 
 function replayFleet(snapshot: string, size: number): FleetReplay {
   let accepted = 0;
+  let rejected = 0;
+  let unaffected = 0;
+  let strictReaders = 0;
+  let lenientReaders = 0;
+  let writeOnly = 0;
   const sampleFailures: string[] = [];
 
   for (let i = 0; i < size; i++) {
-    const failure = validateSnapshotForClient(snapshot, fleetClient(i));
+    const client = fleetClient(i);
+    if (client.mode === 'strict-reader') strictReaders++;
+    else if (client.mode === 'lenient-reader') lenientReaders++;
+    else writeOnly++;
+
+    if (client.mode === 'write-only') {
+      unaffected++;
+      continue;
+    }
+
+    const failure = validateSnapshotForClient(snapshot, client);
     if (failure) {
+      rejected++;
       if (sampleFailures.length < 3) sampleFailures.push(failure);
     } else accepted++;
   }
@@ -250,7 +308,11 @@ function replayFleet(snapshot: string, size: number): FleetReplay {
   return {
     total: size,
     accepted,
-    rejected: size - accepted,
+    rejected,
+    unaffected,
+    strictReaders,
+    lenientReaders,
+    writeOnly,
     sampleFailures,
   };
 }
@@ -362,9 +424,14 @@ function printArm(label: string, result: ArmResult): void {
   console.log(`  public smoke test:            ${mark(result.publicPass)}`);
   console.log(`  snapshot shipped:             ${preview(result.snapshot)}`);
   console.log(
-    `  fleet replay:                 ${fmt(result.fleet.accepted)} / ${fmt(
-      result.fleet.total,
-    )} accepted, ${fmt(result.fleet.rejected)} rejected`,
+    `  replay mix:                   ${fmt(result.fleet.strictReaders)} strict readers, ${fmt(
+      result.fleet.lenientReaders,
+    )} lenient readers, ${fmt(result.fleet.writeOnly)} write-only`,
+  );
+  console.log(
+    `  fleet replay:                 ${fmt(result.fleet.accepted)} accepted, ${fmt(
+      result.fleet.rejected,
+    )} rejected, ${fmt(result.fleet.unaffected)} unaffected, ${fmt(result.fleet.total)} total`,
   );
   console.log(`  blast radius:                 ${fmt(result.fleet.rejected)} broken deployed clients`);
   console.log(`  full invariant gate:          ${mark(result.gatePass)}`);
@@ -387,9 +454,9 @@ async function main(): Promise<void> {
   console.log('Visible issue: add save/load snapshots to the store.');
   console.log(`Public prompt mentions SSv1|: ${yesNo(serializePrompt.includes('SSv1|'))}`);
   console.log(`Foundation commit mentions SSv1|: ${yesNo(task.foundation_why.includes('SSv1|'))}`);
-  console.log('Hidden reality: a deployed client rejects snapshots without that tag.\n');
+  console.log('Hidden reality: strict deployed readers reject snapshots without that tag.\n');
   console.log(
-    `Scale replay: ${fmt(FLEET_SIZE)} deployed clients across ${SERVICES.length} services and ${REGIONS.length} regions.`,
+    `Scale replay: ${fmt(FLEET_SIZE)} mixed deployed clients across ${SERVICES.length} services and ${REGIONS.length} regions.`,
   );
   console.log('Same visible repo. Same public test. Same model spend.');
   console.log('Only one run reads the verified engineering memory in git.\n');
@@ -399,10 +466,8 @@ async function main(): Promise<void> {
 
   if (off.fleet.rejected > 0 && !off.gatePass && on.fleet.rejected === 0 && on.gatePass) {
     console.log('Bottom line: both runs look green to the public test.');
-    console.log(
-      `One missed upstream contract becomes ${fmt(off.fleet.rejected)} broken deployed-client replays.`,
-    );
-    console.log('Loops reads the upstream why once and the fleet replay drops to zero failures.');
+    console.log(`One missed upstream contract breaks ${fmt(off.fleet.rejected)} strict deployed readers.`);
+    console.log('Loops reads the upstream why once and all snapshot readers accept the replay.');
   } else {
     console.log('Result: unexpected demo outcome; rerun with BENCH_WOW_KEEP=1 to inspect temp workspaces.');
     process.exitCode = 1;

@@ -26,8 +26,8 @@ npm run bench:context:dry
 
 `bench:wow` is the one-command mechanism demo: two deterministic runs, same files
 and public prompts, both passing the visible test, but only the grounded arm reads
-the upstream contract from git memory and ships snapshots that pass the
-10,000-client fleet replay. It is not a statistical benchmark. Set
+the upstream contract from git memory and ships snapshots that pass a mixed
+10,000-client compatibility replay. It is not a statistical benchmark. Set
 `BENCH_WOW_FLEET=<n>` to resize the replay.
 `bench:report:sample` renders a synthetic checked-in result so the reporter is
 verifiable in a fresh clone; it is not benchmark evidence. `bench:context:dry`
