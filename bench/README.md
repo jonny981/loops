@@ -25,8 +25,9 @@ npm run bench:context:dry
 ```
 
 `bench:wow` is the one-command mechanism demo: two deterministic runs, same files
-and public prompts, but only the grounded arm reads the upstream contract from git
-memory and passes the hidden gate. It is not a statistical benchmark.
+and public prompts, both passing the visible test, but only the grounded arm reads
+the upstream contract from git memory and ships a snapshot the deployed client can
+read. It is not a statistical benchmark.
 `bench:report:sample` renders a synthetic checked-in result so the reporter is
 verifiable in a fresh clone; it is not benchmark evidence. `bench:context:dry`
 uses the mock engine path in `swecontextbench.ts`; it validates the acquisition,
