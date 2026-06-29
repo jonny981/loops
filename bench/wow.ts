@@ -7,8 +7,8 @@
  *
  * OFF applies the public prompts using only the files. ON reads the same repo's
  * commit log before the serialize step. Both pass the public smoke test; only ON
- * ships a snapshot the deployed client can read because it sees the `SSv1|`
- * wire-format tag in the upstream commit body.
+ * ships snapshots the deployed-client fleet can read because it sees the
+ * `SSv1|` wire-format tag in the upstream commit body.
  *
  *   npm run bench:wow
  */
@@ -39,6 +39,12 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TASK_DIR = join(HERE, 'graph-tasks/stable-store-contract');
 const KEEP = process.env.BENCH_WOW_KEEP === '1';
+const DEFAULT_FLEET_SIZE = 10_000;
+const FLEET_SIZE = positiveIntEnv('BENCH_WOW_FLEET', DEFAULT_FLEET_SIZE);
+const SERVICES = ['billing', 'checkout', 'admin', 'mobile', 'partner-api', 'reports', 'support', 'audit'];
+const REGIONS = ['iad', 'lhr', 'sfo', 'fra', 'syd'];
+
+type Arm = 'off' | 'on';
 
 interface GraphTask {
   name: string;
@@ -52,11 +58,30 @@ interface ArmResult {
   sawContract: boolean;
   memoryEvidence: string;
   publicPass: boolean;
-  clientPass: boolean;
   gatePass: boolean;
   snapshot: string;
-  clientOutput: string;
+  fleet: FleetReplay;
   tokens: number;
+}
+
+interface FleetClient {
+  id: string;
+  service: string;
+  region: string;
+}
+
+interface FleetReplay {
+  total: number;
+  accepted: number;
+  rejected: number;
+  sampleFailures: string[];
+}
+
+function positiveIntEnv(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) return fallback;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function storeSource(opts: { includeFind: boolean; taggedSnapshot: boolean }): string {
@@ -133,7 +158,7 @@ async function git(dir: string, args: string[], input?: string): Promise<string>
   return r.stdout;
 }
 
-async function prepareRepo(task: GraphTask, arm: ArmResult['arm']): Promise<string> {
+async function prepareRepo(task: GraphTask, arm: Arm): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), `loops-wow-${arm}-`));
   cpSync(join(TASK_DIR, 'seed'), dir, { recursive: true });
   await git(dir, ['init', '-q']);
@@ -154,17 +179,6 @@ async function runCommand(dir: string, command: string): Promise<{ ok: boolean; 
     ok: r.exitCode === 0,
     output: [r.stdout, r.stderr].filter(Boolean).join('\n').trim(),
   };
-}
-
-function conciseFailure(output: string): string {
-  return (
-    output
-      .split('\n')
-      .map((line) => line.trim())
-      .find((line) => line.startsWith('AssertionError')) ??
-    output.split('\n').find((line) => line.trim())?.trim() ??
-    'command failed'
-  );
 }
 
 function memoryEvidenceLine(memory: string): string {
@@ -192,22 +206,56 @@ console.log(store.toJSON());
 `;
 }
 
-function deployedClientSource(): string {
-  return `import assert from 'node:assert/strict';
-import * as store from './store.mjs';
-
-store._reset();
-store.add('paid-plan');
-const snapshot = store.toJSON();
-assert.ok(
-  snapshot.startsWith('SSv1|'),
-  'deployed client rejected the snapshot because it is missing SSv1|',
-);
-console.log('client accepted snapshot');
-`;
+function fleetClient(index: number): FleetClient {
+  return {
+    id: `client-${String(index + 1).padStart(5, '0')}`,
+    service: SERVICES[index % SERVICES.length],
+    region: REGIONS[Math.floor(index / SERVICES.length) % REGIONS.length],
+  };
 }
 
-async function runArm(task: GraphTask, arm: ArmResult['arm']): Promise<ArmResult> {
+function validateSnapshotForClient(snapshot: string, client: FleetClient): string | undefined {
+  if (!snapshot.startsWith('SSv1|')) {
+    return `${client.id} ${client.service}/${client.region}: missing SSv1| snapshot tag`;
+  }
+
+  try {
+    const parsed = JSON.parse(snapshot.slice('SSv1|'.length)) as {
+      items?: Array<{ id?: unknown; value?: unknown }>;
+      nextId?: unknown;
+    };
+    const hasItems = Array.isArray(parsed.items);
+    const hasNextId = typeof parsed.nextId === 'number';
+    if (!hasItems || !hasNextId) {
+      return `${client.id} ${client.service}/${client.region}: malformed snapshot payload`;
+    }
+  } catch {
+    return `${client.id} ${client.service}/${client.region}: snapshot payload is not valid JSON`;
+  }
+
+  return undefined;
+}
+
+function replayFleet(snapshot: string, size: number): FleetReplay {
+  let accepted = 0;
+  const sampleFailures: string[] = [];
+
+  for (let i = 0; i < size; i++) {
+    const failure = validateSnapshotForClient(snapshot, fleetClient(i));
+    if (failure) {
+      if (sampleFailures.length < 3) sampleFailures.push(failure);
+    } else accepted++;
+  }
+
+  return {
+    total: size,
+    accepted,
+    rejected: size - accepted,
+    sampleFailures,
+  };
+}
+
+async function runArm(task: GraphTask, arm: Arm): Promise<ArmResult> {
   const dir = await prepareRepo(task, arm);
   let sawContract = false;
   let memoryEvidence = '';
@@ -269,21 +317,19 @@ async function runArm(task: GraphTask, arm: ArmResult['arm']): Promise<ArmResult
   const publicResult = await runCommand(dir, 'node test-public.mjs');
   writeFileSync(join(dir, '__snapshot.mjs'), snapshotProbeSource());
   const snapshotResult = await runCommand(dir, 'node __snapshot.mjs');
-  writeFileSync(join(dir, '__deployed-client.mjs'), deployedClientSource());
-  const clientResult = await runCommand(dir, 'node __deployed-client.mjs');
   copyFileSync(join(TASK_DIR, 'gate.mjs'), join(dir, '__gate.mjs'));
   const gateResult = await runCommand(dir, task.gate);
   const tokens = result.stats.totalInputTokens + result.stats.totalOutputTokens;
+  const fleet = replayFleet(snapshotResult.output, FLEET_SIZE);
 
   return {
     dir,
     sawContract,
     memoryEvidence,
     publicPass: publicResult.ok,
-    clientPass: clientResult.ok,
     gatePass: gateResult.ok,
     snapshot: snapshotResult.output,
-    clientOutput: clientResult.output,
+    fleet,
     tokens,
   };
 }
@@ -301,20 +347,31 @@ function preview(value: string): string {
   return oneLine.length > 88 ? `${oneLine.slice(0, 85)}...` : oneLine;
 }
 
+function fmt(value: number): string {
+  return new Intl.NumberFormat('en-GB').format(value);
+}
+
 function printArm(label: string, result: ArmResult): void {
-  const outcome = result.clientPass
-    ? 'visible tests green, deployed client safe'
-    : 'visible tests green, deployed client broken';
+  const outcome =
+    result.fleet.rejected === 0
+      ? 'visible tests green, fleet replay clean'
+      : 'visible tests green, fleet replay broken';
   console.log(`${label}: ${outcome}`);
   console.log(`  remembered upstream contract: ${yesNo(result.sawContract)}`);
   if (result.memoryEvidence) console.log(`  proof read from git:           ${result.memoryEvidence}`);
   console.log(`  public smoke test:            ${mark(result.publicPass)}`);
   console.log(`  snapshot shipped:             ${preview(result.snapshot)}`);
-  console.log(`  deployed client replay:       ${mark(result.clientPass)}`);
+  console.log(
+    `  fleet replay:                 ${fmt(result.fleet.accepted)} / ${fmt(
+      result.fleet.total,
+    )} accepted, ${fmt(result.fleet.rejected)} rejected`,
+  );
+  console.log(`  blast radius:                 ${fmt(result.fleet.rejected)} broken deployed clients`);
   console.log(`  full invariant gate:          ${mark(result.gatePass)}`);
   console.log(`  model tokens spent:           ${result.tokens}`);
-  if (!result.clientPass && result.clientOutput)
-    console.log(`  client says:                  ${conciseFailure(result.clientOutput)}`);
+  for (const failure of result.fleet.sampleFailures) {
+    console.log(`  sample failure:               ${failure}`);
+  }
   if (KEEP) console.log(`  workspace:                    ${result.dir}`);
   console.log('');
 }
@@ -331,15 +388,21 @@ async function main(): Promise<void> {
   console.log(`Public prompt mentions SSv1|: ${yesNo(serializePrompt.includes('SSv1|'))}`);
   console.log(`Foundation commit mentions SSv1|: ${yesNo(task.foundation_why.includes('SSv1|'))}`);
   console.log('Hidden reality: a deployed client rejects snapshots without that tag.\n');
+  console.log(
+    `Scale replay: ${fmt(FLEET_SIZE)} deployed clients across ${SERVICES.length} services and ${REGIONS.length} regions.`,
+  );
   console.log('Same visible repo. Same public test. Same model spend.');
   console.log('Only one run reads the verified engineering memory in git.\n');
 
   printArm('VANILLA AGENT', off);
   printArm('LOOPS LEDGER AGENT', on);
 
-  if (!off.clientPass && !off.gatePass && on.clientPass && on.gatePass) {
+  if (off.fleet.rejected > 0 && !off.gatePass && on.fleet.rejected === 0 && on.gatePass) {
     console.log('Bottom line: both runs look green to the public test.');
-    console.log('Loops prevents the deployed-client break because it remembers the upstream why.');
+    console.log(
+      `One missed upstream contract becomes ${fmt(off.fleet.rejected)} broken deployed-client replays.`,
+    );
+    console.log('Loops reads the upstream why once and the fleet replay drops to zero failures.');
   } else {
     console.log('Result: unexpected demo outcome; rerun with BENCH_WOW_KEEP=1 to inspect temp workspaces.');
     process.exitCode = 1;
