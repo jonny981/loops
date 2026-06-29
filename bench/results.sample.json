@@ -1,0 +1,59 @@
+{
+  "generatedAt": "2026-06-29T00:00:00.000Z",
+  "config": {
+    "maxIters": 3,
+    "engine": "mock",
+    "model": "synthetic",
+    "trials": 2,
+    "tasksDir": "bench/tasks-sample"
+  },
+  "tasks": [
+    {
+      "id": "sample-synthetic",
+      "arms": [
+        {
+          "arm": "off",
+          "trials": [
+            {
+              "resolved": true,
+              "status": "pass",
+              "iterations": 2,
+              "inputTokens": 1000,
+              "outputTokens": 200,
+              "elapsedMs": 1000
+            },
+            {
+              "resolved": false,
+              "status": "pass",
+              "iterations": 3,
+              "inputTokens": 1100,
+              "outputTokens": 250,
+              "elapsedMs": 1200
+            }
+          ]
+        },
+        {
+          "arm": "on",
+          "trials": [
+            {
+              "resolved": true,
+              "status": "pass",
+              "iterations": 3,
+              "inputTokens": 1200,
+              "outputTokens": 260,
+              "elapsedMs": 1100
+            },
+            {
+              "resolved": false,
+              "status": "pass",
+              "iterations": 3,
+              "inputTokens": 1150,
+              "outputTokens": 240,
+              "elapsedMs": 1300
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
