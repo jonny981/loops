@@ -19,10 +19,14 @@ open bench/RESULTS.md
 Then run the cheapest wiring checks:
 
 ```bash
+npm run bench:wow
 npm run bench:report:sample
 npm run bench:context:dry
 ```
 
+`bench:wow` is the one-command mechanism demo: two deterministic runs, same files
+and public prompts, but only the grounded arm reads the upstream contract from git
+memory and passes the hidden gate. It is not a statistical benchmark.
 `bench:report:sample` renders a synthetic checked-in result so the reporter is
 verifiable in a fresh clone; it is not benchmark evidence. `bench:context:dry`
 uses the mock engine path in `swecontextbench.ts`; it validates the acquisition,
@@ -53,6 +57,7 @@ Ledger grounding.
 |---|---|---|
 | `ab.ts` | Does Ledger help a retry loop recover from failed attempts? | `npm run bench:ab` |
 | `graph.ts` | Does Ledger carry upstream decisions across agent graph nodes? | `npm run bench:graph` |
+| `wow.ts` | Can a fresh clone see the cross-node memory mechanism without model spend? | `npm run bench:wow` |
 | `sweep.ts` | Does Ledger keep independent batch work consistent? | `npx tsx bench/sweep.ts` |
 | `swebench.ts` | Does Ledger improve SWE-bench resolve@K? | `npx tsx bench/swebench.ts` |
 | `swecontextbench.ts` | Does distilled experience help related issues? | `npm run bench:context:dry` for wiring, then `bench/contextbench/RUNBOOK.md` |
