@@ -5,9 +5,14 @@ import { EVIDENCE, renderComparison } from '../bench/compare.ts';
 describe('benchmark comparison report', () => {
   it('renders the core comparison claims', () => {
     const out = renderComparison();
-    expect(out).toContain('Loops Evidence Map');
+    expect(out).toContain('Loops: The First-Sight Proof');
+    expect(out).toContain('snapshots must start');
+    expect(out).toContain('thread back through');
+    expect(out).toContain('not just `git log`');
+    expect(out).toContain('gated milestone commits');
+    expect(out).toContain('how and why the');
     expect(out).toContain('OFF 0/10 versus ON 9/10');
-    expect(out).toContain('raw full git-log dump');
+    expect(out).toContain('full-log dump is not a serious operating mode');
     expect(out).toContain('Do not claim');
   });
 

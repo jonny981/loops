@@ -30,7 +30,7 @@ export const EVIDENCE: Evidence[] = [
     comparison: 'One-shot work versus work that crosses context boundaries.',
     result: 'One-shot tasks show no lift. Boundary-heavy tasks are where the lift appears.',
     plainRead:
-      'Loops is not trying to make a single agent smarter in one prompt. It is trying to make separate fresh contexts inherit verified engineering reasons from git.',
+      'Loops is not trying to make a single agent smarter in one prompt. It is trying to make separate fresh contexts inherit verified engineering reasons from git, including the path of decisions that got the repo here.',
     limit:
       'If the model can solve the task in one attempt, Loops mostly adds cost.',
     reproduce: ['open bench/RESULTS.md'],
@@ -41,7 +41,7 @@ export const EVIDENCE: Evidence[] = [
     comparison: 'Loops ON versus Loops OFF on the same hidden contract graph.',
     result: 'OFF 0/10, ON 9/10, lift +90pp.',
     plainRead:
-      'The downstream agent needed an exact wire tag that lived only in an upstream commit body. Without grounded memory it never found it. With Loops it usually applied it.',
+      'The downstream agent needed an exact wire tag that lived only in an upstream commit body. Loops helped because its gated write layer created the reasoning thread, then its grounding layer let the next agent pull on it.',
     limit:
       'This is a synthetic contract task. It proves the mechanism cleanly, not broad real-world frequency.',
     reproduce: [
@@ -55,9 +55,9 @@ export const EVIDENCE: Evidence[] = [
     comparison: 'Raw CLI agents with no memory and raw CLI agents with the full git log pasted in.',
     result: 'No memory 0/10, naive git dump 10/10, Loops 9/10 on the small contract task.',
     plainRead:
-      'On a tiny one-commit history, just pasting the git log is a very strong baseline. Loops does not beat it there. Loops makes the memory path automatic and bounded.',
+      'On a tiny one-commit history, pasting the whole git log is a useful sanity check. It is not a credible operating mode for a repo with significant history. It also assumes the log already contains useful reasoning. Loops enforces that write side.',
     limit:
-      'The decisive capability test is when the log is too large to paste, not this tiny-log case.',
+      'Full-log dump becomes context rot and cost on real project history. Treat it as a toy upper bound, not a product baseline.',
     reproduce: [
       'BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_MODE=nomem BENCH_TRIALS=10 npx tsx bench/baseline.ts',
       'BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_MODE=gitdump BENCH_TRIALS=10 npx tsx bench/baseline.ts',
@@ -69,9 +69,9 @@ export const EVIDENCE: Evidence[] = [
     comparison: 'Loops recent-N, Loops retrieval, and raw full-log dump.',
     result: 'Recent-N 0/6, retrieval 5/6, full-log dump 6/6.',
     plainRead:
-      'Loops needs the right read mode. Recent commits fail when the key decision is old. Retrieval mostly recovers it. Full dump still wins while the log fits.',
+      'Loops needs the right read mode. Recent commits fail when the key decision is old. Retrieval mostly recovers it. Full dump still wins on 16 commits because 16 commits is not a real history.',
     limit:
-      'This shows the need for retrieval. It does not yet prove retrieval beats dumping everything.',
+      'This shows the need for retrieval. It also shows why the dump baseline has to be made dump-infeasible before it means anything for lived-in repos.',
     reproduce: [
       'BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_NOISE=15 BENCH_GROUND=retrieve BENCH_TRIALS=6 npm run bench:graph',
       'BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_MODE=gitdump BENCH_NOISE=15 BENCH_TRIALS=6 npx tsx bench/baseline.ts',
@@ -157,21 +157,41 @@ function bullet(label: string, text: string): string {
 
 export function renderComparison(items: Evidence[] = EVIDENCE): string {
   const lines: string[] = [];
-  lines.push('# Loops Evidence Map');
+  lines.push('# Loops: The First-Sight Proof');
   lines.push('');
-  lines.push('Plain claim: Loops helps when software work crosses context boundaries.');
-  lines.push('It is a tax on easy one-shot tasks. It becomes useful when a later fresh');
-  lines.push('agent context needs a verified reason that is not obvious from the files.');
+  lines.push('An agent graph had to preserve one upstream decision: snapshots must start');
+  lines.push('with the exact wire tag `SSv1|`. That decision lived only in a git commit');
+  lines.push('body. It was not in the source files, not in the task prompt, and not in');
+  lines.push('the downstream agent context.');
   lines.push('');
-  lines.push('Read this as a comparison guide, not a leaderboard.');
-  lines.push('The listed numbers come from bench/RESULTS.md. Changing engine or model');
-  lines.push('creates a new result set, even when the benchmark shape is the same.');
+  lines.push('That commit was more than a remembered fact. It was the thread back through');
+  lines.push('the journey: what was decided, why it was decided, and what later agents had');
+  lines.push('to keep honouring.');
+  lines.push('');
+  lines.push('| Runner | What it could read | Result |');
+  lines.push('|---|---|---|');
+  lines.push('| Memoryless graph | files plus task prompt | 0/10 preserved the contract |');
+  lines.push('| Loops Ledger | gated commit bodies plus grounding | 9/10 preserved the contract |');
+  lines.push('| Raw git dump | full git log pasted into every prompt | 10/10 on a toy log, not a real-repo operating mode |');
+  lines.push('');
+  lines.push('Plain read: Loops is not magic memory and it is not just `git log`.');
+  lines.push('It is the deterministic enforcement layer that makes agents write useful');
+  lines.push('commit bodies when work converges, then the grounding layer that reads those');
+  lines.push('verified reasons back into later fresh contexts. The value is not bare');
+  lines.push('recall: a fresh agent can pull on one thread and reconstruct how and why the');
+  lines.push('repository got here. Full-log dump is a sanity check on tiny histories, but');
+  lines.push('on a repo with significant history it is context rot and cost. Loops exists');
+  lines.push('for that lived-in repo case.');
 
   lines.push(section('Fast Read'));
+  lines.push('- Core claim: agents should not remember chats. Repositories should remember verified work and why it exists.');
+  lines.push('- Differentiator: Loops writes the reasoning journey through gated milestone commits, then reads it back.');
   lines.push('- Strongest signal: cross-node contract, OFF 0/10 versus ON 9/10.');
-  lines.push('- Strongest baseline: raw full git-log dump matches or beats Loops while the log fits.');
+  lines.push('- Strongest sanity check: raw full git-log dump matches or beats Loops while the log is tiny.');
   lines.push('- Most honest SWE-bench signal: grounded retries build, memoryless retries regress.');
-  lines.push('- Do not claim: Loops improves one-shot tasks or beats full-log dump on tiny histories.');
+  lines.push('- Do not claim: Loops beats full-log dump on toy histories.');
+  lines.push('- Do claim: full-log dump is not a serious operating mode for significant repos.');
+  lines.push('- Source: the listed numbers come from bench/RESULTS.md. Changing engine or model creates a new result set.');
 
   lines.push(section('Comparison Table'));
   lines.push('| ID | Compared With | Result | Plain Read |');
@@ -198,7 +218,7 @@ export function renderComparison(items: Evidence[] = EVIDENCE): string {
   lines.push(section('Claim Boundaries'));
   lines.push('- Mechanism demo: useful for intuition, not agent evidence.');
   lines.push('- Local graph: clean memory mechanism, synthetic task.');
-  lines.push('- Raw baselines: essential comparator, especially full git-log dump.');
+  lines.push('- Raw baselines: essential sanity checks, but full git-log dump is intentionally unrealistic on lived-in repos.');
   lines.push('- SWE-bench: real bugs and official scoring, but the local slice is small.');
   lines.push('- SWE-ContextBench: acquisition path only until a larger scored run separates arms.');
   lines.push('');

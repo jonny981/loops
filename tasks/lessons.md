@@ -6,3 +6,6 @@
 - 2026-06-30: Do not call a mock mechanism demo "wow" or present it as product proof. Keep offline mechanism checks separate from live agent signal and repeated benchmarks.
 - 2026-06-30: Live benchmark scripts should not have a provider default. Require `BENCH_ENGINE` so engine choice is explicit, flexible, and never silently spends the wrong account.
 - 2026-06-30: Do not steer back to the issue-corpus approach after deciding to defer it. Use the existing comparison benchmarks first when the user asks how outsiders can compare Loops against other tools.
+- 2026-06-30: Treat full-log dump as a toy-history sanity check, not a serious long-horizon baseline. On a repo with significant history it is context rot and cost; the proof should make that obvious.
+- 2026-06-30: The Loops memory claim is not just reading `git log`; it is deterministic enforcement that creates rich commit bodies at convergence, then grounding that reads those verified reasons back.
+- 2026-06-30: Frame Ledger as a trace of the agent journey, not only persisted facts. The value is that a fresh agent can pull on one thread and reconstruct what was decided, why, and how the repository reached its state.
