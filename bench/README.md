@@ -19,16 +19,17 @@ open bench/RESULTS.md
 Then run the cheapest wiring checks:
 
 ```bash
-npm run bench:wow
+npm run bench:mechanism
 npm run bench:report:sample
 npm run bench:context:dry
 ```
 
-`bench:wow` is the one-command mechanism demo: two deterministic runs, same files
-and public prompts, both passing the visible test, but only the grounded arm reads
-the upstream contract from git memory and ships snapshots that pass a mixed
-10,000-client compatibility replay. It is not a statistical benchmark. Set
-`BENCH_WOW_FLEET=<n>` to resize the replay.
+`bench:mechanism` is the offline mechanism demo: two deterministic runs, same
+files and public prompts, both passing the visible test, but only the grounded
+arm reads the upstream contract from git memory and ships snapshots that pass a
+mixed 10,000-client compatibility replay. It uses `MockEngine`, so it is not
+agent evidence and not a statistical benchmark. Set
+`BENCH_MECHANISM_FLEET=<n>` to resize the replay.
 `bench:report:sample` renders a synthetic checked-in result so the reporter is
 verifiable in a fresh clone; it is not benchmark evidence. `bench:context:dry`
 uses the mock engine path in `swecontextbench.ts`; it validates the acquisition,
@@ -36,16 +37,21 @@ prompt-shaping, and prediction-output wiring without spending model tokens.
 
 ## Local Live Runs
 
-These commands drive a real coding agent through `claude-cli`, so they need local
-Claude auth and will spend subscription/API capacity depending on your setup.
+These commands drive a real coding agent through the configured engine. Set
+`BENCH_ENGINE` explicitly, for example `BENCH_ENGINE=codex` or
+`BENCH_ENGINE=claude-cli`.
 
 ```bash
+# One live agent signal on the cross-node contract task
+BENCH_ENGINE=codex npm run bench:signal
+npm run bench:report -- bench/results-signal.json
+
 # Ledger ON/OFF across retry-loop tasks
-npm run bench:ab
+BENCH_ENGINE=codex npm run bench:ab
 npm run bench:report -- bench/results.json
 
 # Cross-node graph contract, where the upstream decision lives only in git history
-BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 BENCH_MODEL=haiku \
+BENCH_ENGINE=codex BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 \
   npm run bench:graph
 npm run bench:report -- bench/results-graph.json
 ```
@@ -57,13 +63,13 @@ Ledger grounding.
 
 | File | Question | Run |
 |---|---|---|
-| `ab.ts` | Does Ledger help a retry loop recover from failed attempts? | `npm run bench:ab` |
-| `graph.ts` | Does Ledger carry upstream decisions across agent graph nodes? | `npm run bench:graph` |
-| `wow.ts` | Can a fresh clone see the cross-node memory mechanism without model spend? | `npm run bench:wow` |
-| `sweep.ts` | Does Ledger keep independent batch work consistent? | `npx tsx bench/sweep.ts` |
-| `swebench.ts` | Does Ledger improve SWE-bench resolve@K? | `npx tsx bench/swebench.ts` |
+| `ab.ts` | Does Ledger help a retry loop recover from failed attempts? | `BENCH_ENGINE=codex npm run bench:ab` |
+| `graph.ts` | Does Ledger carry upstream decisions across agent graph nodes? | `BENCH_ENGINE=codex npm run bench:graph` |
+| `mechanism.ts` | Can a fresh clone see the cross-node memory mechanism without model spend? | `npm run bench:mechanism` |
+| `sweep.ts` | Does Ledger keep independent batch work consistent? | `BENCH_ENGINE=codex npx tsx bench/sweep.ts` |
+| `swebench.ts` | Does Ledger improve SWE-bench resolve@K? | `BENCH_ENGINE=codex npx tsx bench/swebench.ts` |
 | `swecontextbench.ts` | Does distilled experience help related issues? | `npm run bench:context:dry` for wiring, then `bench/contextbench/RUNBOOK.md` |
-| `baseline.ts` | Does Loops beat or match vanilla orchestration baselines? | `npx tsx bench/baseline.ts` |
+| `baseline.ts` | Does Loops beat or match vanilla orchestration baselines? | `BENCH_ENGINE=codex npx tsx bench/baseline.ts` |
 
 ## Scale Runs
 

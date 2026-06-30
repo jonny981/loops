@@ -283,10 +283,10 @@ The agent launch only ever touches the `Engine` interface, so the loop knows not
 
 | name            | backend                          | notes                                                       |
 | --------------- | -------------------------------- | ----------------------------------------------------------- |
-| `claude-cli`    | `claude` subprocess (`execa`)    | fresh process per call; uses host Claude auth, no key       |
-| `agent-sdk`     | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call; host Claude auth                  |
-| `anthropic-api` | `@anthropic-ai/sdk`              | token-level streaming; cheapest for judges; needs a key     |
-| `codex`         | `codex exec` subprocess (GPT-5)  | a genuinely different model for a second-model reviewer; read-only |
+| `codex`         | `codex exec` subprocess (`execa`) | fresh process per call; read-only unless `bypassPermissions` |
+| `claude-cli`    | `claude` subprocess (`execa`)     | fresh process per call; uses host Claude auth, no key        |
+| `agent-sdk`     | `@anthropic-ai/claude-agent-sdk`  | fresh `query()` per call; host Claude auth                   |
+| `anthropic-api` | `@anthropic-ai/sdk`               | token-level streaming; cheapest for judges; needs a key      |
 | `mock`          | scripted, offline                | for tests and examples                                      |
 
 Select per-run (`--engine`, `RunOptions.engine`) or per-job/condition (`engine:` takes a name **or** a ready-made `Engine`). Bring your own in ~10 lines:

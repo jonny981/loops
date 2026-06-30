@@ -20,7 +20,7 @@
  *   python -m swebench.harness.run_evaluation -d princeton-nlp/SWE-bench_Lite \
  *     -p <predictions-on.jsonl> -id loops-on -n none --cache_level env --max_workers 2
  *
- * Needs host Claude auth (the agent edits real repos) and the instances file:
+ * Needs a configured CLI agent (the agent edits real repos) and the instances file:
  *   BENCH_SWE_INSTANCES=/path/instances.json BENCH_K=2 BENCH_MODEL=sonnet \
  *     npx tsx bench/swebench.ts [instance_id ...]
  */
@@ -52,13 +52,21 @@ if (!INSTANCES_PATH) {
   process.exit(1);
 }
 const K = Number(process.env.BENCH_K ?? 2);
-const MODEL = process.env.BENCH_MODEL || 'sonnet';
+const MODEL = process.env.BENCH_MODEL || undefined;
 const CACHE = process.env.BENCH_SWE_CACHE || join(tmpdir(), 'loops-swe-cache');
 const OUT_DIR = process.env.BENCH_SWE_OUT || join(tmpdir(), 'loops-swe-out');
-// claude-cli locally; set BENCH_ENGINE=agent-sdk on a headless box (API-key auth).
-const ENGINE = process.env.BENCH_ENGINE || 'claude-cli';
+const ENGINE = requireEngine();
 
 type Arm = 'off' | 'on';
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
 
 /** Clone each repo once into a local cache; per-run copies clone from it fast. */
 async function ensureCache(repo: string): Promise<string> {

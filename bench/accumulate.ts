@@ -16,10 +16,10 @@
  * with just the seed (no git log to spelunk), so the injected memory is its only
  * source. Every arm runs the same node the same way — only the memory strategy varies.
  *
- *   RAG_PYTHON=/path/to/rag-venv/bin/python BENCH_TRIALS=4 BENCH_MODEL=haiku \
+ *   RAG_PYTHON=/path/to/rag-venv/bin/python BENCH_ENGINE=codex BENCH_TRIALS=4 \
  *     npx tsx bench/accumulate.ts
  */
-import { copyFileSync, cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,13 +30,29 @@ import { gitCandidates, ragGroundingText, type Candidate } from './rag.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TASK_DIR = join(HERE, 'graph-tasks/accumulate');
-const MODEL = process.env.BENCH_MODEL || 'haiku'; // cheap helpers (select/summary/consolidate)
+const ENGINE = requireEngine();
+const MODEL = process.env.BENCH_MODEL || undefined; // cheap helpers (select/summary/consolidate)
 const NODE_MODEL = process.env.BENCH_NODE_MODEL || MODEL; // the node that implements; raise to isolate memory from implementation noise
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 4);
 const K = Number(process.env.BENCH_K ?? 8); // retrieval budget (< 12 conventions)
 const NOISE = Number(process.env.BENCH_NOISE ?? 0);
 const NOISE_SIZE = Number(process.env.BENCH_NOISE_SIZE ?? 0);
 const ARMS = (process.env.BENCH_ARMS || 'dump,rag,select,summary,consolidate').split(',');
+
+type RawCliEngine = 'codex' | 'claude-cli';
+
+function requireEngine(): RawCliEngine {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a raw CLI engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  if (engine !== 'codex' && engine !== 'claude-cli') {
+    console.error('bench/accumulate.ts uses raw CLI calls, so BENCH_ENGINE must be codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
 
 // The twelve conventions — each its own commit, the rule in the subject AND the why,
 // none in the seed code. They map 1:1 onto gate.mjs C1…C12.
@@ -100,8 +116,51 @@ const LEDGER_SYSTEM =
 const truncate = (s: string, n: number) =>
   s.trim().length > n ? `${s.trim().slice(0, n).trimEnd()}\n…` : s.trim();
 const firstLine = (s: string) => s.split('\n').find((l) => l.trim()) ?? '';
-const claude = (input: string, extra: string[] = []) =>
-  execa('claude', ['-p', '--model', MODEL, ...extra], { input, reject: false, timeout: 600_000 });
+
+async function rawAgent(
+  input: string,
+  opts: { model?: string; cwd?: string; write?: boolean } = {},
+): Promise<{ stdout: string; stderr: string; exitCode?: number }> {
+  if (ENGINE === 'claude-cli') {
+    const args = ['-p'];
+    if (opts.write) args.push('--permission-mode', 'bypassPermissions');
+    if (opts.model) args.push('--model', opts.model);
+    const r = await execa('claude', args, {
+      cwd: opts.cwd,
+      input,
+      reject: false,
+      timeout: 600_000,
+      stdin: undefined,
+    });
+    return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode ?? undefined };
+  }
+
+  const outDir = mkdtempSync(join(tmpdir(), 'acc-codex-'));
+  const outFile = join(outDir, 'last.txt');
+  const args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never'];
+  if (opts.write) args.push('--dangerously-bypass-approvals-and-sandbox');
+  else args.push('-s', 'read-only');
+  if (opts.cwd) args.push('-C', opts.cwd);
+  if (opts.model) args.push('-m', opts.model);
+  args.push('-o', outFile, input);
+  try {
+    const r = await execa('codex', args, {
+      cwd: opts.cwd,
+      reject: false,
+      timeout: 600_000,
+      stdin: 'ignore',
+    });
+    let stdout = '';
+    try {
+      stdout = readFileSync(outFile, 'utf8').trim();
+    } catch {
+      /* no final message written */
+    }
+    return { stdout, stderr: r.stderr, exitCode: r.exitCode ?? undefined };
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
+}
 
 /** A history repo: seed + the twelve convention commits (+ optional noise). */
 async function buildHistory(): Promise<string> {
@@ -138,9 +197,10 @@ async function dumpText(dir: string): Promise<string> {
 async function selectText(dir: string, intent: string): Promise<string> {
   const cands = await gitCandidates(dir);
   const list = cands.map((c) => `${c.sha.slice(0, 9)}: ${c.subject}`).join('\n');
-  const r = await claude(
+  const r = await rawAgent(
     `${SELECT_SYSTEM}\n\nTASK:\n${intent}\n\nCANDIDATE COMMITS (sha: subject):\n${list}\n\n` +
       `Return the shas relevant to the TASK (up to ${K}), or NONE.`,
+    { model: MODEL },
   );
   const ids = r.stdout.toLowerCase().match(/[0-9a-f]{7,40}/g) ?? [];
   const picked: Candidate[] = [];
@@ -163,8 +223,9 @@ async function summaryText(dir: string): Promise<string> {
   const milestones = cands
     .map((c) => `- ${c.sha.slice(0, 7)} ${c.subject}${c.body ? `: ${firstLine(c.body)}` : ''}`)
     .join('\n');
-  const r = await claude(
+  const r = await rawAgent(
     `${SUMMARY_SYSTEM}\n\nCOMMITS (newest first):\n${milestones}\n\nOutput the updated summary.`,
+    { model: MODEL },
   );
   const sum = r.stdout.trim();
   return sum ? `## Project summary (consolidated)\n\n${sum}` : '';
@@ -176,8 +237,9 @@ async function consolidateText(dir: string): Promise<string> {
   const entries = cands
     .map((c) => `- ${c.subject}\n  ${truncate(c.body, 400).replace(/\s+/g, ' ')}`)
     .join('\n');
-  const r = await claude(
+  const r = await rawAgent(
     `${LEDGER_SYSTEM}\n\nCOMMITS (subject + why):\n${entries}\n\nOutput the consolidated ledger.`,
+    { model: MODEL },
   );
   const led = r.stdout.trim();
   return led ? `## Consolidated ledger (every decision this project standardized)\n\n${led}` : '';
@@ -198,11 +260,7 @@ async function runNode(memory: string): Promise<{ pass: boolean; chars: number }
   cpSync(join(TASK_DIR, 'seed'), dir, { recursive: true });
   const full = memory ? `${memory}\n\n---\n\n${NODE_PROMPT}` : NODE_PROMPT;
   try {
-    await execa(
-      'claude',
-      ['-p', '--permission-mode', 'bypassPermissions', '--model', NODE_MODEL],
-      { cwd: dir, input: full, reject: false, timeout: 600_000 },
-    );
+    await rawAgent(full, { cwd: dir, write: true, model: NODE_MODEL });
   } catch {
     /* a node that errors just fails the gate */
   }
@@ -215,7 +273,8 @@ async function runNode(memory: string): Promise<{ pass: boolean; chars: number }
 async function main(): Promise<void> {
   console.log(
     `Accumulate A/B — honour all ${CONVENTIONS.length} conventions · ${TRIALS} trial(s) · ` +
-      `model ${MODEL} · retrieval k=${K}${NOISE ? ` · noise ${NOISE}×${NOISE_SIZE}` : ''}\n` +
+      `engine ${ENGINE}, helpers ${MODEL ?? '(cli default)'}, node ${NODE_MODEL ?? '(cli default)'} · ` +
+      `retrieval k=${K}${NOISE ? ` · noise ${NOISE}×${NOISE_SIZE}` : ''}\n` +
       `arms: ${ARMS.join(', ')}`,
   );
   const tally: Record<string, { pass: number; chars: number }> = {};

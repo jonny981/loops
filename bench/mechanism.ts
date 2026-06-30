@@ -1,5 +1,5 @@
 /**
- * One-command Ledger demo.
+ * One-command Ledger mechanism demo.
  *
  * This is not a statistical benchmark and it does not call a model. It is a
  * deterministic mechanism demo for the thing the graph benchmark measures:
@@ -10,7 +10,7 @@
  * ships snapshots the mixed deployed-client fleet can read because it sees the
  * `SSv1|` wire-format tag in the upstream commit body.
  *
- *   npm run bench:wow
+ *   npm run bench:mechanism
  */
 
 import {
@@ -38,9 +38,9 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TASK_DIR = join(HERE, 'graph-tasks/stable-store-contract');
-const KEEP = process.env.BENCH_WOW_KEEP === '1';
+const KEEP = process.env.BENCH_MECHANISM_KEEP === '1';
 const DEFAULT_FLEET_SIZE = 10_000;
-const FLEET_SIZE = positiveIntEnv('BENCH_WOW_FLEET', DEFAULT_FLEET_SIZE);
+const FLEET_SIZE = positiveIntEnv('BENCH_MECHANISM_FLEET', DEFAULT_FLEET_SIZE);
 const SERVICES = ['billing', 'checkout', 'admin', 'mobile', 'partner-api', 'reports', 'support', 'audit'];
 const REGIONS = ['iad', 'lhr', 'sfo', 'fra', 'syd'];
 const SERVICE_REPLAY_MIX: Record<string, { strict: number; lenient: number }> = {
@@ -175,7 +175,7 @@ async function git(dir: string, args: string[], input?: string): Promise<string>
 }
 
 async function prepareRepo(task: GraphTask, arm: Arm): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), `loops-wow-${arm}-`));
+  const dir = mkdtempSync(join(tmpdir(), `loops-mechanism-${arm}-`));
   cpSync(join(TASK_DIR, 'seed'), dir, { recursive: true });
   await git(dir, ['init', '-q']);
   await git(dir, ['config', 'user.email', 'bench@loops.local']);
@@ -346,7 +346,7 @@ async function runArm(task: GraphTask, arm: Arm): Promise<ArmResult> {
   });
 
   const job = sequence(
-    `wow-${arm}`,
+    `mechanism-${arm}`,
     remove,
     commitJob({
       subject: 'feat(store): remove item by id',
@@ -469,7 +469,9 @@ async function main(): Promise<void> {
     console.log(`One missed upstream contract breaks ${fmt(off.fleet.rejected)} strict deployed readers.`);
     console.log('Loops reads the upstream why once and all snapshot readers accept the replay.');
   } else {
-    console.log('Result: unexpected demo outcome; rerun with BENCH_WOW_KEEP=1 to inspect temp workspaces.');
+    console.log(
+      'Result: unexpected demo outcome; rerun with BENCH_MECHANISM_KEEP=1 to inspect temp workspaces.',
+    );
     process.exitCode = 1;
   }
 

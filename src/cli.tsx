@@ -342,7 +342,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     )
     .option(
       '-e, --engine <name>',
-      'default engine: agent-sdk | claude-cli | anthropic-api',
+      'default engine: codex | agent-sdk | claude-cli | anthropic-api',
     )
     .option('--default-model <id>', 'fallback model id for engines')
     .option('--worker-model <id>', 'model for the worker job')
@@ -369,15 +369,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--api-key <key>', 'Anthropic API key (anthropic-api engine)')
     .option(
       '--cli-binary <path>',
-      'path to the claude binary (claude-cli engine)',
+      'path to a CLI engine binary',
     )
     .option(
       '--permission-mode <mode>',
-      'tool permission mode for claude-cli/agent-sdk (default | acceptEdits | bypassPermissions | plan | dontAsk | auto)',
+      'tool permission mode for CLI/SDK engines (default | acceptEdits | bypassPermissions | plan | dontAsk | auto)',
     )
     .option(
       '--engine-arg <arg>',
-      'extra arg forwarded to the claude-cli engine (repeatable)',
+      'extra arg forwarded to CLI-backed engines (repeatable)',
       (v: string, acc: string[]) => acc.concat(v),
       [] as string[],
     )

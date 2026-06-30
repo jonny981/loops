@@ -21,6 +21,29 @@ import type {
   EngineOptions,
 } from './engine.ts';
 import { LoopError } from '../core/errors.ts';
+import { redactSecrets } from '../core/redact.ts';
+
+export function buildCodexArgs(
+  req: AgentRequest,
+  opts: EngineOptions,
+  outFile: string,
+): string[] {
+  const model = req.model ?? opts.defaultModel;
+  const prompt = req.system ? `${req.system}\n\n---\n\n${req.prompt}` : req.prompt;
+  const args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never'];
+
+  if (opts.permissionMode === 'bypassPermissions') {
+    args.push('--dangerously-bypass-approvals-and-sandbox');
+  } else {
+    args.push('-s', 'read-only');
+  }
+
+  if (req.cwd) args.push('-C', req.cwd);
+  if (model) args.push('-m', model);
+  if (opts.cliArgs?.length) args.push(...opts.cliArgs);
+  args.push('-o', outFile, prompt);
+  return args;
+}
 
 export class CodexEngine implements Engine {
   readonly name = 'codex';
@@ -34,12 +57,7 @@ export class CodexEngine implements Engine {
     const model = req.model ?? this.opts.defaultModel;
     const dir = mkdtempSync(join(tmpdir(), 'loops-codex-'));
     const outFile = join(dir, 'last.txt');
-    // codex exec has no system-prompt flag; fold any system text into the prompt.
-    const prompt = req.system ? `${req.system}\n\n---\n\n${req.prompt}` : req.prompt;
-    const args = ['exec', '--ephemeral', '-s', 'read-only', '--skip-git-repo-check'];
-    if (req.cwd) args.push('-C', req.cwd);
-    if (model) args.push('-m', model);
-    args.push('-o', outFile, prompt);
+    const args = buildCodexArgs(req, this.opts, outFile);
 
     try {
       const sub = await execa(this.opts.cliBinary ?? 'codex', args, {
@@ -63,7 +81,7 @@ export class CodexEngine implements Engine {
           code: sub.timedOut ? 'TIMEOUT' : 'ENGINE',
           phase: 'engine',
           message: `codex exited ${sub.exitCode ?? '?'}${
-            typeof sub.stderr === 'string' ? `: ${sub.stderr.slice(0, 300)}` : ''
+            typeof sub.stderr === 'string' ? `: ${redactSecrets(sub.stderr.slice(0, 300))}` : ''
           }`,
         });
 

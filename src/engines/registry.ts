@@ -75,8 +75,8 @@ export class EngineRegistry {
         'anthropic-api',
       ),
     );
-    // A genuinely different model behind the same seam — for a second-model
-    // reviewer (`engine: 'codex'`). Read-only; the heavy CLI loads lazily.
+    // A different CLI-backed model for second-model reviewers. The adapter stays
+    // read-only unless `bypassPermissions` is explicitly selected.
     this.register('codex', (o) =>
       lazy(() => import('./codex.ts').then((m) => new m.CodexEngine(o)), 'codex'),
     );

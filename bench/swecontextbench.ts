@@ -58,11 +58,20 @@ interface Experience {
 }
 
 const GROUPS_PATH = process.env.BENCH_CB_GROUPS || 'bench/contextbench/groups.json';
-const MODEL = process.env.BENCH_MODEL || 'sonnet';
-const ENGINE = process.env.BENCH_ENGINE || 'claude-cli';
+const MODEL = process.env.BENCH_MODEL || undefined;
 const CACHE = process.env.BENCH_CB_CACHE || join(tmpdir(), 'loops-cb-cache');
 const OUT_DIR = process.env.BENCH_CB_OUT || join(tmpdir(), 'loops-cb-out');
 const DRY = !!process.env.BENCH_DRY; // offline: mock engine + a throwaway local repo
+const ENGINE = DRY ? 'mock' : requireEngine();
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
 
 const PROMPT = (t: Task) =>
   `You are fixing an issue in the ${t.repo} repository (checked out at the relevant commit).\n\n` +
@@ -124,7 +133,7 @@ async function captureDiff(dir: string, base: string): Promise<string> {
   return r.stdout ?? '';
 }
 
-/** Run options for a workspace — mock engine offline, else the host claude-cli. */
+/** Run options for a workspace — mock engine offline, else a real CLI agent. */
 function optsFor(dir: string, onText?: (s: string) => void): RunOptions {
   if (DRY) {
     return {

@@ -15,12 +15,12 @@
  * overhead — so this runs N TRIALS per (task, arm): few tasks × many trials gives
  * the statistical power to see a resolve-rate gap that a single run cannot.
  *
- * NOT offline: the arms drive the real `claude-cli` engine, which edits files, so
- * this needs host Claude auth. Each trial runs in its own throwaway git repo
+ * NOT offline: the arms drive a real CLI agent, which edits files. Each trial
+ * runs in its own throwaway git repo
  * seeded from the task, so trials and arms never contaminate each other.
  *
  *   npx tsx bench/ab.ts                              # all tasks, both arms
- *   BENCH_TASKS=tasks-hard BENCH_TRIALS=5 BENCH_MODEL=haiku \
+ *   BENCH_ENGINE=codex BENCH_TASKS=tasks-hard BENCH_TRIALS=5 \
  *     BENCH_MAX_ITERS=5 BENCH_OUT=results-hard.json npx tsx bench/ab.ts
  *
  * Then:  npx tsx bench/report.ts [results-file]
@@ -62,7 +62,7 @@ const MAX_ITERS = Number(process.env.BENCH_MAX_ITERS ?? 6);
 const MODEL = process.env.BENCH_MODEL || undefined;
 /** Trials per (task, arm) — power on a small task set. */
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 1);
-const ENGINE = 'claude-cli';
+const ENGINE = requireEngine();
 
 type Arm = 'off' | 'on';
 
@@ -82,6 +82,15 @@ interface TrialResult {
   inputTokens: number;
   outputTokens: number;
   elapsedMs: number;
+}
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
 }
 
 interface ArmResult {
