@@ -10,10 +10,10 @@ items, or a related issue that should reuse prior experience.
 
 ## Start Here
 
-Read the measured results first:
+Start with the comparison guide:
 
 ```bash
-open bench/RESULTS.md
+npm run bench:compare
 ```
 
 Then run the cheapest wiring checks:
@@ -24,7 +24,9 @@ npm run bench:report:sample
 npm run bench:context:dry
 ```
 
-`bench:mechanism` is the offline mechanism demo: two deterministic runs, same
+`bench:compare` is the front door: it prints what Loops was compared against,
+what each result means in plain language, what not to claim, and the reproduction
+commands. `bench:mechanism` is the offline mechanism demo: two deterministic runs, same
 files and public prompts, both passing the visible test, but only the grounded
 arm reads the upstream contract from git memory and ships snapshots that pass a
 mixed 10,000-client compatibility replay. It uses `MockEngine`, so it is not

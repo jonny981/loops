@@ -224,22 +224,25 @@ longer chain with several fence-bearing nodes.
 ## Reproduce
 
 ```bash
-# Trivial baseline (sonnet)
-BENCH_MODEL=sonnet npx tsx bench/ab.ts && npx tsx bench/report.ts
+# Plain-language comparison guide
+npm run bench:compare
 
-# Convergence suite (haiku, 5 trials)
-BENCH_TASKS=tasks-hard BENCH_TRIALS=5 BENCH_MODEL=haiku BENCH_MAX_ITERS=5 \
+# Trivial baseline
+BENCH_ENGINE=claude-cli BENCH_MODEL=sonnet npx tsx bench/ab.ts && npx tsx bench/report.ts
+
+# Convergence suite, 5 trials
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_TASKS=tasks-hard BENCH_TRIALS=5 BENCH_MAX_ITERS=5 \
   BENCH_OUT=results-hard.json npx tsx bench/ab.ts
 npx tsx bench/report.ts bench/results-hard.json
 
 # SWE-bench Lite resolve@2 (needs Docker; see bench/swebench.ts header for the
 # DOCKER_HOST / DOCKER_CONFIG setup and the eval command)
-BENCH_SWE_INSTANCES=<instances.json> BENCH_K=2 BENCH_MODEL=haiku \
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_SWE_INSTANCES=<instances.json> BENCH_K=2 \
   npx tsx bench/swebench.ts
 
 # Graph cross-node (the judgment-fence floor and the contract ceiling)
-BENCH_TRIALS=10 BENCH_MODEL=haiku BENCH_OUT=results-graph.json npx tsx bench/graph.ts
-BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 BENCH_MODEL=haiku \
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_TRIALS=10 BENCH_OUT=results-graph.json npx tsx bench/graph.ts
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 \
   BENCH_OUT=results-graph-contract.json npx tsx bench/graph.ts
 ```
 
