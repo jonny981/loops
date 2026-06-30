@@ -6,4 +6,7 @@ dist/
 
 # Local agent state
 .Codex/
+.codex/
 tasks/
+AGENTS.md
+CLAUDE.md
