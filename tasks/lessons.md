@@ -5,3 +5,4 @@
 - 2026-06-30: Avoid all-or-nothing demo numbers when they make the test feel staged. Use a mixed replay model and show the compatibility mix so the blast radius has a visible source.
 - 2026-06-30: Do not call a mock mechanism demo "wow" or present it as product proof. Keep offline mechanism checks separate from live agent signal and repeated benchmarks.
 - 2026-06-30: Live benchmark scripts should not have a provider default. Require `BENCH_ENGINE` so engine choice is explicit, flexible, and never silently spends the wrong account.
+- 2026-06-30: Do not steer back to the issue-corpus approach after deciding to defer it. Use the existing comparison benchmarks first when the user asks how outsiders can compare Loops against other tools.
