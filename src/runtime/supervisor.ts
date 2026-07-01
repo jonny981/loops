@@ -260,6 +260,8 @@ export function formatEvent(event: LoopEvent): string {
       return `${at}◂ ${event.outcome.status} (${event.iterations} iter)`;
     case 'dag:node':
       return `${at}· node ${event.node}: ${event.phase}${event.outcome ? ` (${event.outcome.status})` : ''}`;
+    case 'dag:kickback':
+      return `${at}↩ kickback ${event.accepted ? 'accepted' : 'rejected'} ${event.from} -> ${event.to}: ${event.reason}${event.note ? ` (${event.note})` : ''}`;
     case 'dag:end':
       return `${at}◂ dag ${event.outcome.status}`;
     case 'job:start':

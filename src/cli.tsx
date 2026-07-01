@@ -338,6 +338,37 @@ function readSemanticRecords(runId: string): SemanticRunRecord[] | undefined {
   return records;
 }
 
+function parsePositiveIntFlag(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer, got "${value}"`);
+  }
+  return parsed;
+}
+
+function parseSinceFlag(value: string): number {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`--since must be epoch ms or an ISO timestamp, got "${value}"`);
+  }
+  return parsed;
+}
+
+function normalizeRecordPath(value: string): string {
+  return value
+    .split(/[\/›>]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join('/');
+}
+
+function matchesRecordPath(record: SemanticRunRecord, prefix: string): boolean {
+  const path = record.path.join('/');
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
 function formatSemanticRecord(record: SemanticRunRecord): string {
   const at = record.path.length ? `${record.path.join(' › ')} ` : '';
   switch (record.kind) {
@@ -611,8 +642,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       '--kind <kind>',
       'filter by record kind: dispatch | completion | surfacing | revision-emitted | revision-routed | revision',
     )
+    .option('--path <path>', 'filter by slash-separated record path prefix')
+    .option('--since <time>', 'show records at or after an epoch ms or ISO timestamp')
+    .option('--last <n>', 'show only the last n matching records')
     .option('--json', 'emit matching semantic records as JSONL')
-    .action((runId: string, flags: { kind?: string; json?: boolean }) => {
+    .action((runId: string, flags: { kind?: string; path?: string; since?: string; last?: string; json?: boolean }) => {
       const records = readSemanticRecords(runId);
       if (!records) {
         process.stderr.write(`no semantic records for run "${runId}" in ${runsHome()}\n`);
@@ -634,13 +668,35 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      const filtered = flags.kind
+      let pathPrefix: string | undefined;
+      if (flags.path != null) {
+        pathPrefix = normalizeRecordPath(flags.path);
+        if (!pathPrefix) {
+          process.stderr.write('--path must contain at least one path segment\n');
+          process.exitCode = 1;
+          return;
+        }
+      }
+      let since: number | undefined;
+      let last: number | undefined;
+      try {
+        if (flags.since != null) since = parseSinceFlag(flags.since);
+        if (flags.last != null) last = parsePositiveIntFlag(flags.last, '--last');
+      } catch (e) {
+        process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      let filtered = flags.kind
         ? flags.kind === 'revision'
           ? records.filter(
               (r) => r.kind === 'revision-emitted' || r.kind === 'revision-routed',
             )
           : records.filter((r) => r.kind === flags.kind)
         : records;
+      if (pathPrefix) filtered = filtered.filter((r) => matchesRecordPath(r, pathPrefix));
+      if (since != null) filtered = filtered.filter((r) => r.ts >= since);
+      if (last != null) filtered = filtered.slice(-last);
       if (flags.json) {
         for (const record of filtered) {
           process.stdout.write(`${JSON.stringify(record)}\n`);

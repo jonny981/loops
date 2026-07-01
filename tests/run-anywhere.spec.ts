@@ -132,6 +132,48 @@ describe('running a loop from outside the package tree', () => {
         .split('\n')
         .map((line) => JSON.parse(line) as { kind: string; outcome?: { status: string } });
       expect(records.some((r) => r.kind === 'completion' && r.outcome?.status === 'pass')).toBe(true);
+
+      const last = await loops(
+        ['records', runId!, '--kind', 'completion', '--last', '1', '--json'],
+        dir,
+        env,
+      );
+      expect(last.code).toBe(0);
+      const lastRecord = JSON.parse(last.out.trim()) as {
+        kind: string;
+        unit: string;
+        outcome?: { status: string };
+      };
+      expect(lastRecord).toMatchObject({
+        kind: 'completion',
+        unit: 'loop',
+        outcome: { status: 'pass' },
+      });
+
+      const path = await loops(
+        ['records', runId!, '--path', 'oot-smoke', '--kind', 'completion', '--json'],
+        dir,
+        env,
+      );
+      expect(path.code).toBe(0);
+      const pathRecords = path.out
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { path: string[] });
+      expect(pathRecords.length).toBeGreaterThan(0);
+      expect(pathRecords.every((r) => r.path.join('/').startsWith('oot-smoke'))).toBe(true);
+
+      const since = await loops(
+        ['records', runId!, '--since', '0', '--kind', 'completion', '--json'],
+        dir,
+        env,
+      );
+      expect(since.code).toBe(0);
+      expect(since.out.trim().split('\n').length).toBe(records.length);
+
+      const invalid = await loops(['records', runId!, '--last', '0'], dir, env);
+      expect(invalid.code).toBe(1);
+      expect(invalid.out).toContain('--last must be a positive integer');
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -157,6 +199,43 @@ describe('running a loop from outside the package tree', () => {
       const json = await loops(['records', runId!, '--kind', 'revision', '--json'], dir, env);
       expect(json.code).toBe(0);
       const kinds = json.out
+        .trim()
+        .split('\n')
+        .map((line) => (JSON.parse(line) as { kind: string }).kind);
+      expect(kinds).toContain('revision-emitted');
+      expect(kinds).toContain('revision-routed');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('contracted-agent example validates, describes contracts, and runs offline', async () => {
+    const example = join(repoRoot, 'examples', 'contracted-agent.loop.ts');
+    const home = mkdtempSync(join(tmpdir(), 'loops-contracted-example-'));
+    try {
+      const env = { LOOPS_HOME: home };
+
+      const validate = await loops(['validate', example, '--json'], repoRoot, env);
+      expect(validate.code).toBe(0);
+
+      const describe = await loops(['describe', example, '--json'], repoRoot, env);
+      expect(describe.code).toBe(0);
+      const shape = JSON.parse(describe.out) as {
+        nodes: Array<{ name: string; job?: { kind: string; contract?: { outputs?: string[] } } }>;
+      };
+      expect(shape.nodes.find((n) => n.name === 'implementation-contract')?.job).toMatchObject({
+        kind: 'agent',
+        contract: { outputs: ['patch', 'test-report'] },
+      });
+
+      const runResult = await loops(['run', example, '--no-tui', '--supervise'], repoRoot, env);
+      expect(runResult.code).toBe(0);
+      const [runId] = readdirSync(join(home, 'runs'));
+      expect(runId).toBeTruthy();
+
+      const records = await loops(['records', runId!, '--kind', 'revision', '--json'], repoRoot, env);
+      expect(records.code).toBe(0);
+      const kinds = records.out
         .trim()
         .split('\n')
         .map((line) => (JSON.parse(line) as { kind: string }).kind);

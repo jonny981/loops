@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { run, dag, fnJob, kickback } from '../src/api.ts';
+import { run, dag, fnJob, kickback, formatEvent } from '../src/api.ts';
 import type { LoopEvent, RunOptions } from '../src/api.ts';
 import { MockEngine } from '../src/api.ts';
 
@@ -60,6 +60,7 @@ describe('dag kickback (cross-stage feedback)', () => {
     const kb = kbEvents(events);
     expect(kb).toHaveLength(1);
     expect(kb[0]).toMatchObject({ from: 'c', to: 'a', accepted: true });
+    expect(formatEvent(kb[0]!)).toContain('kickback accepted c -> a: contract drifted');
   });
 
   it('terminates when the kickback budget is exhausted (no infinite loop)', async () => {
@@ -94,6 +95,7 @@ describe('dag kickback (cross-stage feedback)', () => {
     const rejected = kb.filter((e) => !e.accepted);
     expect(rejected).toHaveLength(1);
     expect(rejected[0]!.note).toMatch(/budget/);
+    expect(formatEvent(rejected[0]!)).toContain('kickback rejected c -> a');
   });
 
   it('rejects a kickback to a non-ancestor', async () => {
