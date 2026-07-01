@@ -75,7 +75,6 @@ const strictReview = reviewPanel({
   reviewers: [
     {
       name: 'correctness',
-      severity: 'should-fix',
       review: async () =>
         implementationAttempts > 1
           ? {
@@ -91,11 +90,10 @@ const strictReview = reviewPanel({
     },
     {
       name: 'simplicity',
-      severity: 'nice-to-have',
       review: async () => ({
-        met: false,
-        confidence: 0.7,
-        reason: 'The helper name could be clearer in a later cleanup.',
+        met: true,
+        confidence: 0.8,
+        reason: 'The parser reads clearly.',
       }),
     },
   ],
@@ -119,7 +117,7 @@ export default defineJob(
           agent: implementationAgent,
           prompt: 'Implement duration parsing from BRIEF.md.',
           consumeFeedback: true,
-          graphContext: 'position',
+          graphContext: true,
         }),
       },
       'offline-feedback-run': {
