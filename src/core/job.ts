@@ -22,7 +22,7 @@ import {
 } from './draft.ts';
 import { composeCommitBody } from './consolidate.ts';
 import { groundingText, retrieveLedger } from './ground.ts';
-import { resolveSystem, type AgentDef } from './agent.ts';
+import { agentContract, resolveSystem, type AgentDef } from './agent.ts';
 import {
   feedbackBlock,
   graphPositionBlock,
@@ -356,6 +356,7 @@ export function agentJob(config: AgentJobConfig): Job {
     kind: 'agent',
     name: config.label ?? config.agent?.name ?? 'agent',
     ground: !!config.ground,
+    contract: agentContract(config.agent),
   });
 }
 

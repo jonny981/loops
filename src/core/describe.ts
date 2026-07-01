@@ -54,6 +54,59 @@ interface NodeMeta {
   job?: JobMeta;
 }
 
+interface AgentContractMeta {
+  tier?: string;
+  capabilities?: string[];
+  outputs?: string[];
+  requiresSkills?: string[];
+  usesSkills?: string[];
+  humanGates?: string[];
+  failureModes?: string[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+    : [];
+}
+
+function contractMeta(value: unknown): AgentContractMeta | undefined {
+  if (!isRecord(value)) return undefined;
+  const contract: AgentContractMeta = {};
+  if (typeof value.tier === 'string') contract.tier = value.tier;
+  const capabilities = stringList(value.capabilities);
+  const outputs = stringList(value.outputs);
+  const requiresSkills = stringList(value.requiresSkills);
+  const usesSkills = stringList(value.usesSkills);
+  const humanGates = stringList(value.humanGates);
+  const failureModes = stringList(value.failureModes);
+  if (capabilities.length) contract.capabilities = capabilities;
+  if (outputs.length) contract.outputs = outputs;
+  if (requiresSkills.length) contract.requiresSkills = requiresSkills;
+  if (usesSkills.length) contract.usesSkills = usesSkills;
+  if (humanGates.length) contract.humanGates = humanGates;
+  if (failureModes.length) contract.failureModes = failureModes;
+  return Object.keys(contract).length ? contract : undefined;
+}
+
+function renderContract(value: unknown): string | undefined {
+  const c = contractMeta(value);
+  if (!c) return undefined;
+  const bits: string[] = [];
+  if (c.tier) bits.push(`tier ${c.tier}`);
+  if (c.outputs?.length) bits.push(`outputs ${c.outputs.join(', ')}`);
+  if (c.capabilities?.length) bits.push(`capabilities ${c.capabilities.join(', ')}`);
+  if (c.requiresSkills?.length) bits.push(`requires ${c.requiresSkills.join(', ')}`);
+  if (c.usesSkills?.length) bits.push(`uses ${c.usesSkills.join(', ')}`);
+  if (c.humanGates?.length) bits.push(`gates ${c.humanGates.join(', ')}`);
+  if (c.failureModes?.length) bits.push(`failure modes ${c.failureModes.join(', ')}`);
+  return bits.join('; ');
+}
+
 /**
  * Render a `JobMeta` tree to indented lines: the loop's name and cap, its gate
  * and convergence actions, and its body / dag nodes recursively. A Job with no
@@ -93,6 +146,10 @@ export function renderPlan(meta: JobMeta | undefined, indent = ''): string[] {
     }
     case 'agent':
       out.push(`${indent}agent${nm}${meta.ground ? ' (grounded)' : ''}`);
+      {
+        const contract = renderContract(meta.contract);
+        if (contract) out.push(`${indent}  contract: ${contract}`);
+      }
       break;
     case 'fn':
       out.push(`${indent}fn${nm}`);

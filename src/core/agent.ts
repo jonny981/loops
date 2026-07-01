@@ -20,6 +20,38 @@ export interface Skill {
   instructions: string;
 }
 
+export type AgentTier =
+  | 'worker'
+  | 'reviewer'
+  | 'lead'
+  | 'specialist'
+  | 'utility'
+  | (string & {});
+
+export type AgentSkillRef = string | Skill;
+
+export interface AgentOutputContract {
+  /** Stable output name, such as `patch`, `review`, or `test-report`. */
+  name: string;
+  description?: string;
+  /** Optional structured schema owned by the loop author. Loops stores it, it does not interpret it. */
+  schema?: unknown;
+}
+
+export interface AgentHumanGate {
+  /** Stable gate name, such as `prod-approval` or `security-signoff`. */
+  name: string;
+  description?: string;
+  when?: string;
+}
+
+export interface AgentFailureMode {
+  mode: string;
+  recovery: string;
+  detection?: string;
+  severity?: 'block' | 'should-fix' | 'nice-to-have' | (string & {});
+}
+
 export interface AgentDef {
   /** Identity (also the default job label). */
   name: string;
@@ -37,12 +69,32 @@ export interface AgentDef {
    * stop a thorough agent from quietly expanding into a slow, expensive swarm.
    */
   leaf?: boolean;
+  /** Contract tier for humans, describe output, and future discovery. No scheduling authority. */
+  tier?: AgentTier;
   /** Structured job descriptions (not prose) — for discovery / docs. */
   capabilities?: string[];
+  /** Structured outputs this agent is expected to produce. */
+  outputs?: AgentOutputContract[];
   /** Methodologies the agent applies; their instructions are folded into the system. */
   skills?: Skill[];
+  /** Skills the caller should supply before the turn. Metadata only unless also listed in `skills`. */
+  requiresSkills?: AgentSkillRef[];
+  /** Skills the agent is known to use. Metadata only unless also listed in `skills`. */
+  usesSkills?: AgentSkillRef[];
+  /** Human approvals or external handoffs this agent may need. Metadata only. */
+  humanGates?: AgentHumanGate[];
   /** Named failure modes + their recovery — first-class contracts, not buried prose. */
-  failureModes?: { mode: string; recovery: string }[];
+  failureModes?: AgentFailureMode[];
+}
+
+export interface AgentContractSummary {
+  tier?: string;
+  capabilities?: string[];
+  outputs?: string[];
+  requiresSkills?: string[];
+  usesSkills?: string[];
+  humanGates?: string[];
+  failureModes?: string[];
 }
 
 /** Read a markdown file as a string — for `system` or skill `instructions`. Pass an
@@ -58,12 +110,63 @@ export function defineSkill(skill: Skill): Skill {
   return skill;
 }
 
+function skillRefName(ref: AgentSkillRef): string {
+  return typeof ref === 'string' ? ref : ref.name;
+}
+
+function validateName(value: string | undefined, label: string): void {
+  if (!value?.trim()) throw new Error(`${label}: \`name\` is required`);
+}
+
+function validateSkillRef(ref: AgentSkillRef, label: string): void {
+  if (typeof ref === 'string') {
+    if (!ref.trim()) throw new Error(`${label}: empty skill name`);
+    return;
+  }
+  defineSkill(ref);
+}
+
 /** Define an agent. Identity + validation; strongly typed (the wrapper around the md). */
 export function defineAgent(def: AgentDef): AgentDef {
   if (!def.name) throw new Error('defineAgent: `name` is required');
   if (!def.system?.trim()) throw new Error(`defineAgent "${def.name}": empty system prompt`);
   def.skills?.forEach((s) => defineSkill(s));
+  def.requiresSkills?.forEach((s) =>
+    validateSkillRef(s, `defineAgent "${def.name}" requiresSkills`),
+  );
+  def.usesSkills?.forEach((s) =>
+    validateSkillRef(s, `defineAgent "${def.name}" usesSkills`),
+  );
+  def.outputs?.forEach((o) =>
+    validateName(o.name, `defineAgent "${def.name}" outputs`),
+  );
+  def.humanGates?.forEach((g) =>
+    validateName(g.name, `defineAgent "${def.name}" humanGates`),
+  );
+  def.failureModes?.forEach((f) => {
+    if (!f.mode?.trim())
+      throw new Error(`defineAgent "${def.name}" failureModes: \`mode\` is required`);
+    if (!f.recovery?.trim())
+      throw new Error(`defineAgent "${def.name}" failureModes "${f.mode}": \`recovery\` is required`);
+  });
   return def;
+}
+
+export function agentContract(agent: AgentDef | undefined): AgentContractSummary | undefined {
+  if (!agent) return undefined;
+  const summary: AgentContractSummary = {};
+  if (agent.tier) summary.tier = agent.tier;
+  if (agent.capabilities?.length) summary.capabilities = [...agent.capabilities];
+  if (agent.outputs?.length) summary.outputs = agent.outputs.map((o) => o.name);
+  if (agent.requiresSkills?.length)
+    summary.requiresSkills = agent.requiresSkills.map(skillRefName);
+  if (agent.usesSkills?.length)
+    summary.usesSkills = agent.usesSkills.map(skillRefName);
+  if (agent.humanGates?.length)
+    summary.humanGates = agent.humanGates.map((g) => g.name);
+  if (agent.failureModes?.length)
+    summary.failureModes = agent.failureModes.map((f) => f.mode);
+  return Object.keys(summary).length ? summary : undefined;
 }
 
 /**

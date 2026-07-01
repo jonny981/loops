@@ -3,6 +3,7 @@ import {
   loop,
   dag,
   agentJob,
+  defineAgent,
   fnJob,
   gateJob,
   commandSucceeds,
@@ -20,10 +21,18 @@ import {
 
 describe('job introspection (meta + renderPlan)', () => {
   it('attaches meta to a loop and renders its shape', () => {
+    const worker = defineAgent({
+      name: 'worker',
+      system: 'Do the work.',
+      tier: 'worker',
+      outputs: [{ name: 'patch' }],
+      requiresSkills: ['tdd'],
+      humanGates: [{ name: 'release-approval' }],
+    });
     const job = loop({
       name: 'build',
       max: 20,
-      body: agentJob({ label: 'worker', prompt: 'go', ground: true }),
+      body: agentJob({ agent: worker, prompt: 'go', ground: true }),
       until: [
         commandSucceeds('npm', ['test']),
         agentCheck({ question: 'done?', threshold: 0.85 }),
@@ -41,12 +50,21 @@ describe('job introspection (meta + renderPlan)', () => {
     expect(body.kind).toBe('agent');
     expect(body.name).toBe('worker');
     expect(body.ground).toBe(true);
+    expect(body).toMatchObject({
+      contract: {
+        tier: 'worker',
+        outputs: ['patch'],
+        requiresSkills: ['tdd'],
+        humanGates: ['release-approval'],
+      },
+    });
 
     const plan = renderPlan(meta).join('\n');
     expect(plan).toContain('loop "build" (max 20)');
     expect(plan).toContain('gate: npm test, judge "done?" >=0.85');
     expect(plan).toContain('on convergence: commit');
     expect(plan).toContain('agent "worker" (grounded)');
+    expect(plan).toContain('contract: tier worker; outputs patch; requires tdd; gates release-approval');
   });
 
   it('attaches meta to a dag with nodes, deps, and a nested loop', () => {

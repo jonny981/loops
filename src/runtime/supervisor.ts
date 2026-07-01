@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 import type { JobMeta, LoopEvent, Outcome } from '../core/types.ts';
+import { makeSemanticRecorder } from './semantic.ts';
 
 /** High-frequency transcript deltas: kept out of the record, as in `recordTo`. */
 const NOISE: ReadonlySet<LoopEvent['kind']> = new Set([
@@ -103,12 +104,14 @@ export function startSupervisor(input: {
   const dir = join(runsHome(), input.runId);
   mkdirSync(dir, { recursive: true });
   const eventsPath = join(dir, 'events.jsonl');
+  const semanticPath = join(dir, 'semantic.jsonl');
   const statusPath = join(dir, 'status.json');
   try {
     writeFileSync(eventsPath, '');
   } catch {
     /* best-effort */
   }
+  const semanticSink = makeSemanticRecorder(semanticPath);
 
   const status: RunStatus = {
     runId: input.runId,
@@ -143,6 +146,7 @@ export function startSupervisor(input: {
       } catch {
         /* best-effort */
       }
+      semanticSink(event);
     }
     switch (event.kind) {
       case 'loop:iteration':
@@ -231,6 +235,11 @@ export function listRuns(): RunStatus[] {
 /** Path to a run's appended event stream (for tailing). */
 export function runEventsPath(runId: string): string {
   return join(runsHome(), runId, 'events.jsonl');
+}
+
+/** Path to a run's semantic record stream. */
+export function runSemanticRecordsPath(runId: string): string {
+  return join(runsHome(), runId, 'semantic.jsonl');
 }
 
 /** A compact one-line rendering of an event, for `loops tail`. */

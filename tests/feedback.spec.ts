@@ -13,6 +13,9 @@ import {
   reviewPanel,
   reviewContext,
   revisionRequest,
+  feedbackBlock,
+  normalizeFeedbackSeverity,
+  isRequiredFeedbackSeverity,
   appendLedger,
   MockEngine,
 } from '../src/api.ts';
@@ -169,6 +172,83 @@ describe('feedback protocol', () => {
       ]),
     );
     expect((outcome.data as { findings: unknown[] }).findings).toHaveLength(2);
+  });
+
+  it('supports feedback surfacing v2 severities while preserving legacy aliases', async () => {
+    expect(normalizeFeedbackSeverity('blocking')).toBe('block');
+    expect(normalizeFeedbackSeverity('advisory')).toBe('nice-to-have');
+    expect(isRequiredFeedbackSeverity('should-fix')).toBe(true);
+    expect(isRequiredFeedbackSeverity('nice-to-have')).toBe(false);
+
+    const shouldFix: Condition = async () => ({
+      met: false,
+      confidence: 0.7,
+      reason: 'The retry path loses the original error.',
+    });
+    const niceToHave: Condition = async () => ({
+      met: false,
+      confidence: 0.8,
+      reason: 'The helper could have a clearer name.',
+    });
+    const legacyAdvisory: Condition = async () => ({
+      met: false,
+      confidence: 0.8,
+      reason: 'The comment could be shorter.',
+    });
+
+    const { outcome } = await run(
+      reviewPanel({
+        reviewers: [
+          { name: 'correctness', review: shouldFix, severity: 'should-fix' },
+          { name: 'simplicity', review: niceToHave, severity: 'nice-to-have' },
+          { name: 'style', review: legacyAdvisory, severity: 'advisory' },
+        ],
+      }),
+      { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } },
+    );
+
+    expect(outcome.status).toBe('fail');
+    expect(outcome.summary).toContain('0/1 required reviewer(s) cleared');
+    expect(outcome.summary).toContain('[should-fix]');
+    expect(outcome.summary).toContain('[nice-to-have]');
+    expect((outcome.data as { severityCounts: Record<string, number> }).severityCounts).toEqual({
+      'should-fix': 1,
+      'nice-to-have': 2,
+    });
+
+    const passWithSuggestion = await run(
+      reviewPanel({
+        reviewers: [
+          { name: 'namer', review: niceToHave, severity: 'nice-to-have' },
+        ],
+      }),
+      { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } },
+    );
+    expect(passWithSuggestion.outcome.status).toBe('pass');
+    expect(passWithSuggestion.outcome.summary).toContain('0/0 blocking reviewer(s) cleared');
+  });
+
+  it('renders caller decisions and canonical severity labels in feedback blocks', () => {
+    const block = feedbackBlock(
+      revisionRequest({
+        reason: 'Tests are red.',
+        decision: 'accepted',
+        findings: [
+          {
+            reviewer: 'correctness',
+            severity: 'should-fix',
+            decision: 'deferred',
+            evidence: 'The retry test fails on the second attempt.',
+            recommendation: 'Preserve the original error across retries.',
+          },
+        ],
+      }),
+    );
+
+    expect(block).toContain('Caller decision: accepted');
+    expect(block).toContain('correctness [should-fix]');
+    expect(block).toContain('Decision: deferred.');
+    expect(block).toContain('Preserve the original error');
   });
 
   it('reviewContext provides diff, selected files, scratch ledger, and last outcome context', async () => {

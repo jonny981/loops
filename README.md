@@ -321,15 +321,20 @@ const storeEngineer = defineAgent({
   system: fromFile(new URL('./agents/store-engineer.md', import.meta.url)), // the persona, as markdown
   model: 'sonnet',
   tools: ['edit', 'bash'],
+  tier: 'worker',
   capabilities: ['storage engine', 'id stability'],
+  outputs: [{ name: 'patch' }, { name: 'test-report' }],
+  requiresSkills: ['contract-first'],
   skills: [tdd],                                  // methodologies fold into the system
+  usesSkills: ['small-diff'],
+  humanGates: [{ name: 'prod-approval', when: 'deploying production changes' }],
   failureModes: [{ mode: 'tests-flaky', recovery: 'isolate the flake, retry once' }],
 });
 
 agentJob({ agent: storeEngineer, prompt: 'Build the store to its tests.', ground: true });
 ```
 
-`agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work: TDD, writing-plans), not a worker. This is what turns a `dag` into a named **team** (`storeEngineer`, `apiEngineer`, `securityReviewer` as small files) orchestrated by the DAG and gated by `quorum(...)`.
+`agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work: TDD, writing-plans), not a worker. The extra contract fields are optional metadata for validation, `loops describe`, docs, and future discovery. They do not give an agent dispatch authority. This is what turns a `dag` into a named **team** (`storeEngineer`, `apiEngineer`, `securityReviewer` as small files) orchestrated by the DAG and gated by `quorum(...)`.
 
 ## Environments: test the running thing
 
@@ -404,14 +409,17 @@ const implement = agentJob({
 ```
 
 For several reviewers, use `reviewPanel` to aggregate their verdicts into one
-outcome. Blocking findings fail the panel; advisory findings are returned in the
-data without closing the gate.
+outcome. Required severities (`block`, `should-fix`) fail the panel; non-required
+severities (`nice-to-have`, `approve`) are returned in the data without closing
+the gate. Legacy `blocking` and `advisory` inputs still work, mapping to `block`
+and `nice-to-have`.
 
 ```ts
 const review = reviewPanel({
   reviewers: [
     { name: 'security', review: agentCheck({ question: 'Is it safe?', context: reviewContext({ diff: true, ledger: true }) }) },
-    { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', context: reviewContext({ files: ['src/**'] }) }), severity: 'advisory' },
+    { name: 'correctness', review: agentCheck({ question: 'Is it correct?' }), severity: 'should-fix' },
+    { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', context: reviewContext({ files: ['src/**'] }) }), severity: 'nice-to-have' },
   ],
 });
 ```
@@ -498,7 +506,7 @@ loops status <runId>                   # its shape plus where it is now: iterati
 loops tail <runId>                     # stream its events live
 ```
 
-`list` marks a run dead if its process is gone. The read side is also on the public surface (`listRuns`, `readRunStatus`, `runEventsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
+Each run keeps the raw event stream in `events.jsonl` and a smaller semantic stream in `semantic.jsonl` with dispatch, completion, surfacing, and revision records. `list` marks a run dead if its process is gone. The read side is also on the public surface (`listRuns`, `readRunStatus`, `runEventsPath`, `runSemanticRecordsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
 
 ## What `loops` is (and isn't)
 

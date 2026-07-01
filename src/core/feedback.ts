@@ -5,6 +5,8 @@ import { execa } from 'execa';
 import type {
   ConditionInput,
   ConditionResult,
+  FeedbackActionSeverity,
+  FeedbackDecision,
   FeedbackFinding,
   FeedbackSeverity,
   GraphPosition,
@@ -20,6 +22,8 @@ import { readLedger, readPrompt } from './draft.ts';
 import { groundingText } from './ground.ts';
 
 export type {
+  FeedbackActionSeverity,
+  FeedbackDecision,
   FeedbackFinding,
   FeedbackSeverity,
   RevisionRequest,
@@ -32,6 +36,7 @@ export interface RevisionRequestInput {
   findings?: FeedbackFinding[];
   rerun?: RevisionRerun;
   source?: string;
+  decision?: FeedbackDecision;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -42,13 +47,35 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+export function normalizeFeedbackSeverity(
+  severity: FeedbackSeverity | undefined,
+): FeedbackActionSeverity {
+  switch (severity) {
+    case 'advisory':
+      return 'nice-to-have';
+    case 'blocking':
+    case undefined:
+      return 'block';
+    default:
+      return severity;
+  }
+}
+
+export function isRequiredFeedbackSeverity(
+  severity: FeedbackSeverity | undefined,
+): boolean {
+  const normalized = normalizeFeedbackSeverity(severity);
+  return normalized === 'block' || normalized === 'should-fix';
+}
+
 function findingLine(finding: FeedbackFinding): string {
   const reviewer = finding.reviewer ? `${finding.reviewer} ` : '';
-  const severity = finding.severity ?? 'blocking';
+  const severity = normalizeFeedbackSeverity(finding.severity);
+  const decision = finding.decision ? ` Decision: ${finding.decision}.` : '';
   const recommendation = finding.recommendation
     ? ` Recommendation: ${oneLine(finding.recommendation)}`
     : '';
-  return `- ${reviewer}[${severity}]: ${oneLine(finding.evidence)}${recommendation}`;
+  return `- ${reviewer}[${severity}]: ${oneLine(finding.evidence)}${decision}${recommendation}`;
 }
 
 function defaultReason(findings: FeedbackFinding[] | undefined): string {
@@ -65,6 +92,7 @@ function normalizeRevision(input: RevisionRequestInput): RevisionRequest {
     findings: input.findings,
     rerun: input.rerun ?? (input.target ? 'target-and-dependents' : undefined),
     source: input.source,
+    decision: input.decision,
   };
 }
 
@@ -122,6 +150,13 @@ export function revisionFromOutcome(outcome: Outcome): RevisionRequest | undefin
             ? 'target-and-dependents'
             : undefined,
         source: typeof r.source === 'string' ? r.source : undefined,
+        decision:
+          r.decision === 'accepted' ||
+          r.decision === 'rejected' ||
+          r.decision === 'deferred' ||
+          r.decision === 'escalated'
+            ? r.decision
+            : undefined,
       };
     }
   }
@@ -136,6 +171,7 @@ export function feedbackBlock(outcome: Outcome): string {
   ];
   if (revision?.target) parts.push(`Target: ${revision.target}`);
   if (revision?.source) parts.push(`Source: ${revision.source}`);
+  if (revision?.decision) parts.push(`Caller decision: ${revision.decision}`);
   const reason = revision?.reason ?? outcome.summary;
   if (reason) parts.push(`Reason: ${reason}`);
   const findings = revision?.findings ?? [];
@@ -166,7 +202,7 @@ type ReviewTarget =
 export interface ReviewPanelConfig {
   label?: string;
   reviewers: ReviewTarget[];
-  /** Default `all`: every blocking reviewer must pass. A number means k-of-n. */
+  /** Default `all`: every required reviewer must pass. A number means k-of-n. */
   pass?: 'all' | number;
   /** When set, a failing panel emits a targeted revision request for dag routing. */
   target?: string;
@@ -219,6 +255,17 @@ function reviewFinding(result: ReviewResult): FeedbackFinding {
   };
 }
 
+function findingSeverityCounts(
+  findings: FeedbackFinding[],
+): Partial<Record<FeedbackActionSeverity, number>> {
+  const counts: Partial<Record<FeedbackActionSeverity, number>> = {};
+  for (const finding of findings) {
+    const severity = normalizeFeedbackSeverity(finding.severity);
+    counts[severity] = (counts[severity] ?? 0) + 1;
+  }
+  return counts;
+}
+
 export function reviewPanel(config: ReviewPanelConfig): Job {
   const label = config.label ?? 'review-panel';
   const job: Job = async (ctx) => {
@@ -226,22 +273,35 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
     const results = await Promise.all(
       config.reviewers.map((reviewer, i) => runReviewer(reviewer, i, ctx)),
     );
-    const blocking = results.filter((r) => r.severity === 'blocking');
-    const blockingPassed = blocking.filter((r) => r.met).length;
+    const requiredResults = results.filter((r) =>
+      isRequiredFeedbackSeverity(r.severity),
+    );
+    const requiredPassed = requiredResults.filter((r) => r.met).length;
     const required =
       config.pass === undefined || config.pass === 'all'
-        ? blocking.length
+        ? requiredResults.length
         : config.pass;
     const findings = results.filter((r) => !r.met).map(reviewFinding);
-    const passed = blockingPassed >= required;
-    const summaryHead = `Review panel: ${blockingPassed}/${blocking.length} blocking reviewer(s) cleared`;
+    const passed = requiredPassed >= required;
+    const requiredLabel = requiredResults.some(
+      (r) => normalizeFeedbackSeverity(r.severity) === 'should-fix',
+    )
+      ? 'required'
+      : 'blocking';
+    const summaryHead = `Review panel: ${requiredPassed}/${requiredResults.length} ${requiredLabel} reviewer(s) cleared`;
     const summary = findings.length
       ? `${summaryHead}.\n${findings.map(findingLine).join('\n')}`
       : `${summaryHead}.`;
     const confidence = results.length
       ? results.reduce((sum, r) => sum + (r.confidence ?? 0), 0) / results.length
       : undefined;
-    const data = { findings, results, passed: blockingPassed, required };
+    const data = {
+      findings,
+      results,
+      passed: requiredPassed,
+      required,
+      severityCounts: findingSeverityCounts(findings),
+    };
     const outcome: Outcome = passed
       ? { status: 'pass', summary, confidence, data }
       : revisionRequest(

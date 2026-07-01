@@ -82,11 +82,28 @@ export interface Workspace {
   readonly branch?: string;
 }
 
-export type FeedbackSeverity = 'blocking' | 'advisory';
+export type FeedbackActionSeverity =
+  | 'block'
+  | 'should-fix'
+  | 'nice-to-have'
+  | 'approve';
+
+/** `blocking` and `advisory` are legacy aliases kept for source compatibility. */
+export type FeedbackSeverity =
+  | FeedbackActionSeverity
+  | 'blocking'
+  | 'advisory';
+
+export type FeedbackDecision =
+  | 'accepted'
+  | 'rejected'
+  | 'deferred'
+  | 'escalated';
 
 export interface FeedbackFinding {
   reviewer?: string;
   severity?: FeedbackSeverity;
+  decision?: FeedbackDecision;
   evidence: string;
   recommendation?: string;
 }
@@ -99,6 +116,7 @@ export interface RevisionRequest {
   findings?: FeedbackFinding[];
   rerun?: RevisionRerun;
   source?: string;
+  decision?: FeedbackDecision;
 }
 
 export interface GraphPosition {

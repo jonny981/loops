@@ -166,6 +166,9 @@ marks the target plus its transitive dependents dirty, threads the reason in as
 `lastReview`, and re-runs just that subgraph in topological order, bounded by
 `maxKickbacks`, the re-run budget that guarantees termination. `kickback(to,
 reason)` is the terse compatibility helper for the same routed feedback.
+Findings use structured severity: `block` and `should-fix` require another pass;
+`nice-to-have` and `approve` can surface without closing the gate. Legacy
+`blocking` and `advisory` inputs remain valid aliases.
 
 ```ts
 import { dag, agentJob, fnJob, kickback } from 'loops';

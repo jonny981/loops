@@ -13,6 +13,8 @@ export type {
   JobContext,
   Outcome,
   OutcomeStatus,
+  FeedbackActionSeverity,
+  FeedbackDecision,
   FeedbackFinding,
   FeedbackSeverity,
   RevisionRequest,
@@ -51,6 +53,8 @@ export {
   reviewContext,
   feedbackBlock,
   graphPositionBlock,
+  normalizeFeedbackSeverity,
+  isRequiredFeedbackSeverity,
   revisionFromOutcome,
   type ReviewPanelConfig,
   type ReviewContextConfig,
@@ -63,11 +67,18 @@ export { jobMeta, renderPlan, describeConditions } from './core/describe.ts';
 
 // Agent definitions — job-specific agents (persona in markdown, structure in TS)
 export {
+  agentContract,
   defineAgent,
   defineSkill,
   fromFile,
   resolveSystem,
+  type AgentContractSummary,
   type AgentDef,
+  type AgentFailureMode,
+  type AgentHumanGate,
+  type AgentOutputContract,
+  type AgentSkillRef,
+  type AgentTier,
   type Skill,
 } from './core/agent.ts';
 
@@ -231,11 +242,18 @@ export {
   listRuns,
   readRunStatus,
   runEventsPath,
+  runSemanticRecordsPath,
   runsHome,
   formatEvent,
   type RunStatus,
   type RunLive,
 } from './runtime/supervisor.ts';
+export {
+  semanticRecordsFromEvent,
+  type SemanticDecision,
+  type SemanticOutcome,
+  type SemanticRunRecord,
+} from './runtime/semantic.ts';
 
 import type { Job } from './core/types.ts';
 

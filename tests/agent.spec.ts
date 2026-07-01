@@ -9,6 +9,7 @@ import {
   gateJob,
   defineAgent,
   defineSkill,
+  agentContract,
   fromFile,
   resolveSystem,
   MockEngine,
@@ -33,6 +34,60 @@ describe('AgentDef', () => {
     expect(() => defineAgent({ name: '', system: 'x' })).toThrow();
     expect(() => defineAgent({ name: 'a', system: '   ' })).toThrow();
     expect(defineAgent({ name: 'a', system: 'hi' }).name).toBe('a');
+  });
+
+  it('accepts optional contract metadata without changing the agent runtime shape', () => {
+    const agent = defineAgent({
+      name: 'implementer',
+      system: 'Build the change.',
+      tier: 'worker',
+      capabilities: ['code.implementation'],
+      outputs: [{ name: 'patch' }, { name: 'test-report' }],
+      requiresSkills: ['tdd'],
+      usesSkills: [defineSkill({ name: 'small-diff', instructions: 'Keep changes focused.' })],
+      humanGates: [{ name: 'production-approval', when: 'deploying prod changes' }],
+      failureModes: [
+        {
+          mode: 'over-scoping',
+          recovery: 'Reduce the patch to the requested behaviour.',
+          severity: 'should-fix',
+        },
+      ],
+    });
+
+    expect(agentContract(agent)).toEqual({
+      tier: 'worker',
+      capabilities: ['code.implementation'],
+      outputs: ['patch', 'test-report'],
+      requiresSkills: ['tdd'],
+      usesSkills: ['small-diff'],
+      humanGates: ['production-approval'],
+      failureModes: ['over-scoping'],
+    });
+  });
+
+  it('validates malformed contract metadata', () => {
+    expect(() =>
+      defineAgent({
+        name: 'bad-output',
+        system: 'x',
+        outputs: [{ name: '' }],
+      }),
+    ).toThrow(/outputs/);
+    expect(() =>
+      defineAgent({
+        name: 'bad-skill',
+        system: 'x',
+        requiresSkills: [''],
+      }),
+    ).toThrow(/empty skill/);
+    expect(() =>
+      defineAgent({
+        name: 'bad-failure',
+        system: 'x',
+        failureModes: [{ mode: 'drift', recovery: '' }],
+      }),
+    ).toThrow(/recovery/);
   });
 
   it('reads system and skills from markdown files (fromFile), folding skills in', async () => {
