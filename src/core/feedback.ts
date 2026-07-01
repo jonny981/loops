@@ -283,12 +283,7 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
         : config.pass;
     const findings = results.filter((r) => !r.met).map(reviewFinding);
     const passed = requiredPassed >= required;
-    const requiredLabel = requiredResults.some(
-      (r) => normalizeFeedbackSeverity(r.severity) === 'should-fix',
-    )
-      ? 'required'
-      : 'blocking';
-    const summaryHead = `Review panel: ${requiredPassed}/${requiredResults.length} ${requiredLabel} reviewer(s) cleared`;
+    const summaryHead = `Review panel: ${requiredPassed}/${requiredResults.length} required reviewer(s) cleared`;
     const summary = findings.length
       ? `${summaryHead}.\n${findings.map(findingLine).join('\n')}`
       : `${summaryHead}.`;

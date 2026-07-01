@@ -25,9 +25,11 @@ import {
   listRuns,
   readRunStatus,
   runEventsPath,
+  runSemanticRecordsPath,
   runsHome,
   formatEvent,
 } from './runtime/supervisor.ts';
+import type { SemanticRunRecord } from './runtime/semantic.ts';
 import type { Job, LoopConfig } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
 
@@ -320,6 +322,36 @@ function relAge(ms: number): string {
   return `${Math.round(h / 24)}d`;
 }
 
+function readSemanticRecords(runId: string): SemanticRunRecord[] | undefined {
+  const path = runSemanticRecordsPath(runId);
+  if (!fs.existsSync(path)) return undefined;
+  const raw = fs.readFileSync(path, 'utf8').trim();
+  if (!raw) return [];
+  const records: SemanticRunRecord[] = [];
+  for (const line of raw.split('\n')) {
+    try {
+      records.push(JSON.parse(line) as SemanticRunRecord);
+    } catch {
+      /* skip an unparseable line */
+    }
+  }
+  return records;
+}
+
+function formatSemanticRecord(record: SemanticRunRecord): string {
+  const at = record.path.length ? `${record.path.join(' › ')} ` : '';
+  switch (record.kind) {
+    case 'dispatch':
+      return `${at}dispatch ${record.unit}${record.label ? ` ${record.label}` : ''}${record.node ? ` ${record.node}` : ''}`;
+    case 'completion':
+      return `${at}completion ${record.unit}${record.label ? ` ${record.label}` : ''}: ${record.outcome.status}${record.outcome.summary ? ` — ${record.outcome.summary}` : ''}`;
+    case 'surfacing':
+      return `${at}surfacing ${record.source} ${record.decision}${record.severity ? ` [${record.severity}]` : ''}: ${record.reason}`;
+    case 'revision':
+      return `${at}revision ${record.sourceEvent}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
+  }
+}
+
 export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
   program
@@ -416,13 +448,21 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description(
       'load a .loop.ts and print its shape without running it: the cheap, no-model pre-flight an agent runs before `loops run`',
     )
-    .action(async (file: string) => {
+    .option('--json', 'emit JSON with the loaded job shape')
+    .action(async (file: string, flags: { json?: boolean }) => {
       // loadJob imports + constructs the Job (so it catches syntax, import,
       // transform, and bad-export errors) but never calls run(), so no agent
       // turns fire. A failure throws the same agent-grade error `run` would,
       // and the top-level handler reports it with exit code 1.
       const { job } = await loadJob(file);
-      const plan = renderPlan(jobMeta(job));
+      const shape = jobMeta(job);
+      if (flags.json) {
+        process.stdout.write(
+          `${JSON.stringify({ file, ok: true, executed: false, shape }, null, 2)}\n`,
+        );
+        return;
+      }
+      const plan = renderPlan(shape);
       process.stdout.write(
         `✓ ${file} loads (not executed)\n${plan.map((l) => `  ${l}`).join('\n')}\n`,
       );
@@ -434,9 +474,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description(
       "print a loop's shape (its gate, body, and dag nodes) without running it",
     )
-    .action(async (file: string) => {
+    .option('--json', 'emit the job shape as JSON')
+    .action(async (file: string, flags: { json?: boolean }) => {
       const { job } = await loadJob(file);
-      process.stdout.write(`${renderPlan(jobMeta(job)).join('\n')}\n`);
+      const shape = jobMeta(job);
+      process.stdout.write(
+        flags.json
+          ? `${JSON.stringify(shape, null, 2)}\n`
+          : `${renderPlan(shape).join('\n')}\n`,
+      );
     });
 
   // ── Supervision: observe a run from another process (the registry is files) ──
@@ -553,6 +599,49 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         await new Promise((res) => setTimeout(res, 200));
       }
       process.removeListener('SIGINT', onSig);
+    });
+
+  program
+    .command('records')
+    .argument('<runId>', 'a run id from `loops list`')
+    .description("show a supervised run's semantic records")
+    .option(
+      '--kind <kind>',
+      'filter by record kind: dispatch | completion | surfacing | revision',
+    )
+    .option('--json', 'emit matching semantic records as JSONL')
+    .action((runId: string, flags: { kind?: string; json?: boolean }) => {
+      const records = readSemanticRecords(runId);
+      if (!records) {
+        process.stderr.write(`no semantic records for run "${runId}" in ${runsHome()}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      const kinds = new Set<SemanticRunRecord['kind']>([
+        'dispatch',
+        'completion',
+        'surfacing',
+        'revision',
+      ]);
+      if (flags.kind && !kinds.has(flags.kind as SemanticRunRecord['kind'])) {
+        process.stderr.write(
+          `--kind must be one of ${[...kinds].join(' | ')}, got "${flags.kind}"\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      const filtered = flags.kind
+        ? records.filter((r) => r.kind === flags.kind)
+        : records;
+      if (flags.json) {
+        for (const record of filtered) {
+          process.stdout.write(`${JSON.stringify(record)}\n`);
+        }
+        return;
+      }
+      for (const record of filtered) {
+        process.stdout.write(`${formatSemanticRecord(record)}\n`);
+      }
     });
 
   await program.parseAsync(argv);

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,9 +21,13 @@ const apiUrl = pathToFileURL(join(repoRoot, 'src', 'api.ts')).href;
 async function loops(
   args: string[],
   cwd: string,
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number; out: string }> {
   try {
-    const { stdout, stderr } = await exec('node', [bin, ...args], { cwd });
+    const { stdout, stderr } = await exec('node', [bin, ...args], {
+      cwd,
+      env: env ? { ...process.env, ...env } : process.env,
+    });
     return { code: 0, out: stdout + stderr };
   } catch (e) {
     const err = e as { code?: number; stdout?: string; stderr?: string };
@@ -75,6 +79,62 @@ describe('running a loop from outside the package tree', () => {
     expect(code).toBe(0);
     expect(out).toContain('loads');
     expect(out).toMatch(/loop "oot-smoke"/); // validate prints the loop's shape
+  }, 30_000);
+
+  it('validate and describe can emit JSON for agent inspection', async () => {
+    const validate = await loops(['validate', join(dir, 'recipe.loop.ts'), '--json'], dir);
+    expect(validate.code).toBe(0);
+    const validateJson = JSON.parse(validate.out) as {
+      ok: boolean;
+      executed: boolean;
+      shape: { kind: string; name: string };
+    };
+    expect(validateJson).toMatchObject({
+      ok: true,
+      executed: false,
+      shape: { kind: 'loop', name: 'oot-smoke' },
+    });
+
+    const describe = await loops(['describe', join(dir, 'recipe.loop.ts'), '--json'], dir);
+    expect(describe.code).toBe(0);
+    expect(JSON.parse(describe.out)).toMatchObject({
+      kind: 'loop',
+      name: 'oot-smoke',
+      body: { kind: 'fn', name: 'check' },
+    });
+  }, 30_000);
+
+  it('records exposes supervised semantic records from the CLI', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'loops-records-'));
+    try {
+      const env = { LOOPS_HOME: home };
+      const runResult = await loops(
+        ['run', join(dir, 'recipe.loop.ts'), '--no-tui', '--supervise'],
+        dir,
+        env,
+      );
+      expect(runResult.code).toBe(0);
+      const [runId] = readdirSync(join(home, 'runs'));
+      expect(runId).toBeTruthy();
+
+      const human = await loops(['records', runId!, '--kind', 'completion'], dir, env);
+      expect(human.code).toBe(0);
+      expect(human.out).toMatch(/completion loop: pass/);
+
+      const json = await loops(
+        ['records', runId!, '--kind', 'completion', '--json'],
+        dir,
+        env,
+      );
+      expect(json.code).toBe(0);
+      const records = json.out
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { kind: string; outcome?: { status: string } });
+      expect(records.some((r) => r.kind === 'completion' && r.outcome?.status === 'pass')).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   }, 30_000);
 
   it('validate fails with an agent-grade error on a broken recipe', async () => {

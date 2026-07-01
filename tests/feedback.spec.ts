@@ -164,7 +164,7 @@ describe('feedback protocol', () => {
     );
 
     expect(outcome.status).toBe('fail');
-    expect(outcome.summary).toContain('1/2 blocking reviewer(s) cleared');
+    expect(outcome.summary).toContain('1/2 required reviewer(s) cleared');
     expect(outcome.revision?.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ reviewer: 'security', severity: 'blocking' }),
@@ -225,7 +225,7 @@ describe('feedback protocol', () => {
       { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } },
     );
     expect(passWithSuggestion.outcome.status).toBe('pass');
-    expect(passWithSuggestion.outcome.summary).toContain('0/0 blocking reviewer(s) cleared');
+    expect(passWithSuggestion.outcome.summary).toContain('0/0 required reviewer(s) cleared');
   });
 
   it('renders caller decisions and canonical severity labels in feedback blocks', () => {
