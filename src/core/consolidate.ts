@@ -26,6 +26,7 @@ import type { EngineRef } from '../engines/engine.ts';
 import { log, commit } from './git.ts';
 import { LoopError } from './errors.ts';
 import { readPrompt, readLedger } from './draft.ts';
+import { truncate } from './text.ts';
 
 const CONSOLIDATE_SYSTEM =
   "You maintain a project's CONSOLIDATED LEDGER from its commit history — the bounded " +
@@ -117,11 +118,6 @@ const COMPACT_SYSTEM =
   'value verbatim. Completeness matters more than brevity — drop only literal repetition and ' +
   'play-by-play narration, never a decision or a detail. Omit a section only if it truly has ' +
   'nothing. No preamble.';
-
-function truncate(s: string, n: number): string {
-  const t = s.trim();
-  return t.length > n ? `${t.slice(0, n).trimEnd()}\n…` : t;
-}
 
 export interface CompactOptions {
   engine?: EngineRef;

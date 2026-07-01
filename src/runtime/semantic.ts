@@ -11,13 +11,14 @@ import {
 } from '../core/feedback.ts';
 import type {
   FeedbackActionSeverity,
+  FeedbackDecision,
   FeedbackFinding,
   LoopEvent,
   Outcome,
   RevisionRequest,
 } from '../core/types.ts';
 
-export type SemanticDecision = 'accepted' | 'rejected' | 'deferred' | 'escalated';
+export type SemanticDecision = FeedbackDecision;
 
 export type SemanticRunRecord =
   | {
@@ -27,15 +28,19 @@ export type SemanticRunRecord =
       unit: 'job' | 'dag-node';
       label?: string;
       node?: string;
+      /** Present for a dag-node: which run this is (1-based; +1 per kickback re-run). */
+      attempt?: number;
     }
   | {
       kind: 'completion';
       ts: number;
       path: string[];
-      unit: 'job' | 'loop' | 'dag';
+      unit: 'job' | 'loop' | 'dag' | 'dag-node';
       label?: string;
       outcome: SemanticOutcome;
       iterations?: number;
+      /** Present for a dag-node: which run this completion is for. */
+      attempt?: number;
     }
   | {
       kind: 'surfacing';
@@ -127,14 +132,32 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
         },
       ];
     case 'dag:node':
-      return event.phase === 'start'
+      if (event.phase === 'start')
+        return [
+          {
+            kind: 'dispatch',
+            ts: event.ts,
+            path: [...event.path, event.node],
+            unit: 'dag-node',
+            node: event.node,
+            attempt: event.attempt,
+          },
+        ];
+      // 'done' or 'skip': the node-boundary completion. This is the ONLY
+      // completion for a bare-function node or a skipped node (neither emits its
+      // own job:end). A job/loop node also emits its own unit-'job'/'loop'
+      // completion; the `unit` field tells the two apart, so filtering on
+      // unit:'dag-node' gives one clean lifecycle per node of every type.
+      return event.outcome
         ? [
             {
-              kind: 'dispatch',
+              kind: 'completion',
               ts: event.ts,
               path: [...event.path, event.node],
               unit: 'dag-node',
-              node: event.node,
+              label: event.node,
+              outcome: outcomeSummary(event.outcome),
+              attempt: event.attempt,
             },
           ]
         : [];
@@ -151,34 +174,37 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
         ...emittedRevisionRecord(event, event.outcome),
       ];
     case 'loop:review': {
+      if (event.outcome.status === 'pass') return [];
       const revision = revisionFromOutcome(event.outcome);
-      return [
-        ...(event.outcome.status !== 'pass'
-          ? [
-              {
-                kind: 'surfacing' as const,
-                ts: event.ts,
-                path: event.path,
-                source: 'loop-review' as const,
-                decision: 'accepted' as const,
-                severity: strongestFinding(revision?.findings),
-                reason: revision?.reason ?? event.outcome.summary ?? event.outcome.status,
-              },
-            ]
-          : []),
-        ...(event.outcome.status !== 'pass' && revision
-          ? [
-              {
-                kind: 'revision-routed' as const,
-                ts: event.ts,
-                path: event.path,
-                sourceEvent: 'loop:review' as const,
-                decision: 'accepted' as const,
-                revision,
-              },
-            ]
-          : []),
+      // The loop stamps `accepted` = it will re-enter to act on this review; a
+      // review that exhausted its iterations / maxReviewRestarts is `rejected`
+      // (the findings were dropped, not applied). An omitted bit is treated as
+      // accepted so a synthetic event without it degrades to the old behaviour.
+      const decision: SemanticDecision =
+        event.accepted === false ? 'rejected' : 'accepted';
+      const records: SemanticRunRecord[] = [
+        {
+          kind: 'surfacing',
+          ts: event.ts,
+          path: event.path,
+          source: 'loop-review',
+          decision,
+          severity: strongestFinding(revision?.findings),
+          reason:
+            revision?.reason ?? event.outcome.summary ?? event.outcome.status,
+        },
       ];
+      if (revision) {
+        records.push({
+          kind: 'revision-routed',
+          ts: event.ts,
+          path: event.path,
+          sourceEvent: 'loop:review',
+          decision,
+          revision,
+        });
+      }
+      return records;
     }
     case 'loop:end':
       return [
@@ -191,14 +217,21 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
           iterations: event.iterations,
         },
       ];
-    case 'dag:kickback':
+    case 'dag:kickback': {
+      // Stamp the routing records at the target node's path (not the dag's), so a
+      // node-scoped `--path <node>` filter returns the routed half of a revision
+      // alongside the `revision-emitted` half (which rides the emitting node's
+      // job:end at its own path). Otherwise the two halves live under different
+      // prefixes and a per-node query silently drops the routed one.
+      const at = [...event.path, event.to];
+      const decision: SemanticDecision = event.accepted ? 'accepted' : 'rejected';
       return [
         {
           kind: 'surfacing',
           ts: event.ts,
-          path: event.path,
+          path: at,
           source: 'dag-kickback',
-          decision: event.accepted ? 'accepted' : 'rejected',
+          decision,
           severity: 'block',
           from: event.from,
           to: event.to,
@@ -208,9 +241,9 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
         {
           kind: 'revision-routed',
           ts: event.ts,
-          path: event.path,
+          path: at,
           sourceEvent: 'dag:kickback',
-          decision: event.accepted ? 'accepted' : 'rejected',
+          decision,
           revision: {
             target: event.to,
             reason: event.reason,
@@ -219,6 +252,7 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
           },
         },
       ];
+    }
     case 'dag:end':
       return [
         {

@@ -18,6 +18,7 @@
 import { log, type CommitRecord } from './git.ts';
 import type { JobContext, Workspace } from './types.ts';
 import type { EngineRef } from '../engines/engine.ts';
+import { truncate } from './text.ts';
 
 export interface GroundOptions {
   /**
@@ -31,10 +32,6 @@ export interface GroundOptions {
    *  the fresh context. Default 1200. */
   bodyChars?: number;
   signal?: AbortSignal;
-}
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n).trimEnd()}\n…` : s;
 }
 
 /**

@@ -49,19 +49,14 @@ export interface Outcome {
   /** Present when `status` is driven by a failure. */
   error?: LoopError;
   /**
-   * A request to send work back to an earlier dag node (real-team feedback: a
-   * later stage that found a problem upstream). The enclosing `dag` re-runs `to`
-   * and its transitive dependents with `reason` threaded in as `lastReview`,
-   * bounded by `DagConfig.maxKickbacks` (default 0 — ignored). A feedback cycle
-   * is a loop boundary, not a backward edge: the graph stays acyclic and the
-   * re-run budget guarantees it terminates. Use the `kickback(to, reason)`
-   * helper to produce one.
-   */
-  kickback?: { to: string; reason: string };
-  /**
-   * Structured feedback asking an earlier unit of work for another pass. A loop
-   * carries this through `lastReview`; a dag treats a targeted revision as the
-   * same routed feedback as `kickback`.
+   * Structured feedback asking an earlier unit of work for another pass, and the
+   * single channel for it. When `revision.target` is set, the enclosing `dag`
+   * re-runs that node and its transitive dependents with `revision.reason`
+   * threaded in as `lastReview`, bounded by `DagConfig.maxKickbacks` (default
+   * 0 — ignored). A feedback cycle is a loop boundary, not a backward edge: the
+   * graph stays acyclic and the re-run budget guarantees it terminates. Produce
+   * one with `revisionRequest({ target, findings })` or the terse
+   * `kickback(to, reason)`.
    */
   revision?: RevisionRequest;
 }
@@ -370,7 +365,20 @@ export type LoopEvent =
       which: ConditionKind;
       result: ConditionResult;
     }
-  | { kind: 'loop:review'; ts: number; path: string[]; outcome: Outcome }
+  | {
+      kind: 'loop:review';
+      ts: number;
+      path: string[];
+      outcome: Outcome;
+      /**
+       * Whether the loop will re-enter to act on a failing review (the review's
+       * revision was accepted), vs give up because it exhausted its iterations or
+       * `maxReviewRestarts`. Mirrors `dag:kickback`'s `accepted`. Only meaningful
+       * for a non-pass review; a downstream consumer that omits it (e.g. a test
+       * fixture) is treated as accepted.
+       */
+      accepted?: boolean;
+    }
   | {
       kind: 'loop:end';
       ts: number;
@@ -411,6 +419,12 @@ export type LoopEvent =
       node: string;
       phase: NodePhase;
       outcome?: Outcome;
+      /**
+       * Which run of this node this is: 1 on the first pass, incremented each time
+       * a kickback re-runs it. Lets a records consumer tell a re-run's completion
+       * from the original and correlate it with the revision that caused it.
+       */
+      attempt?: number;
     }
   | { kind: 'dag:end'; ts: number; path: string[]; outcome: Outcome }
   | {

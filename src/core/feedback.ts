@@ -18,6 +18,8 @@ import type {
 } from './types.ts';
 import { toCondition } from './condition.ts';
 import { setMeta } from './describe.ts';
+import { LoopError } from './errors.ts';
+import { oneLine, truncate } from './text.ts';
 import { readLedger, readPrompt } from './draft.ts';
 import { groundingText } from './ground.ts';
 
@@ -37,14 +39,6 @@ export interface RevisionRequestInput {
   rerun?: RevisionRerun;
   source?: string;
   decision?: FeedbackDecision;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function oneLine(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
 }
 
 export function normalizeFeedbackSeverity(
@@ -101,17 +95,12 @@ export function revisionRequest(
   over: Partial<Outcome> = {},
 ): Outcome {
   const revision = normalizeRevision(input);
-  const kick =
-    revision.target !== undefined
-      ? { to: revision.target, reason: revision.reason }
-      : undefined;
   return {
     status: over.status ?? 'fail',
     confidence: over.confidence,
     summary: over.summary ?? revision.reason,
-    data: over.data ?? { revisionRequest: revision },
+    data: over.data,
     error: over.error,
-    kickback: over.kickback ?? kick,
     revision,
   };
 }
@@ -121,46 +110,19 @@ export function kickback(
   reason: string,
   over: Partial<Outcome> = {},
 ): Outcome {
-  return revisionRequest(
-    { target: to, reason, rerun: 'target-and-dependents' },
-    { ...over, kickback: { to, reason } },
-  );
+  // A kickback is just a targeted revision request; `rerun` defaults to
+  // 'target-and-dependents' in normalizeRevision because a target is set.
+  return revisionRequest({ target: to, reason }, over);
 }
 
+/**
+ * The single accessor for an outcome's revision request. `Outcome.revision` is
+ * the one channel a producer sets (`revisionRequest`, `kickback`, `reviewPanel`,
+ * dag routing), so there is exactly one place to read it — no parallel `kickback`
+ * field or `data` copy to keep in sync.
+ */
 export function revisionFromOutcome(outcome: Outcome): RevisionRequest | undefined {
-  if (outcome.revision) return outcome.revision;
-  if (outcome.kickback)
-    return {
-      target: outcome.kickback.to,
-      reason: outcome.kickback.reason,
-      rerun: 'target-and-dependents',
-    };
-  const data = outcome.data;
-  if (isRecord(data) && isRecord(data.revisionRequest)) {
-    const r = data.revisionRequest as Record<string, unknown>;
-    if (typeof r.reason === 'string') {
-      return {
-        reason: r.reason,
-        target: typeof r.target === 'string' ? r.target : undefined,
-        findings: Array.isArray(r.findings)
-          ? (r.findings as FeedbackFinding[])
-          : undefined,
-        rerun:
-          r.rerun === 'target-and-dependents'
-            ? 'target-and-dependents'
-            : undefined,
-        source: typeof r.source === 'string' ? r.source : undefined,
-        decision:
-          r.decision === 'accepted' ||
-          r.decision === 'rejected' ||
-          r.decision === 'deferred' ||
-          r.decision === 'escalated'
-            ? r.decision
-            : undefined,
-      };
-    }
-  }
-  return undefined;
+  return outcome.revision;
 }
 
 export function feedbackBlock(outcome: Outcome): string {
@@ -196,13 +158,13 @@ export function graphPositionBlock(graph: GraphPosition): string {
 }
 
 type ReviewTarget =
-  | { name?: string; review: ConditionInput; severity?: FeedbackSeverity }
-  | { name?: string; job: Job; severity?: FeedbackSeverity };
+  | { name?: string; review: ConditionInput }
+  | { name?: string; job: Job };
 
 export interface ReviewPanelConfig {
   label?: string;
   reviewers: ReviewTarget[];
-  /** Default `all`: every required reviewer must pass. A number means k-of-n. */
+  /** Default `all`: every reviewer must pass. A number means k-of-n over all reviewers. */
   pass?: 'all' | number;
   /** When set, a failing panel emits a targeted revision request for dag routing. */
   target?: string;
@@ -211,7 +173,6 @@ export interface ReviewPanelConfig {
 
 interface ReviewResult {
   name: string;
-  severity: FeedbackSeverity;
   met: boolean;
   confidence?: number;
   reason: string;
@@ -223,34 +184,46 @@ async function runReviewer(
   ctx: JobContext,
 ): Promise<ReviewResult> {
   const name = reviewer.name ?? `reviewer-${index + 1}`;
-  const severity = reviewer.severity ?? 'blocking';
-  if ('job' in reviewer) {
-    const outcome = await reviewer.job(ctx);
+  try {
+    if ('job' in reviewer) {
+      const outcome = await reviewer.job(ctx);
+      return {
+        name,
+        met: outcome.status === 'pass',
+        confidence: outcome.confidence,
+        reason: outcome.summary ?? outcome.status,
+      };
+    }
+    const result: ConditionResult = await toCondition(reviewer.review)(
+      ctx,
+      ctx.lastOutcome,
+    );
     return {
       name,
-      severity,
-      met: outcome.status === 'pass',
-      confidence: outcome.confidence,
-      reason: outcome.summary ?? outcome.status,
+      met: result.met,
+      confidence: result.confidence,
+      reason: result.reason,
+    };
+  } catch (e) {
+    // A genuine abort stops the whole run — let it propagate.
+    if (ctx.signal.aborted) throw e;
+    // Otherwise, one reviewer erroring (a transient engine/network failure) must
+    // not reject the whole panel and turn a recoverable retry into a hard loop
+    // failure. Count it as an unmet finding so sibling verdicts still stand — the
+    // same reason quorum runs its jurors under allSettled.
+    return {
+      name,
+      met: false,
+      reason: `reviewer errored: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
-  const result: ConditionResult = await toCondition(reviewer.review)(
-    ctx,
-    ctx.lastOutcome,
-  );
-  return {
-    name,
-    severity,
-    met: result.met,
-    confidence: result.confidence,
-    reason: result.reason,
-  };
 }
 
 function reviewFinding(result: ReviewResult): FeedbackFinding {
+  // Every panel reviewer is a gate, so a failing one is a blocking finding.
   return {
     reviewer: result.name,
-    severity: result.severity,
+    severity: 'block',
     evidence: result.reason,
   };
 }
@@ -268,32 +241,43 @@ function findingSeverityCounts(
 
 export function reviewPanel(config: ReviewPanelConfig): Job {
   const label = config.label ?? 'review-panel';
+  // A panel with no reviewers would pass vacuously (0/0), letting unreviewed work
+  // through a gate meant to enforce review. Reject it at construction.
+  if (!config.reviewers.length)
+    throw new LoopError({
+      code: 'CONFIG',
+      message: `reviewPanel "${label}": at least one reviewer is required`,
+    });
   const job: Job = async (ctx) => {
     ctx.emit({ kind: 'job:start', ts: Date.now(), path: [...ctx.path], label });
     const results = await Promise.all(
       config.reviewers.map((reviewer, i) => runReviewer(reviewer, i, ctx)),
     );
-    const requiredResults = results.filter((r) =>
-      isRequiredFeedbackSeverity(r.severity),
-    );
-    const requiredPassed = requiredResults.filter((r) => r.met).length;
+    const passedCount = results.filter((r) => r.met).length;
     const required =
       config.pass === undefined || config.pass === 'all'
-        ? requiredResults.length
+        ? results.length
         : config.pass;
     const findings = results.filter((r) => !r.met).map(reviewFinding);
-    const passed = requiredPassed >= required;
-    const summaryHead = `Review panel: ${requiredPassed}/${requiredResults.length} required reviewer(s) cleared`;
+    const passed = passedCount >= required;
+    const summaryHead = `Review panel: ${passedCount}/${results.length} reviewer(s) cleared`;
     const summary = findings.length
       ? `${summaryHead}.\n${findings.map(findingLine).join('\n')}`
       : `${summaryHead}.`;
-    const confidence = results.length
-      ? results.reduce((sum, r) => sum + (r.confidence ?? 0), 0) / results.length
+    // Average only the confidences reviewers actually reported. Coercing a
+    // missing confidence to 0 conflates "no signal" with "zero confidence" and
+    // can drag a cleanly-passing panel's confidence to 0, stalling an enclosing
+    // loop's minConfidence gate (quorum likewise averages only the votes it has).
+    const scored = results
+      .map((r) => r.confidence)
+      .filter((c): c is number => c != null);
+    const confidence = scored.length
+      ? scored.reduce((sum, c) => sum + c, 0) / scored.length
       : undefined;
     const data = {
       findings,
       results,
-      passed: requiredPassed,
+      passed: passedCount,
       required,
       severityCounts: findingSeverityCounts(findings),
     };
@@ -302,7 +286,11 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
       : revisionRequest(
           {
             target: config.target,
-            reason: summary,
+            // A clean one-line reason. The findings ride the `findings` array, so
+            // feedbackBlock renders them once (not embedded in the reason too) and
+            // the records/tail `reason` stays a single tidy line. The full
+            // multi-line `summary` is kept on the outcome below for logs/TUI.
+            reason: `${summaryHead}.`,
             findings,
             rerun: config.rerun,
           },
@@ -320,10 +308,6 @@ export interface ReviewContextConfig {
   ledger?: boolean;
   tests?: boolean | { command: string; args?: string[]; cwd?: string };
   maxChars?: number;
-}
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max).trimEnd()}\n...` : text;
 }
 
 async function gitOutput(
@@ -357,64 +341,100 @@ async function resolveFiles(
 export function reviewContext(config: ReviewContextConfig) {
   return async (ctx: JobContext, last: Outcome | undefined): Promise<string> => {
     const max = config.maxChars ?? 6000;
-    const sections: string[] = [];
 
-    if (config.tests) {
+    const buildTests = async (): Promise<string[]> => {
+      if (!config.tests) return [];
       if (config.tests === true) {
         const lines: string[] = [];
         if (last?.status) lines.push(`Last outcome status: ${last.status}`);
         if (last?.summary) lines.push(`Last outcome summary: ${last.summary}`);
-        if (last?.data !== undefined)
-          lines.push(`Last outcome data: ${JSON.stringify(last.data, null, 2)}`);
-        if (lines.length) sections.push(`## Test and outcome context\n\n${lines.join('\n')}`);
-      } else {
-        const cwd = config.tests.cwd ?? ctx.workspace.dir;
-        const result = await execa(config.tests.command, config.tests.args ?? [], {
-          cwd,
-          reject: false,
-          stripFinalNewline: false,
-          cancelSignal: ctx.signal,
-        });
-        sections.push(
-          `## Test command\n\n${config.tests.command} ${(config.tests.args ?? []).join(' ')}\n\n` +
-            `exit: ${result.exitCode ?? 0}\n\nstdout:\n${truncate(result.stdout, max)}\n\nstderr:\n${truncate(result.stderr, max)}`,
-        );
+        if (last?.data !== undefined) {
+          // Guard the stringify: a circular or BigInt-bearing `data` would throw,
+          // and agentCheck awaits context() outside its try/catch, so the throw
+          // would fail the whole review instead of degrading the evidence.
+          let rendered: string;
+          try {
+            rendered = JSON.stringify(last.data, null, 2);
+          } catch {
+            rendered = String(last.data);
+          }
+          lines.push(`Last outcome data: ${rendered}`);
+        }
+        return lines.length
+          ? [`## Test and outcome context\n\n${lines.join('\n')}`]
+          : [];
       }
-    }
+      const cwd = config.tests.cwd ?? ctx.workspace.dir;
+      // Unlike the git probes, an unspawnable or aborted command would otherwise
+      // reject out of reviewContext and throw the whole review. Guard it, and
+      // never report `exit: 0` for a command that did not actually run — that
+      // would tell the judge the tests passed.
+      const result = await execa(
+        config.tests.command,
+        config.tests.args ?? [],
+        { cwd, reject: false, stripFinalNewline: false, cancelSignal: ctx.signal },
+      ).catch((e: unknown) => {
+        if (ctx.signal.aborted) throw e; // a real abort stops the run
+        return {
+          exitCode: undefined as number | undefined,
+          stdout: '',
+          stderr: e instanceof Error ? e.message : String(e),
+        };
+      });
+      const exit = result.exitCode ?? '(command did not run)';
+      return [
+        `## Test command\n\n${config.tests.command} ${(config.tests.args ?? []).join(' ')}\n\n` +
+          `exit: ${exit}\n\nstdout:\n${truncate(result.stdout ?? '', max)}\n\nstderr:\n${truncate(result.stderr ?? '', max)}`,
+      ];
+    };
 
-    if (config.diff) {
+    const buildDiff = async (): Promise<string[]> => {
+      if (!config.diff) return [];
       const diff = await gitOutput(
         ctx.workspace.dir,
         ['diff', 'HEAD', '--'],
         ctx.signal,
       ).catch(() => '');
-      if (diff) sections.push(`## Git diff\n\n${truncate(diff, max)}`);
-    }
+      return diff ? [`## Git diff\n\n${truncate(diff, max)}`] : [];
+    };
 
-    if (config.files?.length) {
+    const buildFiles = async (): Promise<string[]> => {
+      if (!config.files?.length) return [];
       const files = await resolveFiles(ctx, config.files);
+      const out: string[] = [];
       for (const file of files) {
         const path = join(ctx.workspace.dir, file);
         if (!existsSync(path)) continue;
-        sections.push(
-          `## File: ${file}\n\n${truncate(readFileSync(path, 'utf8'), max)}`,
-        );
+        out.push(`## File: ${file}\n\n${truncate(readFileSync(path, 'utf8'), max)}`);
       }
-    }
+      return out;
+    };
 
-    if (config.ledger) {
+    const buildLedger = async (): Promise<string[]> => {
+      if (!config.ledger) return [];
+      const out: string[] = [];
       const live = [readPrompt(ctx.workspace), readLedger(ctx.workspace)]
         .filter(Boolean)
         .join('\n\n');
-      if (live) sections.push(`## Live ledger\n\n${truncate(live, max)}`);
+      if (live) out.push(`## Live ledger\n\n${truncate(live, max)}`);
       const committed = await groundingText(ctx.workspace, {
         max: 5,
         bodyChars: 1200,
         signal: ctx.signal,
       }).catch(() => '');
-      if (committed) sections.push(truncate(committed, max));
-    }
+      if (committed) out.push(truncate(committed, max));
+      return out;
+    };
 
+    // The four evidence sources are independent read-only probes; gather them
+    // concurrently, then assemble in a fixed order.
+    const [tests, diff, files, ledger] = await Promise.all([
+      buildTests(),
+      buildDiff(),
+      buildFiles(),
+      buildLedger(),
+    ]);
+    const sections = [...tests, ...diff, ...files, ...ledger];
     return sections.join('\n\n---\n\n') || '(no review context)';
   };
 }

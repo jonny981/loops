@@ -133,6 +133,9 @@ export function dag(config: DagConfig): Job {
     const limit = pLimit(limitN);
     const results = new Map<string, Outcome>();
     const memo = new Map<string, Promise<Outcome>>();
+    // How many times each node has run (1 on the first pass, +1 per kickback
+    // re-run). Stamped onto its dag:node events so records can tell rounds apart.
+    const attempts = new Map<string, number>();
     let stopped = false;
     // When a node is kicked back to, the reason rides into its next run as
     // `lastReview` — the same channel a loop's failed `review` uses, so grounding
@@ -281,6 +284,7 @@ export function dag(config: DagConfig): Job {
         node: name,
         phase,
         outcome,
+        attempt: attempts.get(name),
       });
       if (
         phase === 'done' &&
@@ -301,6 +305,9 @@ export function dag(config: DagConfig): Job {
       if (existing) return existing;
       const node = nodes.get(name)!;
       const promise = (async (): Promise<Outcome> => {
+        // This node's run count: 1 the first time, +1 each kickback re-run (the
+        // memo/results were cleared for the dirty subgraph, so run() re-enters).
+        attempts.set(name, (attempts.get(name) ?? 0) + 1);
         // Whole node is guarded: a throw anywhere (dep resolution, `when`, the
         // job) becomes a recorded outcome, so the DAG always reaches `dag:end`.
         try {
@@ -356,6 +363,7 @@ export function dag(config: DagConfig): Job {
                 path,
                 node: name,
                 phase: 'start',
+                attempt: attempts.get(name),
               });
               return { outcome: await runNodeJob(name, node), phase: 'done' };
             },
@@ -470,7 +478,6 @@ export function dag(config: DagConfig): Job {
         pendingKickback.set(to, {
           status: 'fail',
           summary: `Kicked back from "${from}": ${reason}`,
-          data: { kickback: true, from, revisionRequest: request },
           revision: { ...request, source: request.source ?? from },
         });
         stopped = false; // a prior stopOnError must not block the re-run

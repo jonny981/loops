@@ -1,0 +1,14 @@
+/**
+ * Tiny shared text helpers, so the same trim/truncate logic isn't re-implemented
+ * (subtly differently) across modules.
+ */
+
+/** Collapse all runs of whitespace to single spaces, and trim. */
+export function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** Truncate to `max` chars, appending a `\n…` marker when it overflows. */
+export function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max).trimEnd()}\n…` : s;
+}

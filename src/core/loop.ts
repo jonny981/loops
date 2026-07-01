@@ -408,13 +408,27 @@ export function loop(config: LoopConfig): Job {
               iteration,
             });
           }
+          // Decide whether this failing review will actually re-enter the loop
+          // before emitting, so the event carries an honest accept/reject bit
+          // (a downstream records consumer must not read a dropped review as
+          // acted-on). Re-entry is blocked by the restart bound or by having no
+          // iteration left; `consecutiveReviewFails` is still pre-increment here.
+          const reviewPassed = reviewOutcome.status === 'pass';
+          const restartsExhausted =
+            config.maxReviewRestarts != null &&
+            consecutiveReviewFails + 1 >= config.maxReviewRestarts;
+          const iterationsRemain =
+            config.max == null || iteration < config.max;
+          const willReenter =
+            !reviewPassed && !restartsExhausted && iterationsRemain;
           parent.emit({
             kind: 'loop:review',
             ts: ts(),
             path,
             outcome: reviewOutcome,
+            accepted: willReenter,
           });
-          if (reviewOutcome.status === 'pass') {
+          if (reviewPassed) {
             await recordMilestone(ctxAt(iteration, last));
             return finish(
               {
@@ -435,10 +449,7 @@ export function loop(config: LoopConfig): Job {
             `review did not pass (${reviewOutcome.summary ?? reviewOutcome.status}); re-entering ${config.name}`,
             'warn',
           );
-          if (
-            config.maxReviewRestarts != null &&
-            consecutiveReviewFails >= config.maxReviewRestarts
-          ) {
+          if (restartsExhausted) {
             return finish(
               {
                 status: 'exhausted',

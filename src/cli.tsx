@@ -347,9 +347,12 @@ function parsePositiveIntFlag(value: string, flag: string): number {
 }
 
 function parseSinceFlag(value: string): number {
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) return numeric;
-  const parsed = Date.parse(value);
+  const trimmed = value.trim();
+  // Treat only an all-digit string as epoch ms. The old `Number()`-first parse
+  // silently accepted `''` (→ 0, matches every record) and `'2026'` (→ 2026 ms,
+  // 2s after the epoch) instead of routing them to Date.parse or erroring.
+  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  const parsed = Date.parse(trimmed);
   if (!Number.isFinite(parsed)) {
     throw new Error(`--since must be epoch ms or an ISO timestamp, got "${value}"`);
   }
@@ -653,14 +656,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      const kinds = new Set<SemanticRunRecord['kind']>([
+      const validKinds: readonly string[] = [
         'dispatch',
         'completion',
         'surfacing',
         'revision-emitted',
         'revision-routed',
-      ]);
-      const validKinds = [...kinds, 'revision'];
+        'revision',
+      ];
       if (flags.kind && !validKinds.includes(flags.kind)) {
         process.stderr.write(
           `--kind must be one of ${validKinds.join(' | ')}, got "${flags.kind}"\n`,

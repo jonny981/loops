@@ -60,11 +60,10 @@ export interface AgentJobConfig {
    */
   consumeFeedback?: boolean;
   /**
-   * Append a small DAG-position block. `position` exposes this node, its direct
-   * dependencies, and its direct dependents without handing the agent the whole
-   * orchestration graph.
+   * Append a small DAG-position block: this node, its direct dependencies, and
+   * its direct dependents, without handing the agent the whole orchestration graph.
    */
-  graphContext?: 'position';
+  graphContext?: boolean;
   /** Working dir for the turn. Default: the workspace dir (the worktree). */
   cwd?: string;
   timeoutMs?: number;
@@ -214,7 +213,7 @@ function withOperationalContext(
   if (config.consumeFeedback && ctx.lastReview) {
     parts.push(feedbackBlock(ctx.lastReview));
   }
-  if (config.graphContext === 'position' && ctx.graph) {
+  if (config.graphContext && ctx.graph) {
     parts.push(graphPositionBlock(ctx.graph));
   }
   return parts.join('\n\n---\n\n');

@@ -9,6 +9,7 @@
  */
 
 import type { Job, JobMeta, ConditionInput } from './types.ts';
+import type { AgentContractSummary } from './agent.ts';
 
 const META = new WeakMap<object, JobMeta>();
 const LABEL = new WeakMap<object, string>();
@@ -54,48 +55,13 @@ interface NodeMeta {
   job?: JobMeta;
 }
 
-interface AgentContractMeta {
-  tier?: string;
-  capabilities?: string[];
-  outputs?: string[];
-  requiresSkills?: string[];
-  usesSkills?: string[];
-  humanGates?: string[];
-  failureModes?: string[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function stringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string' && item.length > 0)
-    : [];
-}
-
-function contractMeta(value: unknown): AgentContractMeta | undefined {
-  if (!isRecord(value)) return undefined;
-  const contract: AgentContractMeta = {};
-  if (typeof value.tier === 'string') contract.tier = value.tier;
-  const capabilities = stringList(value.capabilities);
-  const outputs = stringList(value.outputs);
-  const requiresSkills = stringList(value.requiresSkills);
-  const usesSkills = stringList(value.usesSkills);
-  const humanGates = stringList(value.humanGates);
-  const failureModes = stringList(value.failureModes);
-  if (capabilities.length) contract.capabilities = capabilities;
-  if (outputs.length) contract.outputs = outputs;
-  if (requiresSkills.length) contract.requiresSkills = requiresSkills;
-  if (usesSkills.length) contract.usesSkills = usesSkills;
-  if (humanGates.length) contract.humanGates = humanGates;
-  if (failureModes.length) contract.failureModes = failureModes;
-  return Object.keys(contract).length ? contract : undefined;
-}
-
+// `meta.contract` is only ever set by `agentJob` to the value `agentContract()`
+// produced — a clean `AgentContractSummary` with empty fields already dropped. So
+// read it back as that type rather than re-normalising a shape the core built (the
+// `--json` path already emits it verbatim). A hand-written job has no contract.
 function renderContract(value: unknown): string | undefined {
-  const c = contractMeta(value);
-  if (!c) return undefined;
+  const c = value as AgentContractSummary | undefined;
+  if (!c || typeof c !== 'object') return undefined;
   const bits: string[] = [];
   if (c.tier) bits.push(`tier ${c.tier}`);
   if (c.outputs?.length) bits.push(`outputs ${c.outputs.join(', ')}`);

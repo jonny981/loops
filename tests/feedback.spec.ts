@@ -145,7 +145,7 @@ describe('feedback protocol', () => {
       confidence: 0.2,
       reason: 'The query path interpolates user input.',
     });
-    const advisory: Condition = async () => ({
+    const alsoBlock: Condition = async () => ({
       met: false,
       confidence: 0.6,
       reason: 'The helper name is vague.',
@@ -157,75 +157,61 @@ describe('feedback protocol', () => {
         reviewers: [
           { name: 'correctness', review: pass },
           { name: 'security', review: block },
-          { name: 'simplicity', review: advisory, severity: 'advisory' },
+          { name: 'simplicity', review: alsoBlock },
         ],
       }),
       { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } },
     );
 
     expect(outcome.status).toBe('fail');
-    expect(outcome.summary).toContain('1/2 required reviewer(s) cleared');
+    expect(outcome.summary).toContain('1/3 reviewer(s) cleared');
     expect(outcome.revision?.findings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ reviewer: 'security', severity: 'blocking' }),
-        expect.objectContaining({ reviewer: 'simplicity', severity: 'advisory' }),
+        expect.objectContaining({ reviewer: 'security', severity: 'block' }),
+        expect.objectContaining({ reviewer: 'simplicity', severity: 'block' }),
       ]),
     );
     expect((outcome.data as { findings: unknown[] }).findings).toHaveLength(2);
   });
 
-  it('supports feedback surfacing v2 severities while preserving legacy aliases', async () => {
+  it('classifies finding severities and gates on k-of-n over all reviewers', async () => {
     expect(normalizeFeedbackSeverity('blocking')).toBe('block');
     expect(normalizeFeedbackSeverity('advisory')).toBe('nice-to-have');
     expect(isRequiredFeedbackSeverity('should-fix')).toBe(true);
     expect(isRequiredFeedbackSeverity('nice-to-have')).toBe(false);
 
-    const shouldFix: Condition = async () => ({
+    const passing: Condition = async () => ({
+      met: true,
+      confidence: 0.9,
+      reason: 'Looks good.',
+    });
+    const failing: Condition = async () => ({
       met: false,
       confidence: 0.7,
       reason: 'The retry path loses the original error.',
     });
-    const niceToHave: Condition = async () => ({
-      met: false,
-      confidence: 0.8,
-      reason: 'The helper could have a clearer name.',
-    });
-    const legacyAdvisory: Condition = async () => ({
-      met: false,
-      confidence: 0.8,
-      reason: 'The comment could be shorter.',
-    });
 
+    // Every reviewer gates; `pass: 2` clears when 2 of the 3 pass.
     const { outcome } = await run(
       reviewPanel({
+        pass: 2,
         reviewers: [
-          { name: 'correctness', review: shouldFix, severity: 'should-fix' },
-          { name: 'simplicity', review: niceToHave, severity: 'nice-to-have' },
-          { name: 'style', review: legacyAdvisory, severity: 'advisory' },
+          { name: 'correctness', review: passing },
+          { name: 'security', review: passing },
+          { name: 'simplicity', review: failing },
         ],
       }),
       { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } },
     );
+    expect(outcome.status).toBe('pass');
+    expect(outcome.summary).toContain('2/3 reviewer(s) cleared');
+    // A failing reviewer's finding is still surfaced, as a blocking finding.
+    expect((outcome.data as { findings: unknown[] }).findings).toEqual([
+      expect.objectContaining({ reviewer: 'simplicity', severity: 'block' }),
+    ]);
 
-    expect(outcome.status).toBe('fail');
-    expect(outcome.summary).toContain('0/1 required reviewer(s) cleared');
-    expect(outcome.summary).toContain('[should-fix]');
-    expect(outcome.summary).toContain('[nice-to-have]');
-    expect((outcome.data as { severityCounts: Record<string, number> }).severityCounts).toEqual({
-      'should-fix': 1,
-      'nice-to-have': 2,
-    });
-
-    const passWithSuggestion = await run(
-      reviewPanel({
-        reviewers: [
-          { name: 'namer', review: niceToHave, severity: 'nice-to-have' },
-        ],
-      }),
-      { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } },
-    );
-    expect(passWithSuggestion.outcome.status).toBe('pass');
-    expect(passWithSuggestion.outcome.summary).toContain('0/0 required reviewer(s) cleared');
+    // An empty panel is a construction error, not a vacuous 0/0 pass.
+    expect(() => reviewPanel({ reviewers: [] })).toThrow(/at least one reviewer/);
   });
 
   it('renders caller decisions and canonical severity labels in feedback blocks', () => {
@@ -301,7 +287,7 @@ describe('feedback protocol', () => {
     expect(prompt).toContain('Tests passed in the implementation step.');
   });
 
-  it('agentJob graphContext position appends the node location without exposing the whole graph', async () => {
+  it('agentJob graphContext appends the node location without exposing the whole graph', async () => {
     const repo = await tmpRepo();
     const cap = capturing();
 
@@ -312,7 +298,7 @@ describe('feedback protocol', () => {
           implementation: agentJob({
             label: 'implementation',
             prompt: 'Build it.',
-            graphContext: 'position',
+            graphContext: true,
           }),
           review: {
             needs: ['implementation'],
