@@ -68,7 +68,7 @@ npm run example:poll   # offline demo, no key
 node bin/loops.mjs --help
 ```
 
-Requires Node >= 20. Published to npm as [`@loops-adk/core`](https://www.npmjs.com/package/@loops-adk/core) — public, `0.x` alpha, so the API can still break on a minor bump. To cut a release: bump the version (`npm version <x.y.z> --no-git-tag-version`), then `npm publish` (`prepublishOnly` runs the typecheck, `prepack` runs the build, and `publishConfig.access` publishes the scoped package public). Run the tests yourself first — the publish gate only typechecks.
+Requires Node >= 20. Published to npm as [`@loops-adk/core`](https://www.npmjs.com/package/@loops-adk/core) — public, `0.x` alpha, so the API can still break on a minor bump. Releases go through CI: `npm version <patch|minor|major>` (bumps `package.json` + tags), then `git push --follow-tags` fires the `Release` workflow (`.github/workflows/release.yml`), which runs the typecheck + tests and `npm publish --provenance --access public` on the `v*` tag. That workflow needs an `NPM_TOKEN` repo secret (an npm automation token with publish rights to the `@loops-adk` scope); until it is set, the CI publish step fails and you release by hand with `npm publish` (`prepack` builds, `prepublishOnly` typechecks — run the tests yourself, they are not in that gate). A hand publish has no provenance attestation; the CI path does.
 
 ## Running .loop.ts files (the tsx loading model)
 
