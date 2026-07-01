@@ -59,7 +59,7 @@ tests/                vitest
 
 ## Develop
 
-No build step. The package imports TypeScript source directly through [`tsx`](https://github.com/privatenumber/tsx); `exports["."]` points at `./src/api.ts`.
+No build step to develop: [`tsx`](https://github.com/privatenumber/tsx) runs the TypeScript source directly from a checkout (tests, typecheck, examples, and the bin all execute `src/` with no compile). The **published** package is built — `npm run build` (tsup) compiles `src/` to `dist/` (ESM + `.d.ts`), and its `exports`/`main`/`types` point at `./dist`. So `src/api.ts` is the seam you edit; `dist/api.js` is what an installed consumer imports.
 
 ```bash
 npm test          # vitest — offline + deterministic via the mock engine
@@ -68,7 +68,7 @@ npm run example:poll   # offline demo, no key
 node bin/loops.mjs --help
 ```
 
-Requires Node >= 20. `package.json` is `private: true` as a guard against accidental `npm publish` while the API is alpha; an npm release is on the README roadmap (flip `private` when releasing).
+Requires Node >= 20. Published to npm as [`@loops-adk/core`](https://www.npmjs.com/package/@loops-adk/core) — public, `0.x` alpha, so the API can still break on a minor bump. To cut a release: bump the version (`npm version <x.y.z> --no-git-tag-version`), then `npm publish` (`prepublishOnly` runs the typecheck, `prepack` runs the build, and `publishConfig.access` publishes the scoped package public). Run the tests yourself first — the publish gate only typechecks.
 
 ## Running .loop.ts files (the tsx loading model)
 
@@ -80,7 +80,7 @@ The authoring guide an agent reads to compose a loop is `skills/author-loop/SKIL
 
 ## Consumption
 
-Designed to be consumed as a **git submodule** by a parent repo (source import, no published build needed), with an eventual npm release. A parent recipe imports the public surface from `src/api.ts` and registers its own engines/conditions; it never reaches into `src/core` internals. Keep `src/api.ts` the single seam.
+Consumable two ways: as a published npm package (`npm i @loops-adk/core`, importing the built `dist` via the `.` export) or as a **git submodule** (source import via `tsx`, no build). Either way a parent recipe imports the public surface (`@loops-adk/core`, which is `src/api.ts`) and registers its own engines/conditions; it never reaches into `src/core` internals. Keep `src/api.ts` the single seam.
 
 ## Conventions
 
