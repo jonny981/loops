@@ -168,6 +168,19 @@ loops run examples/confidence-gate.loop.ts --json    # NDJSON event stream
 
 **Authoring is agent-native.** Both commands work from any repo, including one that consumes `loops` as a submodule or dependency (the recipe's folder just needs an ES module scope, which such repos already have). `loops validate <file>` is the cheap, no-model pre-flight an agent runs before `loops run`: it loads the loop, reports a fix-oriented error if anything is wrong, and prints the loop's shape (its gate, body, and dag nodes), all without spending a single agent turn. `loops describe <file>` prints that same shape on its own, so an agent can see exactly what it just authored. The authoring guide an agent reads to compose a loop is [`skills/author-loop/SKILL.md`](skills/author-loop/SKILL.md).
 
+The end-to-end agent workflow, from authoring through reading a supervised run's decisions back as structured records rather than a raw event stream:
+
+```bash
+loops validate feature.loop.ts --json                 # pre-flight: loads, no spend
+loops describe feature.loop.ts --json                 # the shape, incl. each agent node's contract
+loops run feature.loop.ts --no-tui --supervise        # run it, registered for observation
+loops list                                            # find the runId
+loops tail <runId>                                    # follow live events
+loops records <runId> --kind revision --path ship/implementation --json  # the semantic decision stream, filtered
+```
+
+Two supervision skills go deeper: [`skills/supervise-loop-run/SKILL.md`](skills/supervise-loop-run/SKILL.md) (monitor a run) and [`skills/design-agent-team/SKILL.md`](skills/design-agent-team/SKILL.md) (compose a specialist team).
+
 **Offline demo** (no network, no key; uses the mock engine):
 
 ```bash
@@ -413,17 +426,18 @@ const implement = agentJob({
 ```
 
 For several reviewers, use `reviewPanel` to aggregate their verdicts into one
-outcome. Required severities (`block`, `should-fix`) fail the panel; non-required
-severities (`nice-to-have`, `approve`) are returned in the data without closing
-the gate. Legacy `blocking` and `advisory` inputs still work, mapping to `block`
-and `nice-to-have`.
+outcome. Every reviewer is a gate: the panel passes when all of them clear (or
+`pass: N` of them, k-of-n), and each failing reviewer's concern is surfaced as a
+blocking finding threaded into the next pass. An empty panel is a construction
+error, not a vacuous pass.
 
 ```ts
 const review = reviewPanel({
+  // pass: 2,  // optional: k-of-n instead of all
   reviewers: [
     { name: 'security', review: agentCheck({ question: 'Is it safe?', context: reviewContext({ diff: true, ledger: true }) }) },
-    { name: 'correctness', review: agentCheck({ question: 'Is it correct?' }), severity: 'should-fix' },
-    { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', context: reviewContext({ files: ['src/**'] }) }), severity: 'nice-to-have' },
+    { name: 'correctness', review: agentCheck({ question: 'Is it correct?' }) },
+    { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', context: reviewContext({ files: ['src/**'] }) }) },
   ],
 });
 ```
@@ -431,7 +445,7 @@ const review = reviewPanel({
 In a DAG, a targeted `revisionRequest({ target, findings })` reruns the target
 node and its dependents when `maxKickbacks` allows it. `kickback(to, reason)` is
 the terse compatibility helper for the same routed feedback. Agents can opt into
-a small graph-position prompt block with `graphContext: 'position'`.
+a small graph-position prompt block with `graphContext: true`.
 
 **Worktree isolation: branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node honestly (loops does not auto-resolve; that's a separate layer). Each team gets its own branch, its own scratch files, and (with `DagConfig.environment`) its own stage, all born and torn down together.
 

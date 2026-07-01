@@ -97,21 +97,30 @@ dag({
 
 `needs` are dependencies; `optional` nodes never block; an unmet `when` skips a node; `isolation: 'worktree'` (on the dag) or `isolate: true` (per node) runs writers in parallel worktrees that land back on pass. `sequence` and `parallel` are sugar over `dag`.
 
+## Agents and feedback
+
+A node can be a named specialist instead of an inline prompt. Define it once with `defineAgent` (persona in markdown via `fromFile`, structure in TS) and hand it to `agentJob({ agent })`; `defineSkill` folds a methodology into its system. The contract fields (`tier`, `outputs`, `failureModes`, …) are metadata for `describe` and validation, not scheduling power: the `dag` orchestrates, agents stay workers.
+
+Review feedback is a structured revision request that flows back to the worker on one channel. In a loop, a failing `review` is threaded into the next turn as `ctx.lastReview`; set `consumeFeedback: true` and `agentJob` folds it into the prompt. Aggregate several reviewers with `reviewPanel`; route a fix back to an earlier dag node with a targeted `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) when the dag's `maxKickbacks` allows it.
+
+Composing a team of specialists, gates, and routed feedback is its own skill: see `skills/design-agent-team/SKILL.md`.
+
 ## Author → validate → run
 
 ```bash
-loops validate path/to/feature.loop.ts   # offline pre-flight: loads + prints the shape, no model calls, no spend
-loops describe path/to/feature.loop.ts   # print the loop's shape (gate, body, nodes) without running
-loops run path/to/feature.loop.ts         # live Ink TUI
+loops validate path/to/feature.loop.ts     # offline pre-flight: loads + prints the shape, no model calls, no spend
+loops describe path/to/feature.loop.ts     # print the loop's shape (gate, body, nodes) without running
+loops describe path/to/feature.loop.ts --json # the same shape as JSON (incl. each agent node's contract)
+loops run path/to/feature.loop.ts          # live Ink TUI
 loops run path/to/feature.loop.ts --no-tui # plain streamed logs
-loops run path/to/feature.loop.ts --json   # NDJSON event stream (parse this from an agent)
+loops run path/to/feature.loop.ts --json   # raw NDJSON event firehose (to supervise a run, prefer --supervise + records, below)
 ```
 
 Always `loops validate` first. It imports and constructs the loop (catching syntax, import, and bad-export errors) without running it, so you fix authoring mistakes for free before spending a single agent turn. It also prints the loop's shape (its gate, body, and dag nodes), so you can confirm you built what you intended. `loops describe` prints that shape on its own.
 
 `loops run` works from any repo, including one that uses `loops` as a submodule or dependency. The recipe's folder must be an ES module scope (a `package.json` with `{"type":"module"}`); repos that consume `loops` already have this. If a load fails with an ES-module error, that scope is what is missing.
 
-Add `--supervise` to make a run observable from another process: it registers under `~/.loops/runs/`, and `loops list` / `loops status <runId>` / `loops tail <runId>` read its live state (shape, iteration, last gate verdict, tokens, events). Use this to watch a long run, or to supervise several at once.
+Add `--supervise` to make a run observable from another process: it registers under `~/.loops/runs/`. From an agent, the primary read API is `loops records <runId>`, the semantic decision stream (dispatch / completion / surfacing / revision), filterable with `--kind`, `--path`, `--last`, `--json`, rather than the raw `run --json` firehose. `loops tail <runId>` streams live events, `loops status <runId>` reports terminal state, and `loops list` enumerates runs. Watching a long run or supervising several at once is its own skill: see `skills/supervise-loop-run/SKILL.md`.
 
 ## Gotchas
 
