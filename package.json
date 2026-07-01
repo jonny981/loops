@@ -1,6 +1,6 @@
 {
   "name": "@loops-adk/core",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "MIT",
   "author": "Jonny Neill",
   "description": "Run an agent in a convergence loop with an honest done-gate. A small, nestable loop and DAG primitive: deterministic plus agent-judge conditions, git as memory, review-restart, budgets, and a live TUI.",
