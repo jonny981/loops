@@ -23,6 +23,12 @@ import {
 import { composeCommitBody } from './consolidate.ts';
 import { groundingText, retrieveLedger } from './ground.ts';
 import { resolveSystem, type AgentDef } from './agent.ts';
+import {
+  feedbackBlock,
+  graphPositionBlock,
+  kickback,
+  revisionRequest,
+} from './feedback.ts';
 
 export interface AgentJobConfig {
   /** Job label (for events). Defaults to the agent's name, then `'agent'`. */
@@ -47,6 +53,18 @@ export interface AgentJobConfig {
    * tool), so a branch bottoms out here. Falls back to the agent def's `leaf`.
    */
   leaf?: boolean;
+  /**
+   * Append the current `ctx.lastReview` / revision feedback to the prompt. This
+   * keeps implementation agents from having to remember to manually read the
+   * runtime feedback channel in every prompt function.
+   */
+  consumeFeedback?: boolean;
+  /**
+   * Append a small DAG-position block. `position` exposes this node, its direct
+   * dependencies, and its direct dependents without handing the agent the whole
+   * orchestration graph.
+   */
+  graphContext?: 'position';
   /** Working dir for the turn. Default: the workspace dir (the worktree). */
   cwd?: string;
   timeoutMs?: number;
@@ -187,6 +205,21 @@ const TERMINAL = (text: string): Outcome => ({
   data: text,
 });
 
+function withOperationalContext(
+  ctx: JobContext,
+  userPrompt: string,
+  config: Pick<AgentJobConfig, 'consumeFeedback' | 'graphContext'>,
+): string {
+  const parts = [userPrompt];
+  if (config.consumeFeedback && ctx.lastReview) {
+    parts.push(feedbackBlock(ctx.lastReview));
+  }
+  if (config.graphContext === 'position' && ctx.graph) {
+    parts.push(graphPositionBlock(ctx.graph));
+  }
+  return parts.join('\n\n---\n\n');
+}
+
 /** Run one fresh agent turn through whichever engine is selected. */
 export function agentJob(config: AgentJobConfig): Job {
   const job: Job = async (ctx) => {
@@ -199,9 +232,10 @@ export function agentJob(config: AgentJobConfig): Job {
       typeof config.prompt === 'function'
         ? await config.prompt(ctx)
         : config.prompt;
+    const contextualPrompt = withOperationalContext(ctx, userPrompt, config);
     const prompt = config.ground
-      ? await withGrounding(ctx, userPrompt, config.ground)
-      : userPrompt;
+      ? await withGrounding(ctx, contextualPrompt, config.ground)
+      : contextualPrompt;
     // System precedence: an explicit `system` overrides the agent's (persona + skills).
     const system =
       config.system !== undefined
@@ -453,28 +487,7 @@ export function commitJob(config: CommitJobConfig): Job {
   };
 }
 
-/**
- * Build an `Outcome` that sends work back to an earlier dag node — real-team
- * feedback ("marketing found the contract drifted; re-run engineering"). Return
- * it from any job or `agentJob({ outcome })` mapper. The enclosing `dag` re-runs
- * `to` and its dependents with `reason` threaded in as `lastReview`, bounded by
- * `DagConfig.maxKickbacks`. Defaults to a `fail` status, so an unresolved
- * kickback (budget spent) leaves the dag failing honestly; override via `over`
- * (e.g. `{ status: 'pass' }`) when the kicking node's own work is fine and it is
- * only requesting an upstream revision.
- */
-export function kickback(
-  to: string,
-  reason: string,
-  over?: Partial<Outcome>,
-): Outcome {
-  return {
-    status: 'fail',
-    summary: reason,
-    ...over,
-    kickback: { to, reason },
-  };
-}
+export { kickback, revisionRequest };
 
 /** A deterministic step from a plain function — for glue, checks, side effects. */
 export function fnJob(

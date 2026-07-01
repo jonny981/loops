@@ -4,7 +4,7 @@
  * `JobContext` is threaded in exactly one place.
  */
 
-import type { JobContext, Outcome, Workspace } from './types.ts';
+import type { GraphPosition, JobContext, Outcome, Workspace } from './types.ts';
 import type { EnvHandle } from '../env/environment.ts';
 
 export interface ContextOverride {
@@ -17,6 +17,8 @@ export interface ContextOverride {
   workspace?: Workspace;
   /** Override the environment (a per-team env at a concurrency boundary). */
   environment?: EnvHandle;
+  /** Override the DAG graph position for a node. */
+  graph?: GraphPosition;
 }
 
 export function childContext(
@@ -41,6 +43,7 @@ export function childContext(
     log: parent.log,
     depth: over.depth,
     path: over.path,
+    graph: over.graph ?? parent.graph,
     // Inherit the enclosing iteration by default. A `loop` always passes one
     // explicitly; a `dag`/`sequence` does not, so without this a node nested in a
     // loop would reset to 0 — the "Attempt 0" confound where a retry body could not

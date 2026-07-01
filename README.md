@@ -388,6 +388,39 @@ dag({
 
 `needs` = dependencies; a non-`pass` required dependency blocks its dependents; `optional` nodes never block or fail the DAG; an unmet `when` skips a node (counts green); cycles are detected before any work runs. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
 
+### Feedback between nodes
+
+Review feedback is a structured revision request. In a loop, a failing `review`
+outcome is threaded into the next body turn as `ctx.lastReview`; with
+`consumeFeedback: true`, `agentJob` appends it to the implementation prompt in a
+standard block.
+
+```ts
+const implement = agentJob({
+  label: 'implementation',
+  prompt: brief,
+  consumeFeedback: true,
+});
+```
+
+For several reviewers, use `reviewPanel` to aggregate their verdicts into one
+outcome. Blocking findings fail the panel; advisory findings are returned in the
+data without closing the gate.
+
+```ts
+const review = reviewPanel({
+  reviewers: [
+    { name: 'security', review: agentCheck({ question: 'Is it safe?', context: reviewContext({ diff: true, ledger: true }) }) },
+    { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', context: reviewContext({ files: ['src/**'] }) }), severity: 'advisory' },
+  ],
+});
+```
+
+In a DAG, a targeted `revisionRequest({ target, findings })` reruns the target
+node and its dependents when `maxKickbacks` allows it. `kickback(to, reason)` is
+the terse compatibility helper for the same routed feedback. Agents can opt into
+a small graph-position prompt block with `graphContext: 'position'`.
+
 **Worktree isolation: branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node honestly (loops does not auto-resolve; that's a separate layer). Each team gets its own branch, its own scratch files, and (with `DagConfig.environment`) its own stage, all born and torn down together.
 
 For **dynamic** dispatch (a loop that discovers each unit at runtime and routes it to its own isolated sub-loop), `isolated(job)` is the same boundary as a composable wrapper rather than a predeclared node (fork, run, land back on pass):

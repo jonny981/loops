@@ -58,6 +58,12 @@ export interface Outcome {
    * helper to produce one.
    */
   kickback?: { to: string; reason: string };
+  /**
+   * Structured feedback asking an earlier unit of work for another pass. A loop
+   * carries this through `lastReview`; a dag treats a targeted revision as the
+   * same routed feedback as `kickback`.
+   */
+  revision?: RevisionRequest;
 }
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -74,6 +80,33 @@ export interface Workspace {
   readonly dir: string;
   /** The branch checked out in `dir`, when known (undefined on detached HEAD). */
   readonly branch?: string;
+}
+
+export type FeedbackSeverity = 'blocking' | 'advisory';
+
+export interface FeedbackFinding {
+  reviewer?: string;
+  severity?: FeedbackSeverity;
+  evidence: string;
+  recommendation?: string;
+}
+
+export type RevisionRerun = 'target-and-dependents';
+
+export interface RevisionRequest {
+  target?: string;
+  reason: string;
+  findings?: FeedbackFinding[];
+  rerun?: RevisionRerun;
+  source?: string;
+}
+
+export interface GraphPosition {
+  dag: string;
+  node: string;
+  path: readonly string[];
+  needs: readonly string[];
+  dependents: readonly string[];
 }
 
 /**
@@ -105,6 +138,8 @@ export interface JobContext {
   readonly depth: number;
   /** Loop/step names from the root down to here. */
   readonly path: readonly string[];
+  /** The current DAG node position, when this job is running inside a dag node. */
+  readonly graph?: GraphPosition;
   /** The previous body outcome in the enclosing loop (used by `review`/gates). */
   readonly lastOutcome?: Outcome;
   /** The most recent failed-review outcome, so a restart can act on it. */

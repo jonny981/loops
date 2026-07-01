@@ -13,6 +13,11 @@ export type {
   JobContext,
   Outcome,
   OutcomeStatus,
+  FeedbackFinding,
+  FeedbackSeverity,
+  RevisionRequest,
+  RevisionRerun,
+  GraphPosition,
   LimitPolicy,
   Condition,
   ConditionInput,
@@ -36,10 +41,21 @@ export {
   fnJob,
   commitJob,
   kickback,
+  revisionRequest,
   type AgentJobConfig,
   type CommitJobConfig,
   type GroundConfig,
 } from './core/job.ts';
+export {
+  reviewPanel,
+  reviewContext,
+  feedbackBlock,
+  graphPositionBlock,
+  revisionFromOutcome,
+  type ReviewPanelConfig,
+  type ReviewContextConfig,
+  type RevisionRequestInput,
+} from './core/feedback.ts';
 
 // Job introspection — read a loop's shape without running it (powers `loops
 // validate` / `loops describe`, and lets an agent inspect what it authored)

@@ -40,6 +40,7 @@ import { composeCommitBody } from './consolidate.ts';
 import { mergeSynthesis } from './merge.ts';
 import type { EnvHandle } from '../env/environment.ts';
 import { LoopError } from './errors.ts';
+import { revisionFromOutcome } from './feedback.ts';
 
 /** Sanitise a name into a git-ref-safe slug. */
 function slug(s: string): string {
@@ -151,6 +152,13 @@ export function dag(config: DagConfig): Job {
         workspace,
         environment,
         lastReview: pendingKickback.get(name),
+        graph: {
+          dag: config.name,
+          node: name,
+          path: [...path, name],
+          needs: nodes.get(name)!.needs ?? [],
+          dependents: dependents.get(name) ?? [],
+        },
       });
 
     // Land-back merges are serialised: concurrent nodes finishing at once must
@@ -281,7 +289,7 @@ export function dag(config: DagConfig): Job {
         stopOnError &&
         // A node requesting a kickback is going to be re-run — don't let its
         // (provisional) non-pass abort siblings before the feedback is resolved.
-        !(maxKickbacks > 0 && outcome.kickback)
+        !(maxKickbacks > 0 && revisionFromOutcome(outcome)?.target)
       ) {
         stopped = true;
       }
@@ -407,10 +415,19 @@ export function dag(config: DagConfig): Job {
       for (;;) {
         // Honour kickbacks in topological order, skipping any already rejected.
         const from = order.find(
-          (n) => results.get(n)?.kickback && !rejected.has(n),
+          (n) => {
+            const result = results.get(n);
+            return (
+              result !== undefined &&
+              revisionFromOutcome(result)?.target !== undefined &&
+              !rejected.has(n)
+            );
+          },
         );
         if (!from) break;
-        const { to, reason } = results.get(from)!.kickback!;
+        const request = revisionFromOutcome(results.get(from)!)!;
+        const to = request.target!;
+        const { reason } = request;
 
         // Validate the target: it must exist, be an ancestor, and (if the node
         // declares `acceptsKickbackTo`) be an allowed target. An invalid target
@@ -453,7 +470,8 @@ export function dag(config: DagConfig): Job {
         pendingKickback.set(to, {
           status: 'fail',
           summary: `Kicked back from "${from}": ${reason}`,
-          data: { kickback: true, from },
+          data: { kickback: true, from, revisionRequest: request },
+          revision: { ...request, source: request.source ?? from },
         });
         stopped = false; // a prior stopOnError must not block the re-run
         await Promise.all(names.map(run));

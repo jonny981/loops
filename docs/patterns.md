@@ -161,10 +161,11 @@ committed work), not free.
 ### Tier 2 — surgical kickback (re-run one subgraph)
 
 When you want to re-run only a *specific* earlier node and its dependents, a node
-returns a `kickback(to, reason)`. The enclosing `dag` marks the target plus its
-transitive dependents dirty, threads `reason` in as `lastReview`, and re-runs just
-that subgraph in topological order — bounded by `maxKickbacks`, the re-run budget
-that guarantees termination.
+returns a targeted `revisionRequest({ target, findings })`. The enclosing `dag`
+marks the target plus its transitive dependents dirty, threads the reason in as
+`lastReview`, and re-runs just that subgraph in topological order, bounded by
+`maxKickbacks`, the re-run budget that guarantees termination. `kickback(to,
+reason)` is the terse compatibility helper for the same routed feedback.
 
 ```ts
 import { dag, agentJob, fnJob, kickback } from 'loops';
