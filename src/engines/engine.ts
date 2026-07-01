@@ -13,6 +13,7 @@
 export type EngineName =
   | 'agent-sdk'
   | 'claude-cli'
+  | 'codex'
   | 'anthropic-api'
   | (string & {});
 
@@ -38,7 +39,7 @@ export interface AgentRequest {
    * disallow the sub-agent tool (`SUBAGENT_TOOLS`), so a branch of the graph bottoms out
    * here instead of expanding into an uncontrolled swarm — control over where work stops.
    * Authoritative over `allowedTools` (a disallow wins). Engines with no sub-agent tool
-   * (anthropic-api, mock) ignore it.
+   * (anthropic-api, codex, mock) ignore it.
    */
   leaf?: boolean;
 }
@@ -92,10 +93,10 @@ export function isEngine(ref: EngineRef | undefined): ref is Engine {
 }
 
 /**
- * How a tool-using engine (claude-cli / agent-sdk) treats permission prompts.
- * Mirrors the Claude Code values. `bypassPermissions` lets a headless worker
- * read/write/run without prompting — required for an unattended agent that must
- * touch the filesystem or shell, and to be set deliberately.
+ * How a tool-using engine treats permission prompts. Mirrors the Claude Code
+ * values. `bypassPermissions` lets a headless worker read/write/run without
+ * prompting — required for an unattended agent that must touch the filesystem or
+ * shell, and to be set deliberately.
  */
 export type PermissionMode =
   | 'default'
@@ -110,13 +111,14 @@ export interface EngineOptions {
   /** Default model when a request/step does not name one. */
   defaultModel?: string;
   apiKey?: string;
-  /** For `claude-cli`: path to the binary (defaults to `claude` on PATH). */
+  /** For CLI-backed engines: path to the binary. */
   cliBinary?: string;
-  /** Extra args appended to the `claude` invocation. */
+  /** Extra args appended to CLI-backed engine invocations. */
   cliArgs?: string[];
   /**
-   * Permission mode for tool-using engines (claude-cli `--permission-mode`,
-   * agent-sdk `permissionMode`). Unset = the engine/CLI default (prompts).
+   * Permission mode for tool-using engines. Unset = the engine/CLI default
+   * where applicable; the Codex adapter stays read-only unless explicitly set
+   * to `bypassPermissions`.
    */
   permissionMode?: PermissionMode;
 }

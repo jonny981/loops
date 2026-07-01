@@ -1,0 +1,19 @@
+[
+  {
+    "repo": "loops/dry-run",
+    "base": {
+      "instance_id": "dry-base-1",
+      "repo": "loops/dry-run",
+      "base_commit": "HEAD",
+      "problem_statement": "Base dry-run issue: record the reusable convention for the related task.",
+      "version": "dry"
+    },
+    "related": {
+      "instance_id": "dry-related-1",
+      "repo": "loops/dry-run",
+      "base_commit": "HEAD",
+      "problem_statement": "Related dry-run issue: reuse the prior convention if it appears in the injected experience.",
+      "version": "dry"
+    }
+  }
+]

@@ -120,13 +120,15 @@ NOT import loops — raw `claude -p` per node — in two modes (`bench/baseline.
 | approach | held | reading |
 |---|---|---|
 | vanilla, no memory | 0/10 | memory matters — workspace files alone don't carry the contract |
-| vanilla, naive `git log` pasted into every prompt | **10/10** | brute-force history access honours the contract |
-| loops + Ledger (structured grounding) | 9/10 | matched, marginally behind (the −1 is application variance, not truncation) |
+| vanilla, naive `git log` pasted into every prompt | **10/10** | brute-force history access honours the contract on a toy log |
+| loops + Ledger (gated write + grounding) | 9/10 | creates the reasoning thread, then lets later agents pull on it |
 
-**On this task, structured grounding does not beat "just paste the git log" — its
-value is ergonomics, not capability.** Stated plainly because it is true. The
-caveat that keeps it from being a flat loss: this is the easiest case for the
-baseline — a one-commit, 1593-char log, cheap to paste and impossible to miss.
+**On this toy-history task, pasting the full git log beats the read side of
+Loops.** That is useful as a sanity check, but it is not a serious operating
+mode for lived-in repos, and it skips the other half of Loops: the gated write
+layer that created the rich commit body the dump relies on. The real claim is
+the whole journey: deterministic enforcement captures what was decided and why,
+then grounding lets the next fresh agent pull on that single thread.
 
 ### Noisy log: retrieval vs recent-N vs naive dump
 
@@ -138,21 +140,21 @@ out of recent-N's default 10-commit window (`bench/graph.ts` BENCH_NOISE, plus
 |---|---|---|
 | loops recent-N (default) | **0/6** | the buried contract is outside the window — total failure |
 | loops retrieval (`{retrieve:true}`) | 5/6 (83%) | a cheap model finds it by subject — rescues the default |
-| vanilla, naive full-log dump | **6/6 (100%)** | 16 commits still fit; pasting all reliably includes it |
+| vanilla, naive full-log dump | **6/6 (100%)** | 16 commits still fit; this is a toy-history sanity check |
 
 Two honest reads at once. **The win is internal: retrieval (83%) vs recent-N (0%)
 — loops' default grounding is the wrong choice for a long/noisy log, and one flag
-fixes it.** But **retrieval did not beat brute-force dump (83% vs 100%)**, so the
-capability claim over a vanilla orchestrator is still unproven: at 16 commits the
-whole log fits in context, so retrieval's only edge (selectivity to avoid bloat)
-does not matter, and it costs more (70k vs 63k tokens) with its own failure mode
-(the selection model can pick wrong). Retrieval's real advantage appears only when
-the log is too big to paste — hundreds of commits — which is precisely the **Tend**
-regime, untested here. The decisive capability test is 200 noise commits, not 15.
+fixes it.** But **retrieval did not beat brute-force dump (83% vs 100%)** at 16
+commits, because 16 commits is not a lived-in repo. Full-log dump is useful here
+only as a sanity check: on any repo with significant history it is immediate
+context rot and immediate cost. Retrieval's real advantage appears when the log is
+too large or noisy to paste, which is precisely the **Tend** regime, untested here.
 
 So loops' honest claim on cross-node memory remains "the automatic, bounded,
-tunable substrate for long-horizon graphs" (recent-N → retrieval → consolidation
-as the log grows), not "the only way" — until the dump-infeasible scale is run.
+tunable substrate for long-horizon graphs" (deterministic write layer → recent-N
+→ retrieval → consolidation as the log grows), not "the only way" — until the
+dump-infeasible scale is run. The write layer matters: `git log` only helps if
+the log contains rich, verified commit bodies in the first place.
 
 ## SWE-bench detail (setup + mechanism)
 
@@ -224,22 +226,25 @@ longer chain with several fence-bearing nodes.
 ## Reproduce
 
 ```bash
-# Trivial baseline (sonnet)
-BENCH_MODEL=sonnet npx tsx bench/ab.ts && npx tsx bench/report.ts
+# Plain-language comparison guide
+npm run bench:compare
 
-# Convergence suite (haiku, 5 trials)
-BENCH_TASKS=tasks-hard BENCH_TRIALS=5 BENCH_MODEL=haiku BENCH_MAX_ITERS=5 \
+# Trivial baseline
+BENCH_ENGINE=claude-cli BENCH_MODEL=sonnet npx tsx bench/ab.ts && npx tsx bench/report.ts
+
+# Convergence suite, 5 trials
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_TASKS=tasks-hard BENCH_TRIALS=5 BENCH_MAX_ITERS=5 \
   BENCH_OUT=results-hard.json npx tsx bench/ab.ts
 npx tsx bench/report.ts bench/results-hard.json
 
 # SWE-bench Lite resolve@2 (needs Docker; see bench/swebench.ts header for the
 # DOCKER_HOST / DOCKER_CONFIG setup and the eval command)
-BENCH_SWE_INSTANCES=<instances.json> BENCH_K=2 BENCH_MODEL=haiku \
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_SWE_INSTANCES=<instances.json> BENCH_K=2 \
   npx tsx bench/swebench.ts
 
 # Graph cross-node (the judgment-fence floor and the contract ceiling)
-BENCH_TRIALS=10 BENCH_MODEL=haiku BENCH_OUT=results-graph.json npx tsx bench/graph.ts
-BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 BENCH_MODEL=haiku \
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_TRIALS=10 BENCH_OUT=results-graph.json npx tsx bench/graph.ts
+BENCH_ENGINE=claude-cli BENCH_MODEL=haiku BENCH_GRAPH_TASK=graph-tasks/stable-store-contract BENCH_TRIALS=10 \
   BENCH_OUT=results-graph-contract.json npx tsx bench/graph.ts
 ```
 

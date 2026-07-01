@@ -20,6 +20,32 @@ Every iteration runs with a **fresh context**, so a long run never rots. Progres
 
 Where most "agent memory" recalls a _conversation_, this keeps your _decisions_ consistent across long work. No vector database, no embeddings, no index to sync or let go stale. **Git is the memory.**
 
+## The fastest proof
+
+A downstream agent had to preserve one upstream decision: snapshots must start
+with the exact wire tag `SSv1|`. That decision lived only in a git commit body,
+not in the source files or the downstream task prompt. The commit was not just a
+fact store; it was the thread back through the journey, what was decided, why it
+was decided, and what downstream work had to honour.
+
+| Runner | What it could read | Result |
+| --- | --- | --- |
+| Memoryless graph | files plus task prompt | 0/10 preserved the contract |
+| Loops Ledger | gated commit bodies plus grounding | 9/10 preserved the contract |
+| Raw git dump | full git log pasted into every prompt | 10/10 on a toy log, not a real-repo operating mode |
+
+That is the honest shape of the claim. Loops is not just `git log`: it is the
+deterministic enforcement layer that makes agents write useful commit bodies when
+work converges, then the grounding layer that reads those verified reasons back
+into later fresh contexts. The value is not bare recall. A fresh agent can pull
+on one thread and reconstruct how and why the repository got here. Full-log dump
+is a useful sanity check on tiny histories, but on a repo with significant
+history it is context rot and cost.
+
+```bash
+npm run bench:compare
+```
+
 ```ts
 import { loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
 
@@ -297,10 +323,10 @@ The agent launch only ever touches the `Engine` interface, so the loop knows not
 
 | name            | backend                          | notes                                                       |
 | --------------- | -------------------------------- | ----------------------------------------------------------- |
-| `claude-cli`    | `claude` subprocess (`execa`)    | fresh process per call; uses host Claude auth, no key       |
-| `agent-sdk`     | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call; host Claude auth                  |
-| `anthropic-api` | `@anthropic-ai/sdk`              | token-level streaming; cheapest for judges; needs a key     |
-| `codex`         | `codex exec` subprocess (GPT-5)  | a genuinely different model for a second-model reviewer; read-only |
+| `codex`         | `codex exec` subprocess (`execa`) | fresh process per call; read-only unless `bypassPermissions` |
+| `claude-cli`    | `claude` subprocess (`execa`)     | fresh process per call; uses host Claude auth, no key        |
+| `agent-sdk`     | `@anthropic-ai/claude-agent-sdk`  | fresh `query()` per call; host Claude auth                   |
+| `anthropic-api` | `@anthropic-ai/sdk`               | token-level streaming; cheapest for judges; needs a key      |
 | `mock`          | scripted, offline                | for tests and examples                                      |
 
 Select per-run (`--engine`, `RunOptions.engine`) or per-job/condition (`engine:` takes a name **or** a ready-made `Engine`). Bring your own in ~10 lines:

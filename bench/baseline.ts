@@ -3,7 +3,7 @@
  *
  * The graph A/B compares loops ON vs OFF (its own ablation). A skeptic says OFF is
  * a strawman. So this runs the SAME contract task through a vanilla orchestrator
- * that does NOT import loops — just raw `claude -p` per node — in two modes:
+ * that does NOT import loops — just a raw CLI-agent call per node — in two modes:
  *   - nomem:   sequential agents, workspace only (the naive hand-rolled chain).
  *   - gitdump: same, but `git log` is pasted into every node's prompt (the STRONG
  *              baseline — brute-force history access without loops' grounding).
@@ -11,10 +11,10 @@
  * Ledger is mere ergonomics; if it loses, loops' structured grounding is a real
  * capability. Either answer is honest.
  *
- * NOT offline: drives real claude-cli. Each trial runs in a fresh git repo seeded
+ * NOT offline: drives a real CLI agent. Each trial runs in a fresh git repo seeded
  * with node 1's code AND node 1's commit (the seeded why, in git history only).
  *
- *   BENCH_MODE=gitdump BENCH_TRIALS=10 BENCH_MODEL=haiku npx tsx bench/baseline.ts
+ *   BENCH_MODE=gitdump BENCH_TRIALS=10 npx tsx bench/baseline.ts
  */
 
 import { copyFileSync, cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -33,10 +33,24 @@ const TASK_DIR = join(HERE, 'graph-tasks/stable-store-contract');
 type Mode = 'nomem' | 'gitdump' | 'rag';
 const MODE = (process.env.BENCH_MODE || 'gitdump') as Mode;
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 10);
-const MODEL = process.env.BENCH_MODEL || 'haiku';
+const ENGINE = requireEngine();
+const MODEL = process.env.BENCH_MODEL || undefined;
 const NOISE = Number(process.env.BENCH_NOISE ?? 0);
 const NOISE_SIZE = Number(process.env.BENCH_NOISE_SIZE ?? 0);
 let dumpChars = 0; // size of the pasted git log (the cost the dump pays)
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  if (engine !== 'codex' && engine !== 'claude-cli') {
+    console.error('bench/baseline.ts uses raw CLI calls, so BENCH_ENGINE must be codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
 
 interface Task {
   gate: string;
@@ -60,7 +74,7 @@ async function prepareRepo(): Promise<string> {
   return dir;
 }
 
-/** Run one node as a raw claude-cli call — no loops, fresh process = fresh context. */
+/** Run one node as a raw CLI-agent call — no loops, fresh process = fresh context. */
 async function runNode(dir: string, prompt: string): Promise<void> {
   let full = prompt;
   if (MODE === 'gitdump') {
@@ -74,11 +88,36 @@ async function runNode(dir: string, prompt: string): Promise<void> {
   // time out) — that IS the capability result, so swallow it and let the gate
   // reflect that the node did nothing.
   try {
-    await execa(
-      'claude',
-      ['-p', '--permission-mode', 'bypassPermissions', '--model', MODEL],
-      { cwd: dir, input: full, reject: false, timeout: 600_000, stdin: undefined },
-    );
+    if (ENGINE === 'claude-cli') {
+      const args = ['-p', '--permission-mode', 'bypassPermissions'];
+      if (MODEL) args.push('--model', MODEL);
+      await execa('claude', args, {
+        cwd: dir,
+        input: full,
+        reject: false,
+        timeout: 600_000,
+        stdin: undefined,
+      });
+    } else {
+      const args = [
+        'exec',
+        '--ephemeral',
+        '--skip-git-repo-check',
+        '--color',
+        'never',
+        '--dangerously-bypass-approvals-and-sandbox',
+        '-C',
+        dir,
+      ];
+      if (MODEL) args.push('-m', MODEL);
+      args.push(full);
+      await execa('codex', args, {
+        cwd: dir,
+        reject: false,
+        timeout: 600_000,
+        stdin: 'ignore',
+      });
+    }
   } catch {
     /* overflow / timeout / error → node no-op; fence breaks honestly */
   }
@@ -103,7 +142,7 @@ async function runTrial(): Promise<boolean> {
 async function main(): Promise<void> {
   console.log(
     `Head-to-head baseline — vanilla orchestrator (NO loops), mode=${MODE}, ` +
-      `model=${MODEL}, ${TRIALS} trials, noise=${NOISE}×${NOISE_SIZE || 'small'}\n` +
+      `engine=${ENGINE}, model=${MODEL ?? '(default)'}, ${TRIALS} trials, noise=${NOISE}×${NOISE_SIZE || 'small'}\n` +
       `nodes: ${task.nodes.map((n) => n.name).join(' → ')}`,
   );
   let held = 0;

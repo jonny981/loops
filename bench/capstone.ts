@@ -8,7 +8,7 @@
  *  - loops-team   — the recipe in examples/build-service.loop.ts: a dag of Converge loops,
  *                   each an AgentDef specialist, isolated worktrees, and a 3-model adversarial
  *                   review gate. Cross-component contracts ride the Ledger (grounding).
- *  - single-agent — one `claude -p`, same base model, told to build the whole thing in one
+ *  - single-agent — one raw CLI-agent turn, same base model, told to build the whole thing in one
  *                   turn (the Devin shape). It grades itself against the visible tests.
  *
  * The finding is the asymmetry: the single agent cannot apply an independent adversarial
@@ -181,8 +181,25 @@ async function validateWiring(): Promise<void> {
 
 // ── live A/B: loops-team vs single-agent (real spend) ────────────────────────
 
-const MODEL = process.env.BENCH_MODEL || 'sonnet';
+const ENGINE = process.env.BENCH_RUN || process.env.BENCH_REVIEW ? requireEngine() : undefined;
+const MODEL = process.env.BENCH_MODEL || undefined;
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 3);
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
+
+function requireRawCliEngine(engine: string | undefined): asserts engine is 'codex' | 'claude-cli' {
+  if (engine !== 'codex' && engine !== 'claude-cli') {
+    console.error('capstone single-agent arm uses raw CLI calls, so BENCH_ENGINE must be codex or claude-cli');
+    process.exit(1);
+  }
+}
 
 /** Everything the team's store engineer authors + propagates, handed to one agent at once —
  *  so the single agent is not starved of information; the difference is coherence + review. */
@@ -229,7 +246,7 @@ async function runTeamArm(): Promise<ArmResult> {
   const { default: buildService } = await import('../examples/build-service.loop.ts');
   const t0 = Date.now();
   const result = await run(buildService, {
-    engine: 'claude-cli',
+    engine: ENGINE,
     engineOptions: { permissionMode: 'bypassPermissions', defaultModel: MODEL },
     cwd: seed,
     recordTo: process.env.BENCH_RECORD, // optional JSONL event log for diagnosing a long run
@@ -241,18 +258,44 @@ async function runTeamArm(): Promise<ArmResult> {
   return { pass: held.pass, tokens, ms, detail: held.detail };
 }
 
-/** single-agent arm: one claude turn, same base model, builds the whole thing (the Devin shape). */
+/** single-agent arm: one raw agent turn, same base model, builds the whole thing (the Devin shape). */
 async function runSingleArm(): Promise<ArmResult> {
+  requireRawCliEngine(ENGINE);
   const seed = await setupSeed();
   const t0 = Date.now();
-  const r = await execa(
-    'claude',
-    ['-p', '--output-format', 'json', '--permission-mode', 'bypassPermissions', '--model', MODEL],
-    { cwd: seed, input: SINGLE_BRIEF, reject: false, timeout: 1_200_000 },
-  );
+  const r =
+    ENGINE === 'claude-cli'
+      ? await execa(
+          'claude',
+          [
+            '-p',
+            '--output-format',
+            'json',
+            '--permission-mode',
+            'bypassPermissions',
+            ...(MODEL ? ['--model', MODEL] : []),
+          ],
+          { cwd: seed, input: SINGLE_BRIEF, reject: false, timeout: 1_200_000 },
+        )
+      : await execa(
+          'codex',
+          [
+            'exec',
+            '--ephemeral',
+            '--skip-git-repo-check',
+            '--color',
+            'never',
+            '--dangerously-bypass-approvals-and-sandbox',
+            '-C',
+            seed,
+            ...(MODEL ? ['-m', MODEL] : []),
+            SINGLE_BRIEF,
+          ],
+          { cwd: seed, stdin: 'ignore', reject: false, timeout: 1_200_000 },
+        );
   const ms = Date.now() - t0;
   let tokens = 0;
-  try {
+  if (ENGINE === 'claude-cli') try {
     const u = JSON.parse(r.stdout).usage ?? {};
     tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
   } catch {
@@ -264,7 +307,9 @@ async function runSingleArm(): Promise<ArmResult> {
 }
 
 async function runLive(): Promise<void> {
-  console.log(`Capstone A/B — loops-team vs single-agent · model ${MODEL} · ${TRIALS} trial(s)\n`);
+  console.log(
+    `Capstone A/B — loops-team vs single-agent · engine ${ENGINE} · model ${MODEL ?? '(default)'} · ${TRIALS} trial(s)\n`,
+  );
   const tally: Record<string, { pass: number; tokens: number; ms: number }> = {
     team: { pass: 0, tokens: 0, ms: 0 },
     single: { pass: 0, tokens: 0, ms: 0 },
@@ -319,14 +364,12 @@ async function reviewProbe(): Promise<void> {
   const THRESH = 0.8;
   console.log(`review calibration — 5-lens battery, <confidence>% gating, threshold ${Math.round(THRESH * 100)}%\n`);
   const recipe = await import('../examples/build-service.loop.ts');
-  // Calibrate cheaply: every lens on a Claude model (the adversarial codex path is validated
-  // separately). Same personas + confidence-tag framing, so the calibration transfers.
-  const LENSES: Array<[string, string]> = [
-    ['adversarial', 'opus'],
-    ['security', 'opus'],
-    ['correctness', 'sonnet'],
-    ['conformance', 'opus'],
-    ['simplicity', 'haiku'],
+  const LENSES: Array<[string, string | undefined]> = [
+    ['adversarial', process.env.BENCH_ADVERSARIAL_MODEL],
+    ['security', process.env.BENCH_SECURITY_MODEL],
+    ['correctness', process.env.BENCH_CORRECTNESS_MODEL],
+    ['conformance', process.env.BENCH_CONFORMANCE_MODEL],
+    ['simplicity', process.env.BENCH_SIMPLICITY_MODEL],
   ];
   const cases: Array<[string, string, string]> = [
     ['correct', 'serialize', readFileSync(join(REF, 'serialize.mjs'), 'utf8')],
@@ -337,7 +380,7 @@ async function reviewProbe(): Promise<void> {
     let cleared = 0;
     for (const [lens, model] of LENSES) {
       const res = await run(gateJob(lens, recipe.reviewer(name, lens, { model, threshold: THRESH })), {
-        engine: 'claude-cli',
+        engine: ENGINE,
         engineOptions: { permissionMode: 'bypassPermissions', defaultModel: MODEL },
         cwd: dir,
       });

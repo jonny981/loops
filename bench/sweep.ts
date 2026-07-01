@@ -15,9 +15,9 @@
  * files and re-invents a structure each time. Conformance = the doc matches the
  * house style. The lift is ON's conformance over OFF's.
  *
- * NOT offline: drives real claude-cli. Fresh repo per sweep.
+ * NOT offline: drives a real CLI agent. Fresh repo per sweep.
  *
- *   BENCH_SWEEPS=3 BENCH_MODEL=haiku npx tsx bench/sweep.ts
+ *   BENCH_ENGINE=codex BENCH_SWEEPS=3 npx tsx bench/sweep.ts
  */
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -29,9 +29,18 @@ import { run, sequence, agentJob, commitJob, type Job } from '../src/api.ts';
 
 const SWEEPS = Number(process.env.BENCH_SWEEPS ?? 3);
 const MODEL = process.env.BENCH_MODEL || undefined;
-const ENGINE = 'claude-cli';
+const ENGINE = requireEngine();
 
 type Arm = 'off' | 'on';
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
 
 const ITEMS: { slug: string; name: string; blurb: string }[] = [
   { slug: 'helios-grid', name: 'Helios Grid', blurb: 'a solar string-inverter manufacturer' },

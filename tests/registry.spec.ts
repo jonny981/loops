@@ -6,7 +6,7 @@ import { MockEngine, isEngine, LoopError } from '../src/api.ts';
 describe('EngineRegistry', () => {
   it('resolves built-in names to engines', () => {
     const reg = new EngineRegistry();
-    for (const name of ['agent-sdk', 'claude-cli', 'anthropic-api']) {
+    for (const name of ['agent-sdk', 'claude-cli', 'codex', 'anthropic-api']) {
       expect(reg.has(name)).toBe(true);
       expect(reg.create(name, 'agent-sdk').name).toBe(name);
     }

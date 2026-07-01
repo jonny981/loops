@@ -3,3 +3,8 @@ dist/
 *.tsbuildinfo
 *.tgz
 .DS_Store
+
+# Local agent state
+.Codex/
+.codex/
+tasks/

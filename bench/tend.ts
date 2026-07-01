@@ -21,7 +21,7 @@
  * Metric: coverage (distinct items triaged / N), redos (duplicate triages),
  * whether it terminated (covered all N within the iteration budget).
  *
- *   BENCH_GROUND=consolidate BENCH_MODEL=haiku npx tsx bench/tend.ts
+ *   BENCH_ENGINE=codex BENCH_GROUND=consolidate npx tsx bench/tend.ts
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -46,7 +46,7 @@ import {
 type Mode = 'off' | 'recent' | 'retrieve' | 'consolidate';
 const MODE = (process.env.BENCH_GROUND || 'recent') as Mode;
 const MODEL = process.env.BENCH_MODEL || undefined;
-const ENGINE = 'claude-cli';
+const ENGINE = requireEngine();
 const CONSOLIDATE_EVERY = 4;
 
 const ITEMS: { id: string; desc: string }[] = [
@@ -63,6 +63,15 @@ const ITEMS: { id: string; desc: string }[] = [
   { id: 'item-11', desc: 'rate limiter counts cached responses' },
   { id: 'item-12', desc: 'timezone shown in UTC on the dashboard' },
 ];
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
 const N = ITEMS.length;
 const MAX_ITERS = Math.ceil(N * 1.5); // budget room for some redos
 

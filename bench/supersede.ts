@@ -16,10 +16,10 @@
  * DECISION SCALE, not distractor noise — scale `SETTINGS`/revisions until the decision
  * history exceeds context. Distractors only add realism.
  *
- *   RAG_PYTHON=/path/to/rag-venv/bin/python BENCH_TRIALS=4 BENCH_MODEL=haiku \
- *     BENCH_NODE_MODEL=sonnet npx tsx bench/supersede.ts
+ *   RAG_PYTHON=/path/to/rag-venv/bin/python BENCH_ENGINE=codex BENCH_TRIALS=4 \
+ *     npx tsx bench/supersede.ts
  */
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,13 +30,30 @@ import { gitCandidates, ragGroundingText } from './rag.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TASK_DIR = join(HERE, 'graph-tasks/supersede');
-const MODEL = process.env.BENCH_MODEL || 'haiku'; // cheap helpers (rag select / consolidate)
+const OFFLINE = !!process.env.BENCH_VALIDATE || !!process.env.BENCH_PROBE;
+const ENGINE = OFFLINE ? undefined : requireEngine();
+const MODEL = process.env.BENCH_MODEL || undefined; // cheap helpers (rag select / consolidate)
 const NODE_MODEL = process.env.BENCH_NODE_MODEL || MODEL; // the implementing node
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 4);
 const K = Number(process.env.BENCH_K ?? 8); // retrieval budget
 const NOISE = Number(process.env.BENCH_NOISE ?? 0); // distractor commits (realism)
 const NOISE_SIZE = Number(process.env.BENCH_NOISE_SIZE ?? 0);
 const ARMS = (process.env.BENCH_ARMS || 'none,grep,rag,loops').split(',');
+
+type RawCliEngine = 'codex' | 'claude-cli';
+
+function requireEngine(): RawCliEngine {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a raw CLI engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  if (engine !== 'codex' && engine !== 'claude-cli') {
+    console.error('bench/supersede.ts uses raw CLI calls, so BENCH_ENGINE must be codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
+}
 
 /** A setting and its revision chain (oldest → newest). Current value = last entry. */
 interface Setting {
@@ -130,8 +147,51 @@ function writeGate(dir: string): void {
 
 // ── memory strategies ────────────────────────────────────────────────────────
 
-const claude = (input: string, extra: string[] = []) =>
-  execa('claude', ['-p', '--model', MODEL, ...extra], { input, reject: false, timeout: 600_000 });
+async function rawAgent(
+  input: string,
+  opts: { model?: string; cwd?: string; write?: boolean } = {},
+): Promise<{ stdout: string; stderr: string; exitCode?: number }> {
+  if (!ENGINE) throw new Error('BENCH_ENGINE is required for live raw agent calls');
+  if (ENGINE === 'claude-cli') {
+    const args = ['-p'];
+    if (opts.write) args.push('--permission-mode', 'bypassPermissions');
+    if (opts.model) args.push('--model', opts.model);
+    const r = await execa('claude', args, {
+      cwd: opts.cwd,
+      input,
+      reject: false,
+      timeout: 600_000,
+      stdin: undefined,
+    });
+    return { stdout: r.stdout, stderr: r.stderr, exitCode: r.exitCode ?? undefined };
+  }
+
+  const outDir = mkdtempSync(join(tmpdir(), 'supersede-codex-'));
+  const outFile = join(outDir, 'last.txt');
+  const args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never'];
+  if (opts.write) args.push('--dangerously-bypass-approvals-and-sandbox');
+  else args.push('-s', 'read-only');
+  if (opts.cwd) args.push('-C', opts.cwd);
+  if (opts.model) args.push('-m', opts.model);
+  args.push('-o', outFile, input);
+  try {
+    const r = await execa('codex', args, {
+      cwd: opts.cwd,
+      reject: false,
+      timeout: 600_000,
+      stdin: 'ignore',
+    });
+    let stdout = '';
+    try {
+      stdout = readFileSync(outFile, 'utf8').trim();
+    } catch {
+      /* no final message written */
+    }
+    return { stdout, stderr: r.stderr, exitCode: r.exitCode ?? undefined };
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
+}
 
 const SUPERSEDE_LEDGER_SYSTEM =
   'You maintain a CONSOLIDATED LEDGER of a project\'s settings from its commit history. ' +
@@ -147,8 +207,9 @@ async function loopsLedger(dir: string): Promise<string> {
   const lines = ordered
     .map((c) => `- ${c.subject}`)
     .join('\n');
-  const r = await claude(
+  const r = await rawAgent(
     `${SUPERSEDE_LEDGER_SYSTEM}\n\nCOMMITS (oldest first):\n${lines}\n\nOutput the current settings ledger.`,
+    { model: MODEL },
   );
   const led = r.stdout.trim();
   return led ? `## Current settings (consolidated — latest value wins)\n\n${led}` : '';
@@ -167,11 +228,7 @@ async function runNode(dir: string, prompt: string): Promise<{ pass: boolean; ch
     await probeNode(dir);
   } else {
     try {
-      await execa(
-        'claude',
-        ['-p', '--permission-mode', 'bypassPermissions', '--model', NODE_MODEL],
-        { cwd: dir, input: prompt, reject: false, timeout: 600_000 },
-      );
+      await rawAgent(prompt, { cwd: dir, write: true, model: NODE_MODEL });
     } catch {
       /* a node that errors just fails the gate */
     }
@@ -338,7 +395,8 @@ async function main(): Promise<void> {
   if (process.env.BENCH_PROBE) return probeSelfTest();
   console.log(
     `Supersession A/B — ${SETTINGS.length} evolving settings · ${TRIALS} trial(s) · ` +
-      `node ${NODE_MODEL}, helpers ${MODEL} · k=${K}${NOISE ? ` · noise ${NOISE}×${NOISE_SIZE}` : ''}\n` +
+      `engine ${ENGINE}, node ${NODE_MODEL ?? '(cli default)'}, helpers ${MODEL ?? '(cli default)'} · ` +
+      `k=${K}${NOISE ? ` · noise ${NOISE}×${NOISE_SIZE}` : ''}\n` +
       `arms: ${ARMS.join(', ')}`,
   );
   const tally: Record<string, { pass: number; chars: number }> = {};

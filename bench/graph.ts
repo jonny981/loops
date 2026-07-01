@@ -17,10 +17,10 @@
  * whole chain. Depth is a knob: a longer chain accumulates more why, so the lift
  * should grow with depth.
  *
- * NOT offline: the nodes drive the real claude-cli engine. Each trial runs in a
+ * NOT offline: the nodes drive a real CLI agent. Each trial runs in a
  * fresh git repo seeded with node 1's code AND node 1's commit (the seeded why).
  *
- *   BENCH_TRIALS=5 BENCH_MODEL=haiku BENCH_OUT=results-graph.json \
+ *   BENCH_ENGINE=codex BENCH_TRIALS=5 BENCH_OUT=results-graph.json \
  *     npx tsx bench/graph.ts
  *   npx tsx bench/report.ts bench/results-graph.json
  */
@@ -55,7 +55,7 @@ const TASK_DIR = resolveIn(process.env.BENCH_GRAPH_TASK || 'graph-tasks/stable-s
 const OUT = resolveIn(process.env.BENCH_OUT || 'results-graph.json');
 const MODEL = process.env.BENCH_MODEL || undefined;
 const TRIALS = Number(process.env.BENCH_TRIALS ?? 1);
-const ENGINE = 'claude-cli';
+const ENGINE = requireEngine();
 /** Bury the foundation commit under N unrelated commits (the noisy-log test). */
 const NOISE = Number(process.env.BENCH_NOISE ?? 0);
 /** Chars per noise commit body — fatten to make the full log too big to paste. */
@@ -83,6 +83,15 @@ interface TrialResult {
   inputTokens: number;
   outputTokens: number;
   elapsedMs: number;
+}
+
+function requireEngine(): string {
+  const engine = process.env.BENCH_ENGINE;
+  if (!engine) {
+    console.error('set BENCH_ENGINE to a live engine, for example codex or claude-cli');
+    process.exit(1);
+  }
+  return engine;
 }
 
 function loadTask(): GraphTask {
