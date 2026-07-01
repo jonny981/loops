@@ -507,7 +507,7 @@ loops status <runId>                   # its shape plus where it is now: iterati
 loops tail <runId>                     # stream its events live
 ```
 
-Each run keeps the raw event stream in `events.jsonl` and a smaller semantic stream in `semantic.jsonl` with dispatch, completion, surfacing, and revision records. Use `loops records <runId>` to inspect those records without knowing the registry path; add `--kind revision` or `--json` when an agent needs a filtered machine-readable stream. `list` marks a run dead if its process is gone. The read side is also on the public surface (`listRuns`, `readRunStatus`, `runEventsPath`, `runSemanticRecordsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
+Each run keeps the raw event stream in `events.jsonl` and a smaller semantic stream in `semantic.jsonl` with dispatch, completion, surfacing, `revision-emitted`, and `revision-routed` records. Use `loops records <runId>` to inspect those records without knowing the registry path; add `--kind revision-routed`, `--kind revision` (both revision kinds), or `--json` when an agent needs a filtered machine-readable stream. `list` marks a run dead if its process is gone. The read side is also on the public surface (`listRuns`, `readRunStatus`, `runEventsPath`, `runSemanticRecordsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
 
 ## What `loops` is (and isn't)
 

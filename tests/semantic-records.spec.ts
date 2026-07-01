@@ -57,7 +57,7 @@ describe('semantic run records', () => {
     );
   });
 
-  it('records review surfacing and revision requests', async () => {
+  it('records review surfacing plus emitted and routed revision requests', async () => {
     let reviews = 0;
     const result = await run(
       loop({
@@ -95,8 +95,18 @@ describe('semantic run records', () => {
     );
     expect(records).toContainEqual(
       expect.objectContaining({
-        kind: 'revision',
+        kind: 'revision-emitted',
+        sourceEvent: 'job:end',
+        revision: expect.objectContaining({
+          reason: 'Missing cancellation handling.',
+        }),
+      }),
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        kind: 'revision-routed',
         sourceEvent: 'loop:review',
+        decision: 'accepted',
         revision: expect.objectContaining({
           reason: 'Missing cancellation handling.',
         }),

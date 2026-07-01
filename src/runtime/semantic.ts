@@ -50,10 +50,18 @@ export type SemanticRunRecord =
       note?: string;
     }
   | {
-      kind: 'revision';
+      kind: 'revision-emitted';
       ts: number;
       path: string[];
-      sourceEvent: 'job:end' | 'loop:review' | 'dag:kickback';
+      sourceEvent: 'job:end';
+      revision: RevisionRequest;
+    }
+  | {
+      kind: 'revision-routed';
+      ts: number;
+      path: string[];
+      sourceEvent: 'loop:review' | 'dag:kickback';
+      decision: SemanticDecision;
       revision: RevisionRequest;
     };
 
@@ -88,13 +96,22 @@ function strongestFinding(
   return undefined;
 }
 
-function revisionRecord(
+function emittedRevisionRecord(
   event: LoopEvent,
-  sourceEvent: 'job:end' | 'loop:review',
   outcome: Outcome,
 ): SemanticRunRecord[] {
   const revision = revisionFromOutcome(outcome);
-  return revision ? [{ kind: 'revision', ts: event.ts, path: event.path, sourceEvent, revision }] : [];
+  return revision
+    ? [
+        {
+          kind: 'revision-emitted',
+          ts: event.ts,
+          path: event.path,
+          sourceEvent: 'job:end',
+          revision,
+        },
+      ]
+    : [];
 }
 
 export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] {
@@ -131,7 +148,7 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
           label: event.label,
           outcome: outcomeSummary(event.outcome),
         },
-        ...revisionRecord(event, 'job:end', event.outcome),
+        ...emittedRevisionRecord(event, event.outcome),
       ];
     case 'loop:review': {
       const revision = revisionFromOutcome(event.outcome);
@@ -149,7 +166,18 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
               },
             ]
           : []),
-        ...revisionRecord(event, 'loop:review', event.outcome),
+        ...(event.outcome.status !== 'pass' && revision
+          ? [
+              {
+                kind: 'revision-routed' as const,
+                ts: event.ts,
+                path: event.path,
+                sourceEvent: 'loop:review' as const,
+                decision: 'accepted' as const,
+                revision,
+              },
+            ]
+          : []),
       ];
     }
     case 'loop:end':
@@ -178,10 +206,11 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
           note: event.note,
         },
         {
-          kind: 'revision',
+          kind: 'revision-routed',
           ts: event.ts,
           path: event.path,
           sourceEvent: 'dag:kickback',
+          decision: event.accepted ? 'accepted' : 'rejected',
           revision: {
             target: event.to,
             reason: event.reason,

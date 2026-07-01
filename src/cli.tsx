@@ -347,8 +347,10 @@ function formatSemanticRecord(record: SemanticRunRecord): string {
       return `${at}completion ${record.unit}${record.label ? ` ${record.label}` : ''}: ${record.outcome.status}${record.outcome.summary ? ` — ${record.outcome.summary}` : ''}`;
     case 'surfacing':
       return `${at}surfacing ${record.source} ${record.decision}${record.severity ? ` [${record.severity}]` : ''}: ${record.reason}`;
-    case 'revision':
-      return `${at}revision ${record.sourceEvent}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
+    case 'revision-emitted':
+      return `${at}revision emitted ${record.sourceEvent}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
+    case 'revision-routed':
+      return `${at}revision routed ${record.sourceEvent} ${record.decision}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
   }
 }
 
@@ -607,7 +609,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("show a supervised run's semantic records")
     .option(
       '--kind <kind>',
-      'filter by record kind: dispatch | completion | surfacing | revision',
+      'filter by record kind: dispatch | completion | surfacing | revision-emitted | revision-routed | revision',
     )
     .option('--json', 'emit matching semantic records as JSONL')
     .action((runId: string, flags: { kind?: string; json?: boolean }) => {
@@ -621,17 +623,23 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         'dispatch',
         'completion',
         'surfacing',
-        'revision',
+        'revision-emitted',
+        'revision-routed',
       ]);
-      if (flags.kind && !kinds.has(flags.kind as SemanticRunRecord['kind'])) {
+      const validKinds = [...kinds, 'revision'];
+      if (flags.kind && !validKinds.includes(flags.kind)) {
         process.stderr.write(
-          `--kind must be one of ${[...kinds].join(' | ')}, got "${flags.kind}"\n`,
+          `--kind must be one of ${validKinds.join(' | ')}, got "${flags.kind}"\n`,
         );
         process.exitCode = 1;
         return;
       }
       const filtered = flags.kind
-        ? records.filter((r) => r.kind === flags.kind)
+        ? flags.kind === 'revision'
+          ? records.filter(
+              (r) => r.kind === 'revision-emitted' || r.kind === 'revision-routed',
+            )
+          : records.filter((r) => r.kind === flags.kind)
         : records;
       if (flags.json) {
         for (const record of filtered) {

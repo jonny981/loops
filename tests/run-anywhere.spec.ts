@@ -137,6 +137,36 @@ describe('running a loop from outside the package tree', () => {
     }
   }, 30_000);
 
+  it('records treats revision as an alias for emitted and routed revision records', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'loops-revision-records-'));
+    try {
+      const env = { LOOPS_HOME: home };
+      const runResult = await loops(
+        ['run', join(repoRoot, 'examples', 'feedback.loop.ts'), '--no-tui', '--supervise'],
+        dir,
+        env,
+      );
+      expect(runResult.code).toBe(0);
+      const [runId] = readdirSync(join(home, 'runs'));
+      expect(runId).toBeTruthy();
+
+      const human = await loops(['records', runId!, '--kind', 'revision-routed'], dir, env);
+      expect(human.code).toBe(0);
+      expect(human.out).toMatch(/revision routed dag:kickback accepted -> engineering/);
+
+      const json = await loops(['records', runId!, '--kind', 'revision', '--json'], dir, env);
+      expect(json.code).toBe(0);
+      const kinds = json.out
+        .trim()
+        .split('\n')
+        .map((line) => (JSON.parse(line) as { kind: string }).kind);
+      expect(kinds).toContain('revision-emitted');
+      expect(kinds).toContain('revision-routed');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('validate fails with an agent-grade error on a broken recipe', async () => {
     const broken = join(dir, 'broken.loop.ts');
     writeFileSync(broken, 'export default loop({\n'); // unclosed, undefined `loop`
