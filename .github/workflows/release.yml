@@ -6,8 +6,11 @@ name: Release
 # The manual trigger publishes whatever version main's package.json carries —
 # for re-running a failed publish, or releasing from an environment that can
 # push commits but not tags.
-# Requires an NPM_TOKEN repo secret (an npm automation token with publish rights
-# to the @loops-adk scope). Publishes with provenance (needs a public repo).
+# Auth is npm trusted publishing (OIDC): the package's npmjs.com settings name
+# this repo + workflow as a trusted publisher, so no token secret is involved
+# and no auth config may be written (a token line in .npmrc would shadow OIDC).
+# OIDC needs npm >= 11.5.1; the Node 20 runner bundles npm 10, hence the
+# upgrade step before publish. Provenance requires a public repo.
 on:
   push:
     tags: ['v*']
@@ -18,17 +21,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance
+      id-token: write # npm trusted publishing (OIDC) + provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      - run: npm install -g npm@latest # OIDC publish needs npm >= 11.5.1
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
