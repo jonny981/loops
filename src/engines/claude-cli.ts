@@ -15,7 +15,7 @@ import {
 } from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
-import { redactSecrets } from '../core/redact.ts';
+import { redactSecrets, redactEnvValues } from '../core/redact.ts';
 
 /**
  * Classify a failed `claude` subprocess into a provider-limit `LoopError`, or
@@ -115,6 +115,9 @@ export class ClaudeCliEngine implements Engine {
     // attach a `data` listener to stream stdout line-by-line as it arrives.
     const sub = execa(bin, args, {
       cwd: req.cwd,
+      // execa merges this over `process.env` (`extendEnv` default); undefined
+      // is inert, so a request with no env changes nothing.
+      env: req.env,
       cancelSignal: signal,
       // The prompt is passed as an argument, not piped — don't let `claude -p`
       // stall waiting on stdin.
@@ -159,16 +162,19 @@ export class ClaudeCliEngine implements Engine {
     if (result.failed) {
       // The child's stderr is outside our control and may echo credentials on
       // an auth failure — redact before it lands in events/logs/the summary.
+      // The injected env values (`req.env`) are scrubbed verbatim on the FULL
+      // stream, before the cut, so a value split at the slice boundary cannot
+      // survive; pattern scrubbing could not catch them by shape.
       const stderr =
         typeof result.stderr === 'string'
-          ? redactSecrets(result.stderr.slice(0, 400))
+          ? redactSecrets(redactEnvValues(result.stderr, req.env).slice(0, 400))
           : '';
       // A rate/usage limit can land on either stream; check both (redacted)
       // before falling through to the generic exit-code error.
       if (!result.timedOut) {
         const stdout =
           typeof result.stdout === 'string'
-            ? redactSecrets(result.stdout.slice(0, 400))
+            ? redactSecrets(redactEnvValues(result.stdout, req.env).slice(0, 400))
             : '';
         const limit = classifyCliLimit(`${stderr}\n${stdout}`);
         if (limit) throw limit;

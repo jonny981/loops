@@ -1,0 +1,92 @@
+/**
+ * Env-var pinning for a job subtree. `withEnv` wraps any `Job` so everything
+ * beneath it — gate commands, judge calls, and the subprocesses agent leaves
+ * spawn — sees the given variables, without mutating the global `process.env`.
+ *
+ * Precedence (most specific wins):
+ *   process.env
+ *     < ctx.environment.env    (the Environment seam's live-stack vars)
+ *     < ctx.envOverlay         (withEnv; nested wrappers merge inner-over-outer)
+ *     < explicit per-call env  (commandSucceeds `opts.env` / agentJob `config.env`)
+ *
+ * Non-goals: this is pinning, not a lifecycle — unlike the Environment seam an
+ * overlay has no `down()` and never touches the Environment handle. And it
+ * cannot UNSET an inherited var: execa merges env over `process.env`, so an
+ * overlay only adds or shadows values.
+ */
+
+import type { Job } from './types.ts';
+import { childContext } from './context.ts';
+import { LoopError } from './errors.ts';
+import { jobMeta, setMeta } from './describe.ts';
+
+/**
+ * Layer env sources least- to most-specific into one record for a subprocess.
+ * Returns `undefined` when every layer is absent or empty, so call sites keep
+ * their exact no-env behavior (`env: undefined`, never `{}`). Internal — the
+ * public surface is `withEnv`; per-call layers ride `opts.env` / `config.env`.
+ */
+export function mergeEnv(
+  ...layers: (Record<string, string> | undefined)[]
+): Record<string, string> | undefined {
+  let merged: Record<string, string> | undefined;
+  for (const layer of layers) {
+    if (!layer) continue;
+    for (const [k, v] of Object.entries(layer)) {
+      // Null-prototype accumulator: on a plain `{}` a key named `__proto__`
+      // hits the inherited accessor and the set is a silent no-op, so the
+      // entry would vanish from the child env (execa accepts null-prototype
+      // env objects; spreading one works too).
+      (merged ??= Object.create(null) as Record<string, string>)[k] = v;
+    }
+  }
+  return merged;
+}
+
+/** Pin env vars for `job` and everything beneath it (see the header above). */
+export function withEnv(overlay: Record<string, string>, job: Job): Job {
+  if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay)) {
+    throw new LoopError({
+      code: 'CONFIG',
+      message: `withEnv requires a plain object of string values (got ${
+        Array.isArray(overlay) ? 'an array' : typeof overlay
+      })`,
+    });
+  }
+  for (const [k, v] of Object.entries(overlay)) {
+    // An empty key, or one containing '=', would silently set a DIFFERENT
+    // variable in the child (the envp entry for a key 'SAFE=PATH' reads
+    // 'SAFE=PATH=value', i.e. variable SAFE) — reject loudly instead.
+    if (!k || k.includes('=')) {
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `withEnv key ${JSON.stringify(k)} is not a valid env var name (empty, or contains "=")`,
+      });
+    }
+    // A number or undefined smuggled in would become the string 'undefined'
+    // (or '3000') in a child process env — reject loudly instead.
+    if (typeof v !== 'string') {
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `withEnv value for "${k}" must be a string (got ${typeof v})`,
+      });
+    }
+  }
+  const wrapper: Job = (ctx) =>
+    job(
+      // Transparent: same depth and path (no new tree segment, no events of
+      // its own), and the loop-feedback fields are carried through so wrapping
+      // a loop body does not hide the previous iteration from it.
+      childContext(ctx, {
+        depth: ctx.depth,
+        path: ctx.path,
+        lastOutcome: ctx.lastOutcome,
+        lastReview: ctx.lastReview,
+        lastGate: ctx.lastGate,
+        envOverlay: { ...ctx.envOverlay, ...overlay },
+      }),
+    );
+  // Carry the wrapped job's meta so `describe`/`validate` show the inner shape.
+  const meta = jobMeta(job);
+  return meta ? setMeta(wrapper, meta) : wrapper;
+}

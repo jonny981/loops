@@ -33,6 +33,12 @@ export interface AgentRequest {
   /** Tool allowlist, where the backend supports tools (SDK / CLI). */
   allowedTools?: string[];
   cwd?: string;
+  /**
+   * Extra env vars for the engine's execution context, MERGED over the parent
+   * process env by engines that spawn subprocesses. Engines that cannot honor
+   * it ignore it (anthropic-api: no subprocess).
+   */
+  env?: Record<string, string>;
   timeoutMs?: number;
   /**
    * Forbid this agent from spawning sub-agents (fanning out). A leaf agent is told to

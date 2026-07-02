@@ -24,6 +24,8 @@ export interface ContextOverride {
   workspace?: Workspace;
   /** Override the environment (a per-team env at a concurrency boundary). */
   environment?: EnvHandle;
+  /** Override the pinned env vars (a `withEnv` wrapper layering its overlay). */
+  envOverlay?: Record<string, string>;
   /** Override the DAG graph position for a node. */
   graph?: GraphPosition;
 }
@@ -42,6 +44,10 @@ export function childContext(
     // boundary forks it into an isolated worktree by passing `workspace`.
     workspace: over.workspace ?? parent.workspace,
     environment: over.environment ?? parent.environment,
+    // Inherited, not override-only: pinning deliberately survives the dag
+    // worktree boundary, where a node ctx REPLACES `environment` with a
+    // per-team handle — an explicit `withEnv` wins over a per-team stack's vars.
+    envOverlay: over.envOverlay ?? parent.envOverlay,
     forge: parent.forge,
     budget: parent.budget,
     onLimit: parent.onLimit,

@@ -24,12 +24,13 @@ import { execa } from 'execa';
 
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
+import { mergeEnv } from './env-overlay.ts';
 import { setLabel, setMeta } from './describe.ts';
 import { assertBudget } from './budget.ts';
 import { resolveSystem, type AgentDef } from './agent.ts';
 import { GhForge } from './forge.ts';
 import { truncate } from './text.ts';
-import { redactSecrets } from './redact.ts';
+import { redactSecrets, redactEnvValues } from './redact.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -120,23 +121,29 @@ export function minConfidence(threshold: number): Condition {
  * judge agrees the work matches intent — never on a model's self-report alone.
  * Runs in `cwd` (default: the process working dir), inherits the run's abort
  * signal, and never throws (a spawn failure counts as "not met").
+ * `opts.env` pins vars for this one gate command; it is the most specific
+ * layer, over any `withEnv` overlay and the running environment's vars.
  */
 export function commandSucceeds(
   command: string,
   args: string[] = [],
-  opts: { cwd?: string; timeoutMs?: number } = {},
+  opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {},
 ): Condition {
   return setLabel(async (ctx) => {
     try {
+      // The layered pinning, least → most specific: the running environment's
+      // vars (BASE_URL, …, so the gate can test the live preview), the
+      // `withEnv` overlay, then this call's own env. execa merges the result
+      // over `process.env` (`extendEnv` default), completing the precedence
+      // chain; all-absent stays `undefined`.
+      const env = mergeEnv(ctx.environment?.env, ctx.envOverlay, opts.env);
       const r = await execa(command, args, {
         cwd: opts.cwd ?? ctx.workspace.dir,
         timeout: opts.timeoutMs,
         cancelSignal: ctx.signal,
         reject: false,
         stdin: 'ignore',
-        // Inherit the running environment's vars (BASE_URL, …) so the gate can
-        // test the live preview, not just static files on disk.
-        env: ctx.environment?.env,
+        env,
       });
       if (r.exitCode === 0) {
         return { met: true, reason: `\`${command}\` exited 0` };
@@ -146,12 +153,14 @@ export function commandSucceeds(
         reason: `\`${command}\` exited ${r.exitCode ?? '?'}`,
         // The evidence behind the failure, in the same shape `reviewContext`
         // gives a judge. Scrubbed because it flows into JSONL event records —
-        // each stream BEFORE it is cut, so a secret split at the truncation
-        // boundary cannot survive.
+        // the injected env values verbatim (a failing command often echoes its
+        // config, and a pinned credential's shape is unknowable to pattern
+        // scrubbing), then the shape patterns, each stream BEFORE it is cut,
+        // so a secret split at the truncation boundary cannot survive.
         output:
           `exit: ${r.exitCode ?? '(command did not run)'}\n\n` +
-          `stdout:\n${truncate(redactSecrets(r.stdout ?? ''), 4000)}\n\n` +
-          `stderr:\n${truncate(redactSecrets(r.stderr ?? ''), 4000)}`,
+          `stdout:\n${truncate(redactSecrets(redactEnvValues(r.stdout ?? '', env)), 4000)}\n\n` +
+          `stderr:\n${truncate(redactSecrets(redactEnvValues(r.stderr ?? '', env)), 4000)}`,
       };
     } catch (e) {
       return {
@@ -602,6 +611,8 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         : VALIDATOR_SYSTEM;
     const system = config.agent ? `${resolveSystem(config.agent)}\n\n${baseSystem}` : baseSystem;
 
+    // A tool-using judge needs the same pinned vars as the work it rules on.
+    const env = mergeEnv(ctx.environment?.env, ctx.envOverlay);
     let result;
     try {
       assertBudget(ctx); // count validator calls against the run's token budget
@@ -614,6 +625,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
           maxTokens: config.maxTokens ?? (confidenceTag ? 2048 : 512),
           cwd: config.cwd,
           timeoutMs: config.timeoutMs,
+          env,
         },
         (e) => {
           if (e.type === 'usage') {
@@ -634,14 +646,19 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       throw LoopError.from(e, { code: 'ENGINE', path: ctx.path });
     }
 
+    // A judge's reply flows into `reason`/`output` (persisted records), and a
+    // tool-using judge may echo the pinned vars it was handed — scrub their
+    // exact values once, up front, so every downstream path is clean.
+    const text = redactEnvValues(result.text, env);
+
     if (confidenceTag) {
-      const parsed = parseConfidenceTag(result.text);
+      const parsed = parseConfidenceTag(text);
       if (!parsed)
         return {
           met: false,
           confidence: 0,
-          reason: `no <confidence> tag: ${redactSecrets(result.text).slice(0, 140)}`,
-          output: judgeOutput(result.text),
+          reason: `no <confidence> tag: ${redactSecrets(text).slice(0, 140)}`,
+          output: judgeOutput(text),
         };
       const pct = Math.round(parsed.confidence * 100);
       const need = Math.round(threshold * 100);
@@ -662,13 +679,13 @@ export function agentCheck(config: AgentCheckConfig): Condition {
     if (dimensions) {
       let sv: ScoreVerdict;
       try {
-        sv = parseScores(result.text, dimensions);
+        sv = parseScores(text, dimensions);
       } catch {
         return {
           met: false,
           confidence: 0,
-          reason: `unparseable scores: ${redactSecrets(result.text).slice(0, 120)}`,
-          output: judgeOutput(result.text),
+          reason: `unparseable scores: ${redactSecrets(text).slice(0, 120)}`,
+          output: judgeOutput(text),
         };
       }
       const detail = dimensions
@@ -678,21 +695,21 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         met: sv.score >= threshold,
         confidence: sv.score,
         reason: `geo ${sv.score.toFixed(2)} (need ${threshold}) [${detail}] — ${sv.reason}`,
-        output: judgeOutput(result.text),
+        output: judgeOutput(text),
       };
     }
 
     let v: Verdict;
     try {
-      v = parseVerdict(result.text);
+      v = parseVerdict(text);
     } catch {
       // A flaky or malformed verdict must not crash the whole run; fail
       // sceptically (gate stays closed) and let the loop continue/exhaust.
       return {
         met: false,
         confidence: 0,
-        reason: `unparseable verdict: ${redactSecrets(result.text).slice(0, 120)}`,
-        output: judgeOutput(result.text),
+        reason: `unparseable verdict: ${redactSecrets(text).slice(0, 120)}`,
+        output: judgeOutput(text),
       };
     }
     const met = v.verdict === 'yes' && v.confidence >= threshold;
@@ -700,7 +717,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       met,
       confidence: v.confidence,
       reason: `${v.verdict} @ ${v.confidence.toFixed(2)} (need ${threshold}) — ${v.reason}`,
-      output: judgeOutput(result.text),
+      output: judgeOutput(text),
     };
   }, `judge "${config.question}" >=${threshold}`);
 }

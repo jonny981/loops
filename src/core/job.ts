@@ -8,6 +8,7 @@
 import type { Outcome, Job, JobContext } from './types.ts';
 import { setMeta } from './describe.ts';
 import type { EngineRef } from '../engines/engine.ts';
+import { mergeEnv } from './env-overlay.ts';
 import { LoopError } from './errors.ts';
 import { assertBudget } from './budget.ts';
 import { isRepo, stageAll, commit } from './git.ts';
@@ -66,6 +67,12 @@ export interface AgentJobConfig {
   graphContext?: boolean;
   /** Working dir for the turn. Default: the workspace dir (the worktree). */
   cwd?: string;
+  /**
+   * Env vars pinned for this leaf's engine subprocess — the most specific
+   * layer, over any `withEnv` overlay and the running environment's vars.
+   * Engines that spawn no subprocess ignore it.
+   */
+  env?: Record<string, string>;
   timeoutMs?: number;
   /**
    * Ground the turn in memory before it works: prepend the branch-local commit log
@@ -259,6 +266,7 @@ export function agentJob(config: AgentJobConfig): Job {
           leaf: config.leaf ?? config.agent?.leaf,
           cwd: config.cwd ?? ctx.workspace.dir,
           timeoutMs: config.timeoutMs,
+          env: mergeEnv(ctx.environment?.env, ctx.envOverlay, config.env),
         },
         (e) => {
           const ts = Date.now();

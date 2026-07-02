@@ -241,6 +241,10 @@ export {
   type EnvHandle,
 } from './env/environment.ts';
 export { MockEnvironment, type MockEnvOptions } from './env/mock.ts';
+// Env-var pinning for a job subtree — distinct from the Environment seam:
+// `withEnv` pins vars over a scope; an Environment brings a stack up and owns
+// its lifecycle (an overlay has no `down()`)
+export { withEnv } from './core/env-overlay.ts';
 
 // Runtime
 export {

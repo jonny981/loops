@@ -99,6 +99,10 @@ export class AgentSdkEngine implements Engine {
       allowedTools: req.allowedTools,
       // A leaf agent may not spawn sub-agents — disallow the spawn tool.
       disallowedTools: req.leaf ? SUBAGENT_TOOLS : undefined,
+      // The SDK's `env` REPLACES the subprocess environment entirely — the
+      // opposite merge semantics to execa — so spread `process.env` under the
+      // request's vars to keep merge-over-parent parity with the CLI engines.
+      env: req.env ? { ...process.env, ...req.env } : undefined,
       permissionMode: this.opts.permissionMode,
       includePartialMessages: true,
       abortController: abort,

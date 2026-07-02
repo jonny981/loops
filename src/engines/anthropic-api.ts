@@ -6,6 +6,9 @@
  *
  * Needs `ANTHROPIC_API_KEY` (or `EngineOptions.apiKey`). Constructed lazily by
  * the registry, so other engines work without a key present.
+ *
+ * Ignores `AgentRequest.env`: no subprocess is spawned and the API call takes
+ * no environment.
  */
 
 import pRetry, { AbortError } from 'p-retry';

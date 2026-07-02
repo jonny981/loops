@@ -32,7 +32,7 @@ export interface EnvHandle {
   /** Addressable base URL (a preview deployment, or a local server), if any. */
   readonly url?: string;
   /**
-   * Variables injected into gate commands (and, later, agent turns) — e.g.
+   * Variables injected into gate commands, judge calls, and agent turns — e.g.
    * `BASE_URL`, `DATABASE_URL`. This is how `commandSucceeds('playwright', …)`
    * reaches the running preview.
    */

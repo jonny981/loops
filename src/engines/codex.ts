@@ -21,7 +21,7 @@ import type {
   EngineOptions,
 } from './engine.ts';
 import { LoopError } from '../core/errors.ts';
-import { redactSecrets } from '../core/redact.ts';
+import { redactSecrets, redactEnvValues } from '../core/redact.ts';
 
 export function buildCodexArgs(
   req: AgentRequest,
@@ -62,6 +62,9 @@ export class CodexEngine implements Engine {
     try {
       const sub = await execa(this.opts.cliBinary ?? 'codex', args, {
         stdin: 'ignore', // codex exec stalls on an open stdin
+        // execa merges this over `process.env` (`extendEnv` default); undefined
+        // is inert, so a request with no env changes nothing.
+        env: req.env,
         cancelSignal: signal,
         forceKillAfterDelay: 5000,
         reject: false,
@@ -80,8 +83,13 @@ export class CodexEngine implements Engine {
         throw new LoopError({
           code: sub.timedOut ? 'TIMEOUT' : 'ENGINE',
           phase: 'engine',
+          // Injected env values (`req.env`) are scrubbed verbatim on the FULL
+          // stream, before the cut, so a value split at the slice boundary
+          // cannot survive; pattern scrubbing could not catch them by shape.
           message: `codex exited ${sub.exitCode ?? '?'}${
-            typeof sub.stderr === 'string' ? `: ${redactSecrets(sub.stderr.slice(0, 300))}` : ''
+            typeof sub.stderr === 'string'
+              ? `: ${redactSecrets(redactEnvValues(sub.stderr, req.env).slice(0, 300))}`
+              : ''
           }`,
         });
 

@@ -151,6 +151,12 @@ export interface JobContext {
   readonly workspace: Workspace;
   /** The running environment for this workspace, when one is up (gate target). */
   readonly environment?: EnvHandle;
+  /**
+   * Env vars pinned for this scope and everything beneath it — gate commands,
+   * judge calls, and the subprocesses agent leaves spawn. Layered over
+   * `ctx.environment?.env`; set via `withEnv()`.
+   */
+  readonly envOverlay?: Record<string, string>;
   /** The PR host, when one is configured — where `pullRequestJob`/`mergeJob` run. */
   readonly forge?: Forge;
   /** 1-based iteration index within the enclosing loop; 0 outside a loop. */
