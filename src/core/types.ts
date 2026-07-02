@@ -165,6 +165,12 @@ export interface JobContext {
   readonly lastOutcome?: Outcome;
   /** The most recent failed-review outcome, so a restart can act on it. */
   readonly lastReview?: Outcome;
+  /**
+   * The previous iteration's explicit `until`-gate evaluation (met or not),
+   * including its diagnostic `output`. Undefined when the loop has no explicit
+   * `until`, on the first iteration, and outside loops.
+   */
+  readonly lastGate?: ConditionResult;
   /** The run's token budget, when one is set; engine call sites guard on it. */
   readonly budget?: Budget;
   /** How a loop reacts to a rate/quota/budget limit. Default `auto`. */
@@ -197,6 +203,13 @@ export interface ConditionResult {
   /** 0..1 when an agent decided this; undefined for deterministic checks. */
   confidence?: number;
   reason: string;
+  /**
+   * Verbatim diagnostic output backing the verdict — the evidence, not the
+   * one-line `reason` (a failing command's stdout/stderr, a judge's full
+   * findings). Producers truncate and secret-scrub it. Flows into
+   * `loop:condition` events and to the next loop body via `ctx.lastGate`.
+   */
+  output?: string;
 }
 
 /**

@@ -128,6 +128,18 @@ describe('ProgressTracker (the novelty rule)', () => {
     t.record({ iteration: 3 });
     expect(t.isInert()).toBe(true);
   });
+
+  it('gate channel: an equal output is flat, a differing output is novelty', () => {
+    const t = tracker();
+    expect(t.record({ iteration: 1, gate: 'exit: 1 FAIL a' })).toBeUndefined(); // novel
+    expect(t.record({ iteration: 2, gate: 'exit: 1 FAIL a' })).toBeUndefined(); // flat — 1
+    expect(t.record({ iteration: 3, gate: 'exit: 1 FAIL b' })).toBeUndefined(); // novel — reset
+    expect(t.record({ iteration: 4, gate: 'exit: 1 FAIL b' })).toBeUndefined(); // flat — 1
+    expect(t.record({ iteration: 5, gate: 'exit: 1 FAIL b' })).toBeUndefined(); // flat — 2
+    const report = t.record({ iteration: 6, gate: 'exit: 1 FAIL b' }); //          flat — 3
+    expect(report?.iterations).toEqual([4, 5, 6]);
+    expect(report?.evidence.join(' ')).toContain('gate');
+  });
 });
 
 describe('workspaceFingerprint', () => {
@@ -369,5 +381,62 @@ describe('loop({ noProgress })', () => {
       noProgress: 4,
     });
     expect(jobMeta(j)?.noProgress).toBe(4);
+  });
+
+  it('gate: true stalls on a repeating until-failure signature', async () => {
+    const { outcome, stats } = await run(
+      loop({
+        name: 'gate-stall',
+        body: fnJob('b', async () => ({ status: 'fail', summary: 'attempt' })),
+        until: async () => ({
+          met: false,
+          reason: 'tests red',
+          output: 'exit: 1\n\nstdout:\nFAIL store.spec\n\nstderr:\n',
+        }),
+        max: 20,
+        noProgress: { window: 2, gate: true, workspace: false },
+      }),
+      bareOpts(),
+    );
+    expect(outcome.status).toBe('exhausted');
+    expect(outcome.summary).toContain('stalled');
+    expect(outcome.stall?.evidence.join(' ')).toContain('gate');
+    expect(stats.loops[0]?.iterations).toBe(3); // 1 novel + window
+  });
+
+  it('a changing failure signature is progress — the loop runs to max', async () => {
+    let n = 0;
+    const { outcome, stats } = await run(
+      loop({
+        name: 'gate-moves',
+        body: fnJob('b', async () => ({ status: 'fail' })),
+        until: async () => {
+          n += 1;
+          return { met: false, reason: 'red', output: `failure #${n}` };
+        },
+        max: 6,
+        noProgress: { window: 2, gate: true, workspace: false },
+      }),
+      bareOpts(),
+    );
+    expect(outcome.status).toBe('exhausted'); // via max, not the detector
+    expect(outcome.stall).toBeUndefined();
+    expect(stats.loops[0]?.iterations).toBe(6);
+  });
+
+  it('a gate verdict with no output leaves the channel absent (indeterminate)', async () => {
+    const { outcome, stats } = await run(
+      loop({
+        name: 'gate-blind',
+        body: fnJob('b', async () => ({ status: 'fail' })),
+        until: async () => ({ met: false, reason: 'red, no diagnostics' }),
+        max: 5,
+        noProgress: { window: 2, gate: true, workspace: false },
+      }),
+      bareOpts(),
+    );
+    expect(outcome.status).toBe('exhausted'); // via max, not the detector
+    expect(outcome.stall).toBeUndefined();
+    expect(stats.loops[0]?.iterations).toBe(5);
   });
 });

@@ -21,7 +21,13 @@
  * `onComplete` post-action still run.
  */
 
-import type { JobContext, LoopConfig, Outcome, Job } from './types.ts';
+import type {
+  ConditionResult,
+  JobContext,
+  LoopConfig,
+  Outcome,
+  Job,
+} from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
 import { setMeta, jobMeta, describeConditions } from './describe.ts';
@@ -85,6 +91,7 @@ export function loop(config: LoopConfig): Job {
     const ts = () => Date.now();
 
     let lastReview: Outcome | undefined;
+    let lastGate: ConditionResult | undefined;
     let iteration = 0;
     const ctxAt = (iter: number, lastOutcome?: Outcome): JobContext =>
       childContext(parent, {
@@ -93,6 +100,7 @@ export function loop(config: LoopConfig): Job {
         iteration: iter,
         lastOutcome,
         lastReview,
+        lastGate,
       });
 
     parent.emit({ kind: 'loop:start', ts: ts(), path, depth, max: config.max });
@@ -380,14 +388,14 @@ export function loop(config: LoopConfig): Job {
         }
 
         // convergence check: explicit `until`, else "did the body pass?"
-        const conv = until
+        const conv: ConditionResult = until
           ? await gate(until, 'until', ctx, last)
           : {
               met: last.status === 'pass',
               confidence: last.confidence,
               reason: `body status = ${last.status}`,
             };
-        if (until)
+        if (until) {
           parent.emit({
             kind: 'loop:condition',
             ts: ts(),
@@ -395,6 +403,12 @@ export function loop(config: LoopConfig): Job {
             which: 'until',
             result: conv,
           });
+          // Thread the latest explicit verdict (met or not) to the next body
+          // as `ctx.lastGate`. Set before the met-branch so a review-reject
+          // re-entry carries it too. The synthesized body-pass verdict is never
+          // threaded — it carries no diagnostic value.
+          lastGate = conv;
+        }
 
         if (conv.met) {
           if (!config.review) {
@@ -508,6 +522,10 @@ export function loop(config: LoopConfig): Job {
             iteration,
             fingerprint,
             signal: signalValue,
+            // An absent output leaves the channel out of this turn's evidence
+            // (indeterminate) — never a fabricated value.
+            gate:
+              noProgress!.gate && until && !conv.met ? conv.output : undefined,
             confidence:
               turnReview?.confidence ?? conv.confidence ?? last.confidence,
             reason: turnReview

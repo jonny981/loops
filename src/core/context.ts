@@ -4,7 +4,13 @@
  * `JobContext` is threaded in exactly one place.
  */
 
-import type { GraphPosition, JobContext, Outcome, Workspace } from './types.ts';
+import type {
+  ConditionResult,
+  GraphPosition,
+  JobContext,
+  Outcome,
+  Workspace,
+} from './types.ts';
 import type { EnvHandle } from '../env/environment.ts';
 
 export interface ContextOverride {
@@ -13,6 +19,7 @@ export interface ContextOverride {
   iteration?: number;
   lastOutcome?: Outcome;
   lastReview?: Outcome;
+  lastGate?: ConditionResult;
   /** Override the workspace (a worktree fork at a concurrency boundary). */
   workspace?: Workspace;
   /** Override the environment (a per-team env at a concurrency boundary). */
@@ -51,5 +58,6 @@ export function childContext(
     iteration: over.iteration ?? parent.iteration,
     lastOutcome: over.lastOutcome,
     lastReview: over.lastReview,
+    lastGate: over.lastGate,
   };
 }

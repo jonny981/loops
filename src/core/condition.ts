@@ -28,6 +28,8 @@ import { setLabel, setMeta } from './describe.ts';
 import { assertBudget } from './budget.ts';
 import { resolveSystem, type AgentDef } from './agent.ts';
 import { GhForge } from './forge.ts';
+import { truncate } from './text.ts';
+import { redactSecrets } from './redact.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -136,9 +138,20 @@ export function commandSucceeds(
         // test the live preview, not just static files on disk.
         env: ctx.environment?.env,
       });
+      if (r.exitCode === 0) {
+        return { met: true, reason: `\`${command}\` exited 0` };
+      }
       return {
-        met: r.exitCode === 0,
+        met: false,
         reason: `\`${command}\` exited ${r.exitCode ?? '?'}`,
+        // The evidence behind the failure, in the same shape `reviewContext`
+        // gives a judge. Scrubbed because it flows into JSONL event records —
+        // each stream BEFORE it is cut, so a secret split at the truncation
+        // boundary cannot survive.
+        output:
+          `exit: ${r.exitCode ?? '(command did not run)'}\n\n` +
+          `stdout:\n${truncate(redactSecrets(r.stdout ?? ''), 4000)}\n\n` +
+          `stderr:\n${truncate(redactSecrets(r.stderr ?? ''), 4000)}`,
       };
     } catch (e) {
       return {
@@ -176,6 +189,7 @@ export const never: Condition = async () => ({ met: false, reason: 'never' });
 
 // ── Combinators ───────────────────────────────────────────────────────────
 
+/** Inverts a condition. The inner result's `output` is carried through unchanged. */
 export function not(c: ConditionInput): Condition {
   const cond = toCondition(c);
   return async (ctx, last) => {
@@ -184,11 +198,15 @@ export function not(c: ConditionInput): Condition {
       met: !r.met,
       confidence: r.confidence,
       reason: `not(${r.reason})`,
+      output: r.output,
     };
   };
 }
 
-/** Met only when every input holds (short-circuits on the first failure). */
+/**
+ * Met only when every input holds (short-circuits on the first failure).
+ * On failure the FAILING item's `output` is carried; a success carries none.
+ */
 export function all(...inputs: ConditionInput[]): Condition {
   const conds = inputs.map((i) => toCondition(i));
   return async (ctx, last) => {
@@ -196,7 +214,12 @@ export function all(...inputs: ConditionInput[]): Condition {
     for (const c of conds) {
       const r = await c(ctx, last);
       results.push(r);
-      if (!r.met) return { met: false, reason: `all -> failed: ${r.reason}` };
+      if (!r.met)
+        return {
+          met: false,
+          reason: `all -> failed: ${r.reason}`,
+          output: r.output,
+        };
     }
     return {
       met: true,
@@ -205,11 +228,16 @@ export function all(...inputs: ConditionInput[]): Condition {
   };
 }
 
-/** Met when any input holds (short-circuits on the first success). */
+/**
+ * Met when any input holds (short-circuits on the first success).
+ * On success THAT item's `output` is carried; on failure, the first defined
+ * `output` among the collected failures.
+ */
 export function any(...inputs: ConditionInput[]): Condition {
   const conds = inputs.map((i) => toCondition(i));
   return async (ctx, last) => {
     const reasons: string[] = [];
+    let output: string | undefined;
     for (const c of conds) {
       const r = await c(ctx, last);
       reasons.push(r.reason);
@@ -218,9 +246,11 @@ export function any(...inputs: ConditionInput[]): Condition {
           met: true,
           confidence: r.confidence,
           reason: `any -> ${r.reason}`,
+          output: r.output,
         };
+      output ??= r.output;
     }
-    return { met: false, reason: `any(${reasons.join(' | ')})` };
+    return { met: false, reason: `any(${reasons.join(' | ')})`, output };
   };
 }
 
@@ -230,7 +260,8 @@ export function any(...inputs: ConditionInput[]): Condition {
  * quorum (e.g. `quorum(2, j, j, j)`). All inputs run in parallel; a judge that
  * throws counts as a "no" vote rather than sinking the whole gate. Each input
  * may hit a model, so size N with cost in mind. Reported confidence is the mean
- * of the holding inputs' confidences.
+ * of the holding inputs' confidences. On failure the first defined `output`
+ * among the non-holding voters is carried; a success carries none.
  */
 export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
   if (k < 1 || k > inputs.length)
@@ -256,10 +287,14 @@ export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
     const confidence = confs.length
       ? confs.reduce((a, b) => a + b, 0) / confs.length
       : undefined;
+    const met = held.length >= k;
     return {
-      met: held.length >= k,
+      met,
       confidence,
       reason: `quorum ${held.length}/${inputs.length} held (need ${k})`,
+      output: met
+        ? undefined
+        : results.find((r) => !r.met && r.output !== undefined)?.output,
     };
   }, `quorum ${k}/${inputs.length}`);
 }
@@ -283,6 +318,17 @@ export interface AgentCheckConfig {
   agent?: AgentDef;
   /** Engine for validation: a registered name, your own `Engine`, or default. */
   engine?: EngineRef;
+  /**
+   * Working directory for the judge's engine turn — a tool-using judge may
+   * need the workspace to read the artifact it is ruling on. Absent means the
+   * engine's default; deliberately NOT defaulted to the loop workspace.
+   */
+  cwd?: string;
+  /**
+   * Time cap on the judge turn, passed through to the engine. The
+   * anthropic-api engine ignores it.
+   */
+  timeoutMs?: number;
   /**
    * What the validator sees. By default: the last outcome's summary/data plus
    * the shared state. Override to feed something bespoke — may be async, since a
@@ -309,6 +355,11 @@ export interface AgentCheckConfig {
    * reviewer persona. Takes precedence over `dimensions`.
    */
   confidenceTag?: boolean;
+  /**
+   * Cap on the findings excerpt embedded in the `confidenceTag` gate `reason`.
+   * Default 280. The FULL findings always travel via `ConditionResult.output`.
+   */
+  maxReasonChars?: number;
 }
 
 interface Verdict {
@@ -475,6 +526,15 @@ interface ScoreVerdict {
   reason: string;
 }
 
+/**
+ * Scrub + cap a judge's raw reply before it becomes `ConditionResult.output`
+ * (which flows into JSONL event records). Redaction runs on the full text so
+ * a secret split at the truncation cut cannot survive.
+ */
+function judgeOutput(text: string): string {
+  return truncate(redactSecrets(text), 20_000);
+}
+
 /** Pull per-dimension scores from a model reply; any missing dimension is 0. */
 function parseScores(text: string, dimensions: string[]): ScoreVerdict {
   for (const candidate of balancedObjects(text)) {
@@ -517,6 +577,7 @@ function parseScores(text: string, dimensions: string[]): ScoreVerdict {
 export function agentCheck(config: AgentCheckConfig): Condition {
   const threshold = config.threshold ?? 0.8;
   const confidenceTag = config.confidenceTag === true;
+  const maxReasonChars = config.maxReasonChars ?? 280;
   const dimensions =
     !confidenceTag && config.dimensions?.length ? config.dimensions : undefined;
   return setLabel(async (ctx, last) => {
@@ -551,6 +612,8 @@ export function agentCheck(config: AgentCheckConfig): Condition {
           model: config.model ?? config.agent?.model,
           // A report-then-rate reviewer needs room for findings before the tag.
           maxTokens: config.maxTokens ?? (confidenceTag ? 2048 : 512),
+          cwd: config.cwd,
+          timeoutMs: config.timeoutMs,
         },
         (e) => {
           if (e.type === 'usage') {
@@ -577,14 +640,22 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         return {
           met: false,
           confidence: 0,
-          reason: `no <confidence> tag: ${result.text.slice(0, 140)}`,
+          reason: `no <confidence> tag: ${redactSecrets(result.text).slice(0, 140)}`,
+          output: judgeOutput(result.text),
         };
       const pct = Math.round(parsed.confidence * 100);
       const need = Math.round(threshold * 100);
+      // `reason` flows into the same persisted records as `output`, so it gets
+      // the same scrub — redacted BEFORE excerpting, so a secret split at the
+      // cut cannot survive.
+      const findings = redactSecrets(parsed.findings);
       return {
         met: parsed.confidence >= threshold,
         confidence: parsed.confidence,
-        reason: `confidence ${pct}% (need ${need}%)${parsed.findings ? ` — ${parsed.findings.slice(0, 280)}` : ''}`,
+        reason: `confidence ${pct}% (need ${need}%)${findings ? ` — ${findings.slice(0, maxReasonChars)}` : ''}`,
+        // The FULL findings — what lets a failing check brief a fix-up body
+        // without re-running the judge. A tag-only reply has no evidence to carry.
+        output: findings ? truncate(findings, 20_000) : undefined,
       };
     }
 
@@ -596,7 +667,8 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         return {
           met: false,
           confidence: 0,
-          reason: `unparseable scores: ${result.text.slice(0, 120)}`,
+          reason: `unparseable scores: ${redactSecrets(result.text).slice(0, 120)}`,
+          output: judgeOutput(result.text),
         };
       }
       const detail = dimensions
@@ -606,6 +678,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         met: sv.score >= threshold,
         confidence: sv.score,
         reason: `geo ${sv.score.toFixed(2)} (need ${threshold}) [${detail}] — ${sv.reason}`,
+        output: judgeOutput(result.text),
       };
     }
 
@@ -618,7 +691,8 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       return {
         met: false,
         confidence: 0,
-        reason: `unparseable verdict: ${result.text.slice(0, 120)}`,
+        reason: `unparseable verdict: ${redactSecrets(result.text).slice(0, 120)}`,
+        output: judgeOutput(result.text),
       };
     }
     const met = v.verdict === 'yes' && v.confidence >= threshold;
@@ -626,6 +700,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       met,
       confidence: v.confidence,
       reason: `${v.verdict} @ ${v.confidence.toFixed(2)} (need ${threshold}) — ${v.reason}`,
+      output: judgeOutput(result.text),
     };
   }, `judge "${config.question}" >=${threshold}`);
 }
@@ -633,7 +708,8 @@ export function agentCheck(config: AgentCheckConfig): Condition {
 /**
  * Lift a Condition (or one-or-many `ConditionInput`) into a Job: `pass` when
  * met, `fail` otherwise. This is how a reviewer becomes a drop-in `review` job
- * (`gateJob('review', agentCheck(...))`).
+ * (`gateJob('review', agentCheck(...))`). The condition's diagnostic `output`
+ * rides `Outcome.data`, so it survives the Job boundary.
  */
 export function gateJob(label: string, condition: ConditionInput): Job {
   const cond = toCondition(condition);
@@ -645,6 +721,7 @@ export function gateJob(label: string, condition: ConditionInput): Job {
       confidence: r.confidence,
       summary: r.reason,
     };
+    if (r.output !== undefined) outcome.data = r.output;
     ctx.emit({
       kind: 'job:end',
       ts: Date.now(),

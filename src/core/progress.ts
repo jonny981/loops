@@ -14,7 +14,10 @@
  *     progress lives outside the worktree (a queue length, a passing-test count);
  *   - the gate confidence beats its previous best by `minConfidenceDelta` — a
  *     high-water mark, so judge jitter around a flat score is not progress but
- *     slow, steady improvement accumulates until it clears the bar.
+ *     slow, steady improvement accumulates until it clears the bar;
+ *   - (opt-in, `gate: true`) the failing until-gate's diagnostic OUTPUT is new
+ *     — the same failure signature repeating is stall evidence, for
+ *     deterministic gates whose output is stable across identical failures.
  *
  * `window` consecutive iterations with evidence and no novelty = stalled. The
  * default is deliberately conservative (any channel's novelty counts): a false
@@ -25,6 +28,8 @@
  * Gate/review reasons are deliberately NOT compared: judge prose varies between
  * identical verdicts, so it is quoted in the report but never used as evidence.
  */
+
+import { createHash } from 'node:crypto';
 
 import type { JobContext, Outcome } from './types.ts';
 
@@ -52,6 +57,16 @@ export interface NoProgressConfig {
    * Default true; set false when a custom `signal` is the only honest channel.
    */
   workspace?: boolean;
+  /**
+   * Fingerprint the failing until-gate's diagnostic `output` — the same failure
+   * signature repeating is stall evidence. For deterministic gates
+   * (`commandSucceeds`) whose output is stable across identical failures; a
+   * judge's prose varies between identical verdicts, so this stays off for
+   * agent gates. Requires an explicit `until`: without one there is no gate
+   * verdict to fingerprint and this channel never produces evidence. Default
+   * false.
+   */
+  gate?: boolean;
 }
 
 /** What `LoopConfig.noProgress` accepts: a bare window, or the full config. */
@@ -78,6 +93,8 @@ export interface ProgressSample {
   confidence?: number;
   /** The custom signal value, when a `signal` fn is configured. */
   signal?: string;
+  /** The failing gate's diagnostic OUTPUT — never the prose reason. */
+  gate?: string;
   /** The gate/review reason — reporting only, never evidence. */
   reason?: string;
 }
@@ -85,7 +102,7 @@ export interface ProgressSample {
 /** Resolve the `noProgress` sugar (`3` ⇒ `{ window: 3 }`) with defaults applied. */
 export function resolveNoProgress(
   input: NoProgressInput | undefined,
-): Required<Pick<NoProgressConfig, 'window' | 'minConfidenceDelta'>> &
+): Required<Pick<NoProgressConfig, 'window' | 'minConfidenceDelta' | 'gate'>> &
   NoProgressConfig | undefined {
   if (input == null) return undefined;
   const cfg = typeof input === 'number' ? { window: input } : input;
@@ -93,6 +110,7 @@ export function resolveNoProgress(
     ...cfg,
     window: cfg.window ?? 3,
     minConfidenceDelta: cfg.minConfidenceDelta ?? 0.02,
+    gate: cfg.gate ?? false,
   };
 }
 
@@ -147,6 +165,17 @@ export class ProgressTracker {
       const key = `sig:${sample.signal}`;
       if (this.seen.has(key)) {
         flat.push(`signal: "${sample.signal}" already seen this run`);
+      } else {
+        this.seen.add(key);
+        progressed = true;
+      }
+    }
+    if (sample.gate !== undefined) {
+      channels += 1;
+      // Hashed so the run-wide seen set stays bounded whatever the output size.
+      const key = `gate:${createHash('sha256').update(sample.gate).digest('hex')}`;
+      if (this.seen.has(key)) {
+        flat.push('gate: failure output already seen this run');
       } else {
         this.seen.add(key);
         progressed = true;

@@ -10,8 +10,18 @@ import {
   MockEngine,
   quorum,
   commandSucceeds,
+  not,
+  all,
+  any,
 } from '../src/api.ts';
-import type { RunOptions } from '../src/api.ts';
+import type {
+  AgentRequest,
+  Condition,
+  ConditionResult,
+  JobContext,
+  LoopEvent,
+  RunOptions,
+} from '../src/api.ts';
 
 // A mock engine that is never expected to be called — lets engine-free
 // conditions (predicates, quorum-of-predicates, commandSucceeds) run without
@@ -202,5 +212,247 @@ describe('commandSucceeds', () => {
       noEngine,
     );
     expect(outcome.status).toBe('exhausted');
+  });
+});
+
+/** Run a one-iteration loop and capture the `until` gate's ConditionResult. */
+async function untilResult(
+  until: Condition,
+  opts: RunOptions,
+): Promise<ConditionResult | undefined> {
+  let result: ConditionResult | undefined;
+  await run(loop({ name: 'x', body: failingBody(), until, max: 1 }), {
+    ...opts,
+    onEvent: (e: LoopEvent) => {
+      if (e.kind === 'loop:condition' && e.which === 'until') result = e.result;
+    },
+  });
+  return result;
+}
+
+describe('commandSucceeds output capture', () => {
+  it('captures exit/stdout/stderr as output on failure', async () => {
+    const r = await untilResult(
+      commandSucceeds('node', [
+        '-e',
+        'console.log("out marker"); console.error("err marker"); process.exit(1)',
+      ]),
+      noEngine,
+    );
+    expect(r?.met).toBe(false);
+    expect(r?.output).toContain('exit: 1');
+    expect(r?.output).toContain('stdout:\nout marker');
+    expect(r?.output).toContain('stderr:\nerr marker');
+  });
+
+  it('leaves output undefined on success', async () => {
+    const r = await untilResult(
+      commandSucceeds('node', ['-e', 'console.log("ok"); process.exit(0)']),
+      noEngine,
+    );
+    expect(r?.met).toBe(true);
+    expect(r?.output).toBeUndefined();
+  });
+
+  it('truncates long stream output with the … marker', async () => {
+    const r = await untilResult(
+      commandSucceeds('node', [
+        '-e',
+        'process.stdout.write("x".repeat(5000)); process.exit(1)',
+      ]),
+      noEngine,
+    );
+    expect(r?.output).toContain('x'.repeat(4000));
+    expect(r?.output).not.toContain('x'.repeat(4001));
+    expect(r?.output).toContain('\n…');
+  });
+
+  it('scrubs credential-shaped strings from the captured output', async () => {
+    const r = await untilResult(
+      commandSucceeds('node', [
+        '-e',
+        'console.error("token=hunter2secret"); process.exit(1)',
+      ]),
+      noEngine,
+    );
+    expect(r?.output).toContain('[redacted]');
+    expect(r?.output).not.toContain('hunter2secret');
+  });
+});
+
+describe('combinator output propagation', () => {
+  // These combinators never read the context when their inputs don't, so a
+  // bare stub keeps the tests direct and offline.
+  const ctx = {} as JobContext;
+  const pass =
+    (output?: string): Condition =>
+    async () => ({ met: true, reason: 'ok', output });
+  const fail =
+    (output?: string): Condition =>
+    async () => ({ met: false, reason: 'bad', output });
+
+  it('not() copies the inner output', async () => {
+    const r = await not(fail('diag'))(ctx, undefined);
+    expect(r.met).toBe(true);
+    expect(r.output).toBe('diag');
+  });
+
+  it('all() failure carries the failing item output; success carries none', async () => {
+    const failed = await all(pass('a'), fail('b'), fail('c'))(ctx, undefined);
+    expect(failed.met).toBe(false);
+    expect(failed.output).toBe('b');
+    const ok = await all(pass('a'), pass('b'))(ctx, undefined);
+    expect(ok.met).toBe(true);
+    expect(ok.output).toBeUndefined();
+  });
+
+  it('any() success carries that item output; failure carries the first defined among failures', async () => {
+    const ok = await any(fail('a'), pass('b'))(ctx, undefined);
+    expect(ok.met).toBe(true);
+    expect(ok.output).toBe('b');
+    const failed = await any(fail(undefined), fail('second'), fail('third'))(
+      ctx,
+      undefined,
+    );
+    expect(failed.met).toBe(false);
+    expect(failed.output).toBe('second');
+  });
+
+  it('quorum() failure carries a non-holding voter output; success carries none', async () => {
+    const failed = await quorum(2, pass('y'), fail('no-vote'), fail(undefined))(
+      ctx,
+      undefined,
+    );
+    expect(failed.met).toBe(false);
+    expect(failed.output).toBe('no-vote');
+    const ok = await quorum(1, pass('y'), fail('no-vote'))(ctx, undefined);
+    expect(ok.met).toBe(true);
+    expect(ok.output).toBeUndefined();
+  });
+
+  it('gateJob() puts the output into Outcome.data', async () => {
+    const { outcome } = await run(gateJob('g', fail('diag')), noEngine);
+    expect(outcome.status).toBe('fail');
+    expect(outcome.data).toBe('diag');
+  });
+
+  it('gateJob() leaves data unset when the condition has no output', async () => {
+    const { outcome } = await run(gateJob('g', fail(undefined)), noEngine);
+    expect(outcome.data).toBeUndefined();
+  });
+});
+
+describe('agentCheck request options and output', () => {
+  /** A mock engine that records the request it was handed. */
+  const capturing = (text: string) => {
+    let seen: AgentRequest | undefined;
+    const engine = new MockEngine((r: AgentRequest) => {
+      seen = r;
+      return text;
+    });
+    return { engine, req: () => seen! };
+  };
+  const verdictJson = JSON.stringify({
+    verdict: 'yes',
+    confidence: 0.9,
+    reason: 'ok',
+  });
+
+  it('passes cwd and timeoutMs through to the judge engine', async () => {
+    const { engine, req } = capturing(verdictJson);
+    await run(
+      gateJob(
+        'g',
+        agentCheck({
+          question: 'done?',
+          engine,
+          cwd: '/judge/dir',
+          timeoutMs: 1234,
+        }),
+      ),
+      noEngine,
+    );
+    expect(req().cwd).toBe('/judge/dir');
+    expect(req().timeoutMs).toBe(1234);
+  });
+
+  it('leaves cwd/timeoutMs unset by default (engine default, not the workspace)', async () => {
+    const { engine, req } = capturing(verdictJson);
+    await run(gateJob('g', agentCheck({ question: 'done?', engine })), noEngine);
+    expect(req().cwd).toBeUndefined();
+    expect(req().timeoutMs).toBeUndefined();
+  });
+
+  const findings = `${'F'.repeat(300)}TAIL`;
+  const review = `${findings}\n<confidence>10%</confidence>`;
+
+  it('caps the findings excerpt in the reason at 280 chars by default', async () => {
+    const { engine } = capturing(review);
+    const { outcome } = await run(
+      gateJob('g', agentCheck({ question: 'sound?', confidenceTag: true, engine })),
+      noEngine,
+    );
+    expect(outcome.summary).toContain('F'.repeat(280));
+    expect(outcome.summary).not.toContain('F'.repeat(281));
+  });
+
+  it('maxReasonChars changes the excerpt cap', async () => {
+    const { engine } = capturing(review);
+    const { outcome } = await run(
+      gateJob(
+        'g',
+        agentCheck({
+          question: 'sound?',
+          confidenceTag: true,
+          maxReasonChars: 50,
+          engine,
+        }),
+      ),
+      noEngine,
+    );
+    expect(outcome.summary).toContain('F'.repeat(50));
+    expect(outcome.summary).not.toContain('F'.repeat(51));
+  });
+
+  it('output carries the FULL findings beyond the reason cap', async () => {
+    const { engine } = capturing(review);
+    const { outcome } = await run(
+      gateJob('g', agentCheck({ question: 'sound?', confidenceTag: true, engine })),
+      noEngine,
+    );
+    expect(outcome.data).toBe(findings); // untruncated, tag stripped
+  });
+
+  it('a parse failure sets output to the raw reply text', async () => {
+    const { engine } = capturing('no tag here at all');
+    const { outcome } = await run(
+      gateJob('g', agentCheck({ question: 'sound?', confidenceTag: true, engine })),
+      noEngine,
+    );
+    expect(outcome.status).toBe('fail');
+    expect(outcome.data).toBe('no tag here at all');
+  });
+
+  it('scrubs a credential in the findings from both reason and output', async () => {
+    const { engine } = capturing(
+      'leaked token=hunter2secret in config\n<confidence>10%</confidence>',
+    );
+    const { outcome } = await run(
+      gateJob('g', agentCheck({ question: 'sound?', confidenceTag: true, engine })),
+      noEngine,
+    );
+    expect(outcome.summary).not.toContain('hunter2secret');
+    expect(outcome.summary).toContain('[redacted]');
+    expect(outcome.data).not.toContain('hunter2secret');
+  });
+
+  it('a tag-only reply leaves output undefined (no empty-string evidence)', async () => {
+    const { engine } = capturing('<confidence>95%</confidence>');
+    const { outcome } = await run(
+      gateJob('g', agentCheck({ question: 'sound?', confidenceTag: true, engine })),
+      noEngine,
+    );
+    expect(outcome.status).toBe('pass');
+    expect(outcome.data).toBeUndefined();
   });
 });
