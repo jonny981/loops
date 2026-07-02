@@ -26,7 +26,7 @@ import type {
 } from './types.ts';
 import { childContext } from './context.ts';
 import { toCondition } from './condition.ts';
-import { setMeta, jobMeta } from './describe.ts';
+import { setMeta, jobMeta, describeConditions } from './describe.ts';
 import {
   isRepo,
   stageAll,
@@ -313,10 +313,15 @@ export function dag(config: DagConfig): Job {
         try {
           const needs = node.needs ?? [];
           const deps = await Promise.all(needs.map(run));
-          // A non-pass dependency blocks this node — a declared `needs` is a real
-          // data dependency, so even a failed *optional* producer blocks a
-          // consumer (skipped deps come back with status 'pass', so they're green).
-          const blocked = needs.some((_, i) => deps[i]!.status !== 'pass');
+          // A declared `needs` on a REQUIRED producer is a hard dependency — its
+          // failure blocks this consumer. An OPTIONAL producer is best-effort:
+          // its failure neither fails the DAG nor blocks consumers, so a consumer
+          // must tolerate that producer's artifacts being absent. Skipped deps
+          // (unmet `when`) come back with status 'pass', so they never block.
+          const blocked = needs.some(
+            (dep, i) =>
+              deps[i]!.status !== 'pass' && nodes.get(dep)!.optional !== true,
+          );
           if (blocked)
             return record(
               name,
@@ -531,6 +536,10 @@ export function dag(config: DagConfig): Job {
         name,
         needs: node?.needs ?? [],
         isolate: node?.isolate ?? false,
+        optional: node?.optional === true,
+        // Condition labels only — the meta must stay JSON-serializable
+        // (`loops describe --json` prints it verbatim).
+        ...(node?.when ? { when: describeConditions(node.when) } : {}),
         job: jobMeta(nodeJob),
       };
     }),

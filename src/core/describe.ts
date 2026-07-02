@@ -48,10 +48,14 @@ export function describeConditions(input?: ConditionInput): string[] {
 
 const count = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-interface NodeMeta {
+/** Per-node shape `dag()` writes into its meta's `nodes` array. */
+export interface NodeMeta {
   name: string;
   needs?: string[];
   isolate?: boolean;
+  optional?: boolean;
+  /** Condition labels for the node's `when` gate, when one is configured. */
+  when?: string[];
   job?: JobMeta;
 }
 
@@ -108,6 +112,8 @@ export function renderPlan(meta: JobMeta | undefined, indent = ''): string[] {
       for (const node of nodes) {
         const bits: string[] = [];
         if (node.needs?.length) bits.push(`needs ${node.needs.join(', ')}`);
+        if (node.optional) bits.push('optional');
+        if (node.when?.length) bits.push(`when: ${node.when.join(', ')}`);
         if (node.isolate) bits.push('isolated');
         out.push(`${indent}  - ${node.name}${bits.length ? ` (${bits.join('; ')})` : ''}`);
         out.push(...renderPlan(node.job, `${indent}      `));

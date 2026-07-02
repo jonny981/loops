@@ -297,7 +297,10 @@ export interface LoopConfig {
 
 export interface DagNode {
   job: Job;
-  /** Names of nodes that must finish (passing) before this one runs. */
+  /**
+   * Names of nodes that must finish before this one runs; a required producer
+   * must pass, a failed optional producer does not block.
+   */
   needs?: string[];
   /** Gate (one or many) — when unmet the node is skipped, not failed. */
   when?: ConditionInput;

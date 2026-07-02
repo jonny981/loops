@@ -87,7 +87,7 @@ describe('dag', () => {
     expect(outcome.status).toBe('pass'); // optional failure ignored
   });
 
-  it('a failed dependency blocks a required dependent even when the dep is optional', async () => {
+  it('a failed optional producer does not block a required dependent', async () => {
     const ran: string[] = [];
     const { outcome } = await run(
       dag({
@@ -99,9 +99,101 @@ describe('dag', () => {
       }),
       mockOpts,
     );
-    expect(ran).toEqual(['a']); // b never runs against a failed dependency
-    // a required node left undone by an upstream failure is a fail (exit 1),
-    // not a cancellation (aborted/130).
+    // An optional producer is best-effort: its failure neither fails the DAG
+    // nor blocks consumers — b runs and its real outcome (not a synthetic
+    // abort) is what the dag carries.
+    expect(ran).toEqual(['a', 'b']);
+    expect(outcome.status).toBe('pass');
+    const data = outcome.data as Record<string, Outcome>;
+    expect(data.b).toMatchObject({ status: 'pass' });
+  });
+
+  it("a dependent of a failed optional producer still fails on its own merit", async () => {
+    const ran: string[] = [];
+    const { outcome } = await run(
+      dag({
+        name: 'o',
+        nodes: {
+          a: { job: fail(ran, 'a'), optional: true },
+          b: { job: fail(ran, 'b'), needs: ['a'] },
+        },
+      }),
+      mockOpts,
+    );
+    expect(ran).toEqual(['a', 'b']); // b ran (not blocked) and failed itself
+    expect(outcome.status).toBe('fail');
+  });
+
+  it('a failed optional producer does not stop scheduling under stopOnError', async () => {
+    const ran: string[] = [];
+    const slow = fnJob('slow', async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      ran.push('slow');
+      return { status: 'pass' as const };
+    });
+    const { outcome } = await run(
+      dag({
+        name: 's',
+        nodes: {
+          opt: { job: fail(ran, 'opt'), optional: true },
+          dep: { job: pass(ran, 'dep'), needs: ['opt'] },
+          slow,
+          late: { job: pass(ran, 'late'), needs: ['slow'] },
+        },
+      }),
+      mockOpts,
+    );
+    // dep is not blocked (and records a pass), so stopOnError never trips —
+    // the unrelated slow→late chain must still be scheduled to completion.
+    expect(ran.sort()).toEqual(['dep', 'late', 'opt', 'slow']);
+    expect(outcome.status).toBe('pass');
+  });
+
+  it('a failed required producer blocks a consumer that also has a failed optional producer', async () => {
+    const ran: string[] = [];
+    const { outcome } = await run(
+      dag({
+        name: 'm',
+        nodes: {
+          req: fail(ran, 'req'),
+          opt: { job: fail(ran, 'opt'), optional: true },
+          c: { job: pass(ran, 'c'), needs: ['req', 'opt'] },
+        },
+        stopOnError: false,
+      }),
+      mockOpts,
+    );
+    // Mixed needs: the optional producer's failure is forgiven, but the
+    // required producer's is not — one hard dependency is enough to block.
+    expect(ran.sort()).toEqual(['opt', 'req']);
+    expect(outcome.status).toBe('fail');
+    const data = outcome.data as Record<string, Outcome>;
+    expect(data.c).toMatchObject({
+      status: 'aborted',
+      summary: 'blocked by a failed dependency',
+    });
+  });
+
+  it('an aborted optional producer (blocked upstream) does not block its consumer', async () => {
+    const ran: string[] = [];
+    const { outcome } = await run(
+      dag({
+        name: 't',
+        nodes: {
+          a: fail(ran, 'a'),
+          b: { job: pass(ran, 'b'), needs: ['a'], optional: true },
+          c: { job: pass(ran, 'c'), needs: ['b'] },
+        },
+        stopOnError: false,
+      }),
+      mockOpts,
+    );
+    // a (required) fails → b is blocked-aborted; b is optional, so its abort
+    // neither blocks c nor counts against the dag — but a's own failure does.
+    expect(ran.sort()).toEqual(['a', 'c']);
+    const data = outcome.data as Record<string, Outcome>;
+    expect(data.b).toMatchObject({ status: 'aborted' });
+    expect(data.c).toMatchObject({ status: 'pass' });
     expect(outcome.status).toBe('fail');
   });
 

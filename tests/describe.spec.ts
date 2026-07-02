@@ -105,6 +105,44 @@ describe('job introspection (meta + renderPlan)', () => {
     expect(plan).toContain('loop "impl"');
   });
 
+  it('captures optional and when on dag nodes and renders them', () => {
+    const job = dag({
+      name: 'ship',
+      nodes: {
+        build: fnJob('b', async () => ({ status: 'pass' as const })),
+        deploy: {
+          needs: ['build'],
+          when: commandSucceeds('git', ['diff', '--quiet']),
+          job: fnJob('d', async () => ({ status: 'pass' as const })),
+        },
+        notify: {
+          needs: ['deploy'],
+          optional: true,
+          job: fnJob('n', async () => ({ status: 'pass' as const })),
+        },
+      },
+    });
+
+    const meta = jobMeta(job);
+    const nodes = meta?.nodes as Array<{
+      name: string;
+      optional: boolean;
+      when?: string[];
+    }>;
+    expect(nodes[0]).toMatchObject({ name: 'build', optional: false });
+    expect(nodes[0]!.when).toBeUndefined(); // only set when configured
+    expect(nodes[1]).toMatchObject({
+      name: 'deploy',
+      optional: false,
+      when: ['git diff --quiet'],
+    });
+    expect(nodes[2]).toMatchObject({ name: 'notify', optional: true });
+
+    const plan = renderPlan(meta).join('\n');
+    expect(plan).toContain('- deploy (needs build; when: git diff --quiet)');
+    expect(plan).toContain('- notify (needs deploy; optional)');
+  });
+
   it('labels a quorum, and a hand-written job has no meta', () => {
     const j = quorum(
       2,
