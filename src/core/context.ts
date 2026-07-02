@@ -53,6 +53,7 @@ export function childContext(
     onLimit: parent.onLimit,
     maxWaitMs: parent.maxWaitMs,
     resumeCommand: parent.resumeCommand,
+    groundDefault: parent.groundDefault,
     log: parent.log,
     depth: over.depth,
     path: over.path,

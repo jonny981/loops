@@ -85,9 +85,25 @@ export interface AgentJobConfig {
   ground?: boolean | GroundConfig;
   /**
    * Map the agent's raw text into an `Outcome`. Default: `pass`, with the text
-   * as the summary. Return `fail` to keep an enclosing loop going.
+   * as the summary. Return `fail` to keep an enclosing loop going. `text` is
+   * the reply verbatim (any handoff block still embedded); `parts` is
+   * `parseHandoff(text)` — `parts.work` is the reply with the handoff block
+   * stripped, the right input for decision-token parsing (a token restated
+   * inside the handoff's sections cannot false-score).
    */
-  outcome?: (text: string, ctx: JobContext) => Outcome | Promise<Outcome>;
+  outcome?: (
+    text: string,
+    ctx: JobContext,
+    parts: HandoffParts,
+  ) => Outcome | Promise<Outcome>;
+}
+
+/** A grounded turn's reply split at the handoff marker — see `parseHandoff`. */
+export interface HandoffParts {
+  /** The reply with the handoff block stripped — the working log. */
+  work: string;
+  /** The handoff block after the marker, when one was written. */
+  handoff?: string;
 }
 
 export interface GroundConfig {
@@ -110,11 +126,11 @@ export interface GroundConfig {
 /** The marker the agent closes its reply with; the harness parses everything after it
  *  as the handoff. A sentinel, not a file write — loops owns the turn, so the memory is
  *  captured from the agent's own words rather than a side file a strong model skips. */
-const HANDOFF_MARK = '===HANDOFF===';
+export const HANDOFF_MARK = '===HANDOFF===';
 
 /** The handoff contract appended to a grounded turn. The guiding question does the work;
  *  the sections just scaffold the answer. The harness splits the reply at the marker into
- *  the working log (before) and the handoff (after) — see `splitTurn`. */
+ *  the working log (before) and the handoff (after) — see `parseHandoff`. */
 function recordBlock(): string {
   return (
     `## Before you finish: the handoff\n` +
@@ -133,10 +149,16 @@ function recordBlock(): string {
   );
 }
 
-/** Split a grounded turn's output at the handoff marker: the working log (everything
- *  before, captured to `ledger.md`) and the handoff (everything after, captured to
- *  `prompt.md`). No marker → the whole reply is working log and the handoff is empty. */
-function splitTurn(text: string): { work: string; handoff?: string } {
+/**
+ * Parse a grounded turn's reply at the handoff marker (`HANDOFF_MARK`,
+ * `===HANDOFF===`): `work` is everything before it (the working log, captured
+ * to `ledger.md`), `handoff` everything after (captured to `prompt.md`). The
+ * marker must sit on its own line, but matching is lenient to case and internal
+ * whitespace (`=== handoff ===` matches), and the scan runs backwards so the
+ * LAST marker wins when the reply restates it. No marker → `{ work: text.trim() }`.
+ * A marker with nothing after it → `handoff` is `undefined`.
+ */
+export function parseHandoff(text: string): HandoffParts {
   const lines = text.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i]!.trim().replace(/\s+/g, '').toUpperCase() === HANDOFF_MARK) {
@@ -231,6 +253,12 @@ export function agentJob(config: AgentJobConfig): Job {
   const job: Job = async (ctx) => {
     const path = [...ctx.path];
     const label = config.label ?? config.agent?.name ?? 'agent';
+    // Per-job `ground` wins over the run-level default (`RunOptions.ground`) —
+    // including an explicit `false`, which opts this job out. Every consumption
+    // below reads this local, never `config.ground`, because a truthiness check
+    // on the config alone cannot tell `false` from `undefined`.
+    const ground =
+      config.ground !== undefined ? config.ground : ctx.groundDefault;
     ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
 
     const engine = ctx.resolveEngine(config.engine);
@@ -239,8 +267,8 @@ export function agentJob(config: AgentJobConfig): Job {
         ? await config.prompt(ctx)
         : config.prompt;
     const contextualPrompt = withOperationalContext(ctx, userPrompt, config);
-    const prompt = config.ground
-      ? await withGrounding(ctx, contextualPrompt, config.ground)
+    const prompt = ground
+      ? await withGrounding(ctx, contextualPrompt, ground)
       : contextualPrompt;
     // System precedence: an explicit `system` overrides the agent's (persona + skills).
     const system =
@@ -330,24 +358,26 @@ export function agentJob(config: AgentJobConfig): Job {
       return outcome;
     }
 
+    // Parsed once here; the auto-capture and the `outcome` mapper share it.
+    const parts = parseHandoff(result.text);
+
     // Auto-capture: when memory is on, the harness records the turn from the agent's
     // own reply — no reliance on it writing a side file. The reply is split at the
     // handoff marker: the working log (before) goes to `ledger.md`, the structured
     // handoff (after) to `prompt.md`. With no marker, the whole reply is working log.
     // This is what turns a terse "done" into a real, structured memory.
-    if (config.ground) {
-      const { work, handoff } = splitTurn(result.text);
+    if (ground) {
       appendLedger(ctx.workspace, {
         label,
         iteration: ctx.iteration,
-        text: work,
+        text: parts.work,
         tools: summariseTools(toolUses),
       });
-      if (handoff) appendPrompt(ctx.workspace, handoff);
+      if (parts.handoff) appendPrompt(ctx.workspace, parts.handoff);
     }
 
     const outcome = config.outcome
-      ? await config.outcome(result.text, ctx)
+      ? await config.outcome(result.text, ctx, parts)
       : TERMINAL(result.text);
     ctx.emit({
       kind: 'job:end',
@@ -362,6 +392,9 @@ export function agentJob(config: AgentJobConfig): Job {
   return setMeta(job, {
     kind: 'agent',
     name: config.label ?? config.agent?.name ?? 'agent',
+    // Build-time shape: only the job's own config is visible here. A run-level
+    // default (`RunOptions.ground`) is applied at run time via the context, so
+    // it does not show in describe output.
     ground: !!config.ground,
     contract: agentContract(config.agent),
   });

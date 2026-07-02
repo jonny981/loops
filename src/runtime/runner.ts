@@ -23,6 +23,7 @@ import {
 import { startSupervisor, newRunId, type Supervisor } from './supervisor.ts';
 import { jobMeta } from '../core/describe.ts';
 import { currentBranch } from '../core/git.ts';
+import type { GroundConfig } from '../core/job.ts';
 import type { Environment, EnvHandle } from '../env/environment.ts';
 import type { Forge } from '../core/forge.ts';
 import type {
@@ -68,6 +69,11 @@ export interface RunOptions {
   onEvent?: (event: LoopEvent) => void;
   /** Seed the shared, mutable run state. */
   state?: Record<string, unknown>;
+  /**
+   * Default grounding for every `agentJob` in the run. A job's own `ground`
+   * (including an explicit `false`) always wins.
+   */
+  ground?: boolean | GroundConfig;
   /**
    * Cap total tokens (input + output) for the run. A bare number is the limit;
    * pass `{ limit, headroom?, soft? }` for headroom or warn-don't-refuse mode.
@@ -245,6 +251,7 @@ export async function run(
     onLimit: options.onLimit ?? 'auto',
     maxWaitMs: options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
     resumeCommand: options.resumeCommand,
+    groundDefault: options.ground,
     iteration: 0,
     depth: 0,
     path: [],

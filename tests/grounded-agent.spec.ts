@@ -9,6 +9,8 @@ import {
   readPrompt,
   stageAll,
   commit,
+  parseHandoff,
+  HANDOFF_MARK,
   MockEngine,
 } from '../src/api.ts';
 import type { RunOptions, Workspace, AgentRequest, Engine } from '../src/api.ts';
@@ -138,5 +140,124 @@ describe('grounded agentJob (read automation)', () => {
     const opts: RunOptions = { engine: 'mock', engines: { mock: () => cap.engine }, cwd: repo };
     await run(agentJob({ label: 'work', prompt: 'PLAIN' }), opts);
     expect(cap.last()).toBe('PLAIN');
+  });
+});
+
+describe('parseHandoff', () => {
+  it('splits work from handoff at the marker', () => {
+    const { work, handoff } = parseHandoff(
+      `did the thing\n${HANDOFF_MARK}\n## Why\nbecause`,
+    );
+    expect(work).toBe('did the thing');
+    expect(handoff).toBe('## Why\nbecause');
+  });
+
+  it('matches the marker leniently (case + internal whitespace)', () => {
+    const { work, handoff } = parseHandoff('log line\n=== handoff ===\nnotes');
+    expect(work).toBe('log line');
+    expect(handoff).toBe('notes');
+  });
+
+  it('the LAST marker wins when the reply restates it', () => {
+    const { work, handoff } = parseHandoff(
+      `work mentions\n${HANDOFF_MARK}\nfirst block\n${HANDOFF_MARK}\nsecond block`,
+    );
+    expect(work).toBe(`work mentions\n${HANDOFF_MARK}\nfirst block`);
+    expect(handoff).toBe('second block');
+  });
+
+  it('no marker → the whole reply is work', () => {
+    expect(parseHandoff('  just work\nno marker here\n')).toEqual({
+      work: 'just work\nno marker here',
+    });
+  });
+
+  it('a trailing marker with nothing after it → handoff undefined', () => {
+    const { work, handoff } = parseHandoff(`all work\n${HANDOFF_MARK}\n   `);
+    expect(work).toBe('all work');
+    expect(handoff).toBeUndefined();
+  });
+
+  it('marker on the first line → empty work', () => {
+    const { work, handoff } = parseHandoff(`${HANDOFF_MARK}\nonly handoff`);
+    expect(work).toBe('');
+    expect(handoff).toBe('only handoff');
+  });
+});
+
+describe('outcome mapper `parts` (pre-handoff text)', () => {
+  // A decision token in the work, restated inside the handoff's ## Next — the
+  // false-scoring trap `parts.work` exists to avoid.
+  const reply = 'DECISION: NO\n===HANDOFF===\n## Next\nDECISION: YES restated';
+
+  const optsFor = (repo: string): RunOptions => ({
+    engine: 'mock',
+    engines: { mock: () => new MockEngine(() => reply) },
+    cwd: repo,
+  });
+
+  it('hands the mapper the handoff-stripped work on a grounded turn', async () => {
+    const repo = await tmpRepo();
+    let seenText = '';
+    let seenParts: { work: string; handoff?: string } | undefined;
+    await run(
+      agentJob({
+        label: 'judge',
+        prompt: 'decide',
+        ground: true,
+        outcome: (text, _ctx, parts) => {
+          seenText = text;
+          seenParts = parts;
+          return { status: 'pass' };
+        },
+      }),
+      optsFor(repo),
+    );
+    expect(seenParts!.work).toContain('DECISION: NO');
+    expect(seenParts!.work).not.toContain('restated');
+    expect(seenParts!.handoff).toContain('DECISION: YES restated');
+    // text is still the raw reply, handoff block included
+    expect(seenText).toContain('DECISION: NO');
+    expect(seenText).toContain('DECISION: YES restated');
+  });
+
+  it('hands the mapper the same parts when ground is off', async () => {
+    const repo = await tmpRepo();
+    let seenText = '';
+    let seenParts: { work: string; handoff?: string } | undefined;
+    await run(
+      agentJob({
+        label: 'judge',
+        prompt: 'decide',
+        outcome: (text, _ctx, parts) => {
+          seenText = text;
+          seenParts = parts;
+          return { status: 'pass' };
+        },
+      }),
+      optsFor(repo),
+    );
+    expect(seenParts!.work).toContain('DECISION: NO');
+    expect(seenParts!.work).not.toContain('restated');
+    expect(seenText).toContain('DECISION: YES restated');
+    // ungrounded: parsed for the mapper only, never captured
+    expect(readLedger(ws(repo))).toBe('');
+  });
+
+  it('a two-param mapper still compiles and runs', async () => {
+    const repo = await tmpRepo();
+    const { outcome } = await run(
+      agentJob({
+        label: 'compat',
+        prompt: 'go',
+        outcome: (text, ctx) => ({
+          status: 'pass',
+          summary: `${text.length}@${ctx.iteration}`,
+        }),
+      }),
+      optsFor(repo),
+    );
+    expect(outcome.status).toBe('pass');
+    expect(outcome.summary).toBe(`${reply.length}@0`);
   });
 });

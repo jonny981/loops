@@ -19,7 +19,7 @@
 import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
 import type { LoopError } from './errors.ts';
 import type { Budget } from './budget.ts';
-import type { CommitJobConfig } from './job.ts';
+import type { CommitJobConfig, GroundConfig } from './job.ts';
 import type { NoProgressInput, StallReport } from './progress.ts';
 import type { EnvHandle, Environment } from '../env/environment.ts';
 import type { Forge } from './forge.ts';
@@ -185,6 +185,11 @@ export interface JobContext {
   readonly maxWaitMs: number;
   /** Ready-to-paste command to resume a paused run, when reconstructable. */
   readonly resumeCommand?: string;
+  /**
+   * Run-level grounding default (`RunOptions.ground`), consumed by `agentJob`;
+   * a job's own `ground` config (including an explicit `false`) wins.
+   */
+  readonly groundDefault?: boolean | GroundConfig;
   log(message: string, level?: LogLevel): void;
 }
 

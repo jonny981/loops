@@ -49,6 +49,12 @@ export {
   commitJob,
   kickback,
   revisionRequest,
+  // The handoff contract: parse a grounded turn's reply into the work (before
+  // the marker) and the handoff (after it) — the same split the auto-capture
+  // and an `outcome` mapper's `parts` argument use.
+  parseHandoff,
+  HANDOFF_MARK,
+  type HandoffParts,
   type AgentJobConfig,
   type CommitJobConfig,
   type GroundConfig,

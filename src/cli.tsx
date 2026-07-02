@@ -56,6 +56,7 @@ interface RunFlags {
   engineArg?: string[];
   state?: string;
   budget?: string;
+  ground?: boolean;
   record?: string;
   checkpoint?: string;
   resume?: string;
@@ -228,6 +229,7 @@ async function execute(
     onEvent: hub.emit,
     state,
     budget,
+    ground: flags.ground,
     recordTo: flags.record,
     checkpoint: flags.checkpoint,
     resumeFrom: flags.resume,
@@ -285,6 +287,8 @@ function buildResumeCommand(
   // Carry the flags that shape the run so the resume is the same job.
   if (flags.engine) parts.push('--engine', flags.engine);
   if (flags.budget) parts.push('--budget', flags.budget);
+  // A resumed run silently losing grounding would change agent behaviour mid-run.
+  if (flags.ground) parts.push('--ground');
   if (flags.onLimit) parts.push('--on-limit', flags.onLimit);
   if (flags.maxWait) parts.push('--max-wait', flags.maxWait);
   if (flags.record) parts.push('--record', quoteArg(flags.record));
@@ -457,6 +461,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     )
     .option('--state <json>', 'seed the shared run state (JSON)')
     .option('--budget <tokens>', 'cap total tokens (input+output) for the run')
+    .option(
+      '--ground',
+      "ground every agent job's turn in branch memory (commit log + scratch files); judge/validator turns are unaffected; a job's own ground config wins",
+    )
     .option('--record <path>', 'append a JSONL run record to this path')
     .option(
       '--checkpoint <path>',
