@@ -20,6 +20,7 @@ import { installSignalHandlers } from './runtime/signals.ts';
 import { jsonReporter, plainReporter, printSummary } from './reporters.ts';
 import { buildJobFromFlags, parseDuration } from './config.ts';
 import { loop } from './core/loop.ts';
+import { humanGateKey, pausedHumanGate } from './core/human.ts';
 import { jobMeta, renderPlan } from './core/describe.ts';
 import {
   listRuns,
@@ -30,7 +31,7 @@ import {
   formatEvent,
 } from './runtime/supervisor.ts';
 import type { SemanticRunRecord } from './runtime/semantic.ts';
-import type { Job, LoopConfig } from './core/types.ts';
+import type { Job, LoopConfig, Outcome } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
 
 interface RunFlags {
@@ -54,6 +55,7 @@ interface RunFlags {
   cliBinary?: string;
   permissionMode?: string;
   engineArg?: string[];
+  ack?: string[];
   state?: string;
   budget?: string;
   ground?: boolean;
@@ -188,6 +190,13 @@ async function execute(
     }
     state = parsed as Record<string, unknown>;
   }
+  // Each --ack seeds the named gate's state key. The explicit seed wins over a
+  // checkpoint's restored state (see the runner's resume merge), so a resumed
+  // run passes the gate it paused at.
+  if (flags.ack?.length) {
+    state ??= {};
+    for (const name of flags.ack) state[humanGateKey(name)] = true;
+  }
 
   let budget: number | undefined;
   if (flags.budget != null) {
@@ -263,7 +272,8 @@ async function execute(
     if (mode !== 'json') printSummary(result, resumeCommand);
   }
 
-  if (result.outcome.status === 'paused') printResumeGuidance(file, flags);
+  if (result.outcome.status === 'paused')
+    printResumeGuidance(file, flags, result.outcome);
 
   signals.dispose();
   process.exitCode = exitCodeFor(result.outcome);
@@ -304,15 +314,23 @@ function quoteArg(value: string): string {
 }
 
 /** Print resume guidance to stderr on a paused run (a TUI-safe channel). */
-function printResumeGuidance(file: string | undefined, flags: RunFlags): void {
+function printResumeGuidance(
+  file: string | undefined,
+  flags: RunFlags,
+  outcome: Outcome,
+): void {
+  // A human-gate pause needs `--ack <name>` on the resume; a limit pause does not.
+  const gate = pausedHumanGate(outcome);
+  const at = gate ? `at human gate "${gate}"` : 'at a limit';
   const cmd = buildResumeCommand(file, flags);
   if (cmd) {
-    process.stderr.write(`\nPaused at a limit. Resume with:\n  ${cmd}\n`);
+    const resume = gate ? `${cmd} --ack ${quoteArg(gate)}` : cmd;
+    process.stderr.write(`\nPaused ${at}. Resume with:\n  ${resume}\n`);
   } else {
     process.stderr.write(
-      '\nPaused at a limit. No checkpoint was configured, so there is no warm ' +
+      `\nPaused ${at}. No checkpoint was configured, so there is no warm ` +
         'state to resume.\nRe-run with --checkpoint <path> to make a pause ' +
-        'resumable.\n',
+        `resumable${gate ? ` (then resume with --ack ${quoteArg(gate)})` : ''}.\n`,
     );
   }
 }
@@ -456,6 +474,12 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option(
       '--engine-arg <arg>',
       'extra arg forwarded to CLI-backed engines (repeatable)',
+      (v: string, acc: string[]) => acc.concat(v),
+      [] as string[],
+    )
+    .option(
+      '--ack <name>',
+      'acknowledge a human gate by name so it passes (repeatable)',
       (v: string, acc: string[]) => acc.concat(v),
       [] as string[],
     )

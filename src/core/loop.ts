@@ -293,6 +293,13 @@ export function loop(config: LoopConfig): Job {
             iteration,
           );
         }
+        // A body-returned `paused` is a deliberate halt (a human gate awaiting
+        // acknowledgement, a nested pause) — finish with it immediately rather
+        // than treating the turn as a failed one and re-iterating. No overlap
+        // with the limit handling below: that path keys on status 'fail'.
+        if (last.status === 'paused') {
+          return finish({ ...last }, iteration);
+        }
         // A rate limit / quota / budget hit is governed by the `onLimit` policy
         // (default `auto`): wait out a known, bounded reset and retry the same
         // step, else checkpoint-and-pause with a resume command. `fail` opts out

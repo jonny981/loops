@@ -38,6 +38,12 @@ export interface AgentOutputContract {
   schema?: unknown;
 }
 
+/**
+ * A human approval point in the agent's contract. Structurally a
+ * `HumanGateConfig` (core/human.ts), so it constructs directly into the
+ * runtime node that pauses the run until acknowledged:
+ * `humanGate(def.humanGates[0])`.
+ */
 export interface AgentHumanGate {
   /** Stable gate name, such as `prod-approval` or `security-signoff`. */
   name: string;
@@ -81,7 +87,7 @@ export interface AgentDef {
   requiresSkills?: AgentSkillRef[];
   /** Skills the agent is known to use. Metadata only unless also listed in `skills`. */
   usesSkills?: AgentSkillRef[];
-  /** Human approvals or external handoffs this agent may need. Metadata only. */
+  /** Human approvals or external handoffs this agent may need; each constructs directly into a `humanGate()` node. */
   humanGates?: AgentHumanGate[];
   /** Named failure modes + their recovery — first-class contracts, not buried prose. */
   failureModes?: AgentFailureMode[];

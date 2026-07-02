@@ -278,6 +278,8 @@ export function formatEvent(event: LoopEvent): string {
       return `${at}⏸ limit ${event.code}: waiting ${Math.round(event.waitMs / 1000)}s`;
     case 'limit:pause':
       return `${at}⏸ paused (${event.code}): ${event.reason}`;
+    case 'human:gate':
+      return `${at}⏸ human gate "${event.name}": ${event.prompt}`;
     case 'log':
       return `${at}${event.message}`;
     case 'error':

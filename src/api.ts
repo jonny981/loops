@@ -93,6 +93,16 @@ export {
   type Skill,
 } from './core/agent.ts';
 
+// Human gates — the runtime half of `AgentDef.humanGates`: a job that pauses
+// the run (`paused`, exit 75) until a person acknowledges the named gate
+// (CLI `--ack <name>`, or a `state` seed under `humanGateKey(name)`)
+export {
+  humanGate,
+  humanGateKey,
+  pausedHumanGate,
+  type HumanGateConfig,
+} from './core/human.ts';
+
 // Git substrate (the convergence ledger)
 export {
   isRepo,

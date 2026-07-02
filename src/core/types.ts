@@ -30,7 +30,7 @@ export type OutcomeStatus =
   | 'fail' // the step ran but did not achieve its goal (loops keep going)
   | 'aborted' // an early-exit signal or `stopOn` cut the work short
   | 'exhausted' // a loop hit `max` iterations without passing
-  | 'paused'; // a limit (rate/quota/budget) stopped the run, resumable
+  | 'paused'; // a limit (rate/quota/budget) or an unacknowledged human gate stopped the run, resumable
 
 /**
  * How the run reacts to a provider rate limit, account/usage allowance, or its
@@ -459,6 +459,19 @@ export type LoopEvent =
       path: string[];
       code: string;
       reason: string;
+      resumeCommand?: string;
+    }
+  | {
+      // A human gate is unacknowledged; its job returns `paused` and the run
+      // stops awaiting a person. `resumeCommand` is the base resume command,
+      // when reconstructable; the gate name rides in `name`, so a consumer
+      // appends `--ack <name>` to lift the gate on resume (the CLI's printed
+      // guidance does exactly that).
+      kind: 'human:gate';
+      ts: number;
+      path: string[];
+      name: string;
+      prompt: string;
       resumeCommand?: string;
     }
   | {

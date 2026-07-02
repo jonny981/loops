@@ -286,6 +286,12 @@ export function dag(config: DagConfig): Job {
         outcome,
         attempt: attempts.get(name),
       });
+      // A paused node is a deliberate halt (a human gate awaiting
+      // acknowledgement), not a failure: stop scheduling not-yet-started nodes
+      // even when `stopOnError` is false or the node is optional.
+      if (phase === 'done' && outcome.status === 'paused') {
+        stopped = true;
+      }
       if (
         phase === 'done' &&
         outcome.status !== 'pass' &&
@@ -426,6 +432,12 @@ export function dag(config: DagConfig): Job {
           note,
         });
       for (;;) {
+        // A pause (a human gate awaiting acknowledgement) outranks a pending
+        // kickback: the halt is deliberate, so nothing may run past it — not
+        // even the gate itself, whose `human:gate` event must fire exactly
+        // once per pause. Leave `stopped` set and the kickback unresolved;
+        // resume re-executes the whole graph, giving it a fresh pass then.
+        if (names.some((n) => results.get(n)?.status === 'paused')) break;
         // Honour kickbacks in topological order, skipping any already rejected.
         const from = order.find(
           (n) => {
@@ -498,6 +510,9 @@ export function dag(config: DagConfig): Job {
       (n) =>
         results.get(n)?.status === 'aborted' && nodes.get(n)!.optional !== true,
     );
+    // A pause anywhere in the graph (any node, optional included) pauses the
+    // whole dag. First in declaration order names the outcome.
+    const pausedNode = names.find((n) => results.get(n)?.status === 'paused');
     const data = Object.fromEntries(results);
     let outcome: Outcome;
     if (parent.signal.aborted) {
@@ -505,6 +520,17 @@ export function dag(config: DagConfig): Job {
       outcome = {
         status: 'aborted',
         summary: `dag "${config.name}" aborted`,
+        data,
+      };
+    } else if (pausedNode) {
+      // Paused takes precedence over fail: on resume the whole graph
+      // re-executes, so a coexisting failure gets retried anyway, and the
+      // paused status is what tells the caller the run is resumable. The
+      // paused node's dependents land blocked-aborted as usual; they must not
+      // flip this to fail.
+      outcome = {
+        status: 'paused',
+        summary: results.get(pausedNode)!.summary,
         data,
       };
     } else if (requiredFailed.length > 0 || requiredAborted.length > 0) {

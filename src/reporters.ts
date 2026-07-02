@@ -207,6 +207,12 @@ export function plainReporter(): Listener {
           `${indent(event.path)}  ${pc.cyan(`⏸ ${event.code.toLowerCase()}`)}: ${pc.dim(event.reason)}`,
         );
         return;
+      case 'human:gate':
+        endStream();
+        console.log(
+          `${indent(event.path)}  ${pc.cyan(`⏸ human gate "${event.name}"`)}: ${pc.dim(event.prompt)}`,
+        );
+        return;
       case 'log':
         endStream();
         console.log(
