@@ -143,7 +143,7 @@ A loop is easy to start and hard to keep honest. Four parts decide whether it ea
 | **The gate.** Knowing the work is actually done, not just that the agent stopped. | A deterministic check (`commandSucceeds`) and a separate judge (`agentCheck`) in its own context, hardened with a k-of-n `quorum` and a geometric-mean rubric so one weak dimension sinks the verdict. The model that did the work never grades it. |
 | **Memory.** Carrying what was learned across a run without dragging a transcript along. | The git commit log is the memory: a structured handoff per milestone, read back before the next turn. No `STATE.md` the model is trusted to keep tidy, no vector store to sync. |
 | **Parallelism.** Running several agents without collisions on the same files. | `isolation: 'worktree'` gives each writer its own branch and worktree, landed back on pass with a `--no-ff` merge. |
-| **Hard stops.** Bounding a loop so it cannot run forever or empty your account. | `max` caps iterations and `budget` caps tokens, a non-retryable stop the engine calls refuse to cross. |
+| **Hard stops.** Bounding a loop so it cannot run forever or empty your account. | `max` caps iterations, `budget` caps tokens (a non-retryable stop the engine calls refuse to cross), and `noProgress` stalls out a loop whose iterations reach no new state, with the evidence on the outcome. |
 
 Three things `loops` does that most loop libraries do not:
 
@@ -241,6 +241,7 @@ loop({
   stopOn, // hard early-exit each iteration; met ⇒ aborted
   review, // runs when until is met; non-pass re-enters the loop (folds back as ctx.lastReview)
   max, // iteration cap; reached without passing ⇒ exhausted
+  noProgress, // stall out after n consecutive iterations with no observable progress
   maxReviewRestarts, // cap the worker/reviewer standoff independently of max
   delayMs, // delay between iterations (polling); interruptible by abort
   retry, // { onError: 'continue' | 'fail', maxConsecutive?, backoffMs? }
@@ -278,6 +279,30 @@ agentCheck({
 ```
 
 **Builders:** `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds` (a shell command exits 0), `all`, `any`, `not`, `quorum` (k-of-n), `agentCheck` (small-model judge), `always`, `never`, and `gateJob` (lift a condition into a `Job`, e.g. a reviewer).
+
+## No progress: the third hard stop
+
+The gate detects success; nothing above detects a loop that is failing to converge. `max` bounds the attempt count and `budget` bounds the cost, but both fire only after the waste, and neither can tell slow-but-real convergence from the same failure five turns running. `noProgress` is that sensor: the loop ends `exhausted` once `n` consecutive iterations reach no state the run has not already seen.
+
+```ts
+loop({
+  name: 'build',
+  body: agentJob({ prompt: '…', ground: true }),
+  until: commandSucceeds('npm', ['test']),
+  max: 50, // generous runway for hard work…
+  noProgress: 3, // …because the doomed case exits after 3 flat iterations
+});
+```
+
+Progress means **novelty**, not change. An iteration counts as progress when any evidence channel reaches something new:
+
+- **the workspace fingerprint** (HEAD, pending diff, untracked content) is a state this run has never visited, so an agent oscillating A→B→A gets no credit for the return trip;
+- **the gate confidence** beats its previous best by `minConfidenceDelta` (default 0.02), a high-water mark, so judge jitter is not progress but slow steady improvement accumulates until it clears the bar;
+- **a custom `signal`** returns a value not already seen, the escape hatch for progress the worktree cannot show (a queue length, a passing-test count): `noProgress: { window: 3, signal: (ctx) => queueDepth() }`.
+
+The default is conservative: one channel showing novelty keeps the loop alive, so real-but-slow work is never cut short. And the exit is a diagnosis, not just a stop: the outcome carries `Outcome.stall` (the flat iterations, the repeated gate reason, the per-channel evidence) and a `loop:stall` event fires for supervisors, so "stalled since iteration 5 on the same scope error" replaces "reached max iterations" and a fleet watcher can re-brief the loop instead of shrugging at it. This is also what makes a generous `max` safe to grant: the safety net and the runway stop being the same number.
+
+Off by default, like `commit`: a polling loop legitimately makes no progress until the outside world changes. Flags mode: `--stall-after <n>`. Offline demo: `npm run example:stall`.
 
 ## Ledger: memory built on git
 
@@ -573,7 +598,7 @@ It deliberately does **not** do durable mid-run replay (re-running a half-finish
 - [x] Supervision: a file-based run registry with `loops list` / `status` / `tail`
 - [ ] Out-of-process control: `pause` / `abort` / `kickback` a running loop from outside
 - [ ] Optional `wip:` autosave tier (per-iteration recovery, squashed on convergence)
-- [ ] No-progress / stall detection: the third hard stop, alongside `max` and `budget`
+- [x] No-progress / stall detection (`noProgress`): the third hard stop, alongside `max` and `budget`
 - [ ] `cost per accepted change` as a first-class reported metric
 - [ ] Calibration helpers for agent judges
 - [ ] More engine adapters (OpenAI, local models)

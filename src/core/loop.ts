@@ -28,6 +28,8 @@ import { setMeta, jobMeta, describeConditions } from './describe.ts';
 import { commitJob, type CommitJobConfig } from './job.ts';
 import { LoopError, type LoopPhase } from './errors.ts';
 import { isLimitError, waitMsFor } from './limits.ts';
+import { ProgressTracker, resolveNoProgress } from './progress.ts';
+import { workspaceFingerprint } from './git.ts';
 
 const VALID_STATUS = new Set<Outcome['status']>([
   'pass',
@@ -75,6 +77,7 @@ export function loop(config: LoopConfig): Job {
   const until = config.until ? toCondition(config.until) : undefined;
   const stopOn = config.stopOn ? toCondition(config.stopOn) : undefined;
   const onError = config.retry?.onError ?? 'continue';
+  const noProgress = resolveNoProgress(config.noProgress);
 
   const job: Job = async (parent: JobContext): Promise<Outcome> => {
     const path = [...parent.path, config.name];
@@ -191,6 +194,12 @@ export function loop(config: LoopConfig): Job {
       let last: Outcome | undefined;
       let consecutiveErrors = 0;
       let consecutiveReviewFails = 0;
+      // Per-invocation, so a re-run of the same Job (a kickback, a nested loop's
+      // second pass) starts with a clean novelty set.
+      const tracker = noProgress
+        ? new ProgressTracker(noProgress)
+        : undefined;
+      let warnedInert = false;
 
       // 2. iterate
       while (true) {
@@ -215,6 +224,9 @@ export function loop(config: LoopConfig): Job {
 
         iteration += 1;
         const ctx = ctxAt(iteration, last);
+        // The review outcome of THIS turn, when one ran and rejected — feeds the
+        // no-progress sample (its confidence/summary gated the continuation).
+        let turnReview: Outcome | undefined;
         parent.emit({ kind: 'loop:iteration', ts: ts(), path, iteration });
 
         // run the body (fresh context this turn)
@@ -445,6 +457,7 @@ export function loop(config: LoopConfig): Job {
           // bound the restart cycle.
           consecutiveReviewFails += 1;
           lastReview = reviewOutcome;
+          turnReview = reviewOutcome;
           parent.log(
             `review did not pass (${reviewOutcome.summary ?? reviewOutcome.status}); re-entering ${config.name}`,
             'warn',
@@ -455,6 +468,78 @@ export function loop(config: LoopConfig): Job {
                 status: 'exhausted',
                 summary: `review rejected ${consecutiveReviewFails}× (maxReviewRestarts)`,
                 data: last.data,
+              },
+              iteration,
+            );
+          }
+        }
+
+        // No-progress check — the loop is about to go again, so ask whether the
+        // turn that just finished reached any state this run had not already
+        // seen. A throttled turn never gets here (the limit path re-runs the
+        // step), so a rate-limit wait is not evidence of a stall.
+        if (tracker) {
+          let fingerprint: string | undefined;
+          if (noProgress!.workspace !== false) {
+            // Best-effort: a git hiccup drops the channel for this turn, it
+            // never sinks the run (undefined = "no evidence", not "unchanged").
+            fingerprint = await workspaceFingerprint({
+              cwd: ctx.workspace.dir,
+              signal: parent.signal,
+            });
+          }
+          let signalValue: string | undefined;
+          if (noProgress!.signal) {
+            try {
+              const v = await noProgress!.signal(ctx, last);
+              signalValue = v == null ? undefined : String(v);
+            } catch (e) {
+              // A broken signal fn is a bug in the definition; silently losing
+              // the channel would leave the user believing they are protected.
+              throw LoopError.from(e, {
+                code: 'VALIDATION',
+                phase: 'body',
+                path,
+                iteration,
+              });
+            }
+          }
+          const report = tracker.record({
+            iteration,
+            fingerprint,
+            signal: signalValue,
+            confidence:
+              turnReview?.confidence ?? conv.confidence ?? last.confidence,
+            reason: turnReview
+              ? (turnReview.summary ?? 'review rejected')
+              : conv.reason,
+          });
+          if (!warnedInert && tracker.isInert()) {
+            warnedInert = true;
+            parent.log(
+              `noProgress is set on ${config.name} but no evidence channel exists ` +
+                `(no git workspace, no gate confidence, no custom signal); ` +
+                `stall detection is inert`,
+              'warn',
+            );
+          }
+          if (report) {
+            parent.emit({
+              kind: 'loop:stall',
+              ts: ts(),
+              path,
+              iteration,
+              report,
+            });
+            return finish(
+              {
+                status: 'exhausted',
+                summary:
+                  `stalled after ${report.iterations.length} iterations with ` +
+                  `no observable progress: ${report.reason}`,
+                confidence: last.confidence,
+                data: last.data,
+                stall: report,
               },
               iteration,
             );
@@ -483,6 +568,7 @@ export function loop(config: LoopConfig): Job {
     kind: 'loop',
     name: config.name,
     max: config.max,
+    noProgress: noProgress?.window,
     start: describeConditions(config.start),
     gate: describeConditions(config.until),
     stopOn: describeConditions(config.stopOn),

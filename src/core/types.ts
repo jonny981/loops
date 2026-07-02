@@ -20,6 +20,7 @@ import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
 import type { LoopError } from './errors.ts';
 import type { Budget } from './budget.ts';
 import type { CommitJobConfig } from './job.ts';
+import type { NoProgressInput, StallReport } from './progress.ts';
 import type { EnvHandle, Environment } from '../env/environment.ts';
 import type { Forge } from './forge.ts';
 
@@ -48,6 +49,13 @@ export interface Outcome {
   data?: unknown;
   /** Present when `status` is driven by a failure. */
   error?: LoopError;
+  /**
+   * Present when a loop ended `exhausted` because its `noProgress` detector
+   * tripped: the evidence that the last `window` iterations reached no state
+   * the run had not already seen. Lets a supervisor tell "stalled, re-brief it"
+   * from "ran out of runway mid-progress" without parsing the summary.
+   */
+  stall?: StallReport;
   /**
    * Structured feedback asking an earlier unit of work for another pass, and the
    * single channel for it. When `revision.target` is set, the enclosing `dag`
@@ -236,6 +244,17 @@ export interface LoopConfig {
   /** Iteration cap. Reached without passing => `exhausted`. */
   max?: number;
   /**
+   * The third hard stop, alongside `max` and `budget`: end the loop `exhausted`
+   * when this many consecutive iterations make no observable progress — no
+   * workspace state the run has not already visited, no custom `signal` value
+   * not already seen, no gate confidence beating its previous best. A bare
+   * number is the window (`3` ⇒ three flat iterations); pass a `NoProgressConfig`
+   * for the full knobs. Off by default: a polling loop legitimately makes no
+   * progress until the outside world changes, so this is opt-in like `commit`.
+   * The stalled outcome carries the evidence as `Outcome.stall`.
+   */
+  noProgress?: NoProgressInput;
+  /**
    * Runs when `until` is met. If it returns `pass`, the loop completes.
    * Any other status re-enters the loop — this is the "review fails, run the
    * main loop again" behaviour, and `review` may itself be a `loop(...)`. The
@@ -385,6 +404,16 @@ export type LoopEvent =
       path: string[];
       outcome: Outcome;
       iterations: number;
+    }
+  | {
+      // The noProgress detector tripped: `window` consecutive iterations reached
+      // no state the run had not already seen. The loop ends `exhausted` with
+      // the same report on `Outcome.stall`.
+      kind: 'loop:stall';
+      ts: number;
+      path: string[];
+      iteration: number;
+      report: StallReport;
     }
   | {
       // A limit was hit and the policy is waiting out its reset before retrying.

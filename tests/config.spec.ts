@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { parseDuration, buildJobFromFlags, FlagSpec } from '../src/config.ts';
-import { run, MockEngine } from '../src/api.ts';
+import { run, jobMeta, MockEngine } from '../src/api.ts';
 import type { RunOptions } from '../src/api.ts';
 
 const mockOpts: RunOptions = {
@@ -30,6 +30,9 @@ describe('FlagSpec', () => {
   it('rejects an out-of-range threshold', () => {
     expect(() => FlagSpec.parse({ prompt: 'x', threshold: 2 })).toThrow();
   });
+  it('rejects a non-positive stallAfter', () => {
+    expect(() => FlagSpec.parse({ prompt: 'x', stallAfter: 0 })).toThrow();
+  });
 });
 
 describe('buildJobFromFlags', () => {
@@ -38,5 +41,11 @@ describe('buildJobFromFlags', () => {
     const { outcome, stats } = await run(job, mockOpts);
     expect(outcome.status).toBe('pass');
     expect(stats.agentCalls).toBeGreaterThanOrEqual(1);
+  });
+  it('threads stallAfter through as the loop noProgress window', () => {
+    const job = buildJobFromFlags(
+      FlagSpec.parse({ prompt: 'do the thing', stallAfter: 4 }),
+    );
+    expect(jobMeta(job)?.noProgress).toBe(4);
   });
 });

@@ -36,6 +36,8 @@ src/core/
   pr.ts               pushJob / pullRequestJob / mergeJob — keep the squash body a
                       consolidation of the branch so the Ledger survives a squash merge
   budget.ts           Budget + assertBudget (non-retryable BUDGET LoopError)
+  progress.ts         no-progress (stall) detection — the ProgressTracker novelty
+                      rule behind LoopConfig.noProgress, the third hard stop
   context.ts          JobContext (iteration, state, lastReview, signal)
   errors.ts           LoopError + terminal status taxonomy
   types.ts            shared types

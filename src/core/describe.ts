@@ -84,7 +84,11 @@ export function renderPlan(meta: JobMeta | undefined, indent = ''): string[] {
   const out: string[] = [];
   switch (meta.kind) {
     case 'loop': {
-      const max = typeof meta.max === 'number' ? ` (max ${meta.max})` : '';
+      const caps: string[] = [];
+      if (typeof meta.max === 'number') caps.push(`max ${meta.max}`);
+      if (typeof meta.noProgress === 'number')
+        caps.push(`stall after ${meta.noProgress} flat`);
+      const max = caps.length ? ` (${caps.join('; ')})` : '';
       out.push(`${indent}loop${nm}${max}`);
       const start = meta.start as string[] | undefined;
       const gate = meta.gate as string[] | undefined;

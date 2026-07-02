@@ -272,6 +272,8 @@ export function formatEvent(event: LoopEvent): string {
       return `${at}  tool ${event.name} ${event.phase}`;
     case 'engine:usage':
       return `${at}  ${event.model}: ${event.usage.inputTokens}/${event.usage.outputTokens} tok`;
+    case 'loop:stall':
+      return `${at}⏹ stalled after ${event.report.iterations.length} no-progress iterations: ${event.report.reason}`;
     case 'limit:wait':
       return `${at}⏸ limit ${event.code}: waiting ${Math.round(event.waitMs / 1000)}s`;
     case 'limit:pause':

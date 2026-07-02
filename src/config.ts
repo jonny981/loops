@@ -33,6 +33,7 @@ export const FlagSpec = z.object({
   reviewThreshold: z.number().min(0).max(1).default(0.85),
   interval: z.number().int().nonnegative().optional(),
   maxTokens: z.number().int().positive().optional(),
+  stallAfter: z.number().int().positive().optional(),
 });
 
 export type FlagSpec = z.infer<typeof FlagSpec>;
@@ -102,6 +103,7 @@ export function buildJobFromFlags(input: z.input<typeof FlagSpec>): Job {
     until,
     review,
     max: spec.max,
+    noProgress: spec.stallAfter,
     delayMs: spec.interval,
   });
 }

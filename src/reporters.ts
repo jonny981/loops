@@ -189,6 +189,12 @@ export function plainReporter(): Listener {
           `${indent(event.path)}    ${pc.dim(`tool ${event.phase}: ${event.name}`)}`,
         );
         return;
+      case 'loop:stall':
+        endStream();
+        console.log(
+          `${indent(event.path)}  ${pc.red('⏹ stalled')}: no progress across iterations ${event.report.iterations.join(', ')} ${pc.dim(`(${event.report.reason})`)}`,
+        );
+        return;
       case 'limit:wait':
         endStream();
         console.log(

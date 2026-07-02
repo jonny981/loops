@@ -49,6 +49,7 @@ interface RunFlags {
   reviewThreshold?: string;
   interval?: string;
   maxTokens?: string;
+  stallAfter?: string;
   apiKey?: string;
   cliBinary?: string;
   permissionMode?: string;
@@ -140,6 +141,7 @@ function buildFromFlags(flags: RunFlags): Job {
       interval:
         flags.interval != null ? parseDuration(flags.interval) : undefined,
       maxTokens: num(flags.maxTokens),
+      stallAfter: num(flags.stallAfter),
     });
   } catch (e) {
     if (e instanceof z.ZodError) {
@@ -434,6 +436,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     )
     .option('-i, --interval <dur>', 'delay between iterations (e.g. 30s, 5m)')
     .option('--max-tokens <n>', 'max output tokens per agent turn')
+    .option(
+      '--stall-after <n>',
+      'end exhausted after n consecutive iterations with no observable progress',
+    )
     .option('--api-key <key>', 'Anthropic API key (anthropic-api engine)')
     .option(
       '--cli-binary <path>',

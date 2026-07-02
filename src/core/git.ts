@@ -12,6 +12,7 @@
  */
 
 import { execa } from 'execa';
+import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -95,6 +96,54 @@ export async function hasStagedChanges(opts: GitOpts): Promise<boolean> {
 export async function isDirty(opts: GitOpts): Promise<boolean> {
   const r = await git(['status', '--porcelain'], opts);
   return r.stdout.trim().length > 0;
+}
+
+/**
+ * A content hash of the workspace's observable state: HEAD, every pending
+ * tracked change (staged + unstaged, with content), the porcelain status, and
+ * the CONTENT of untracked non-ignored files (hashed by git itself, so a
+ * revisit to a byte-identical tree fingerprints identically). This is the
+ * deterministic evidence channel behind `noProgress`: two iterations with the
+ * same fingerprint left the workspace in the same state. Returns undefined
+ * outside a git work tree — the caller treats that channel as absent, never as
+ * "unchanged". Never throws.
+ */
+export async function workspaceFingerprint(
+  opts: GitOpts,
+): Promise<string | undefined> {
+  try {
+    if (!(await isRepo(opts))) return undefined;
+    const hash = createHash('sha256');
+    const feed = (label: string, value: string) => {
+      hash.update(label);
+      hash.update('\x1f');
+      hash.update(value);
+      hash.update('\x1e');
+    };
+    feed('head', (await headSha(opts)) ?? '');
+    // `status --porcelain` captures names/stages even where a diff cannot run
+    // (e.g. an unborn HEAD); the two diffs capture tracked content.
+    feed('status', (await git(['status', '--porcelain'], opts)).stdout);
+    feed('unstaged', (await git(['diff'], opts)).stdout);
+    feed('staged', (await git(['diff', '--cached'], opts)).stdout);
+    // Untracked content, hashed by git (streams; no JS-side file reads). A file
+    // vanishing between the list and the hash fails the chunk; its paths still
+    // feed the fingerprint, so the disappearance itself reads as a new state.
+    const untracked = (
+      await git(['ls-files', '--others', '--exclude-standard'], opts)
+    ).stdout
+      .split('\n')
+      .filter(Boolean);
+    for (let i = 0; i < untracked.length; i += 500) {
+      const chunk = untracked.slice(i, i + 500);
+      feed(`untracked-paths:${i}`, chunk.join('\n'));
+      const r = await git(['hash-object', '--', ...chunk], opts);
+      if (r.exitCode === 0) feed(`untracked-content:${i}`, r.stdout);
+    }
+    return hash.digest('hex');
+  } catch {
+    return undefined;
+  }
 }
 
 export interface CommitInput {

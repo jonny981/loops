@@ -100,6 +100,7 @@ export {
   mergeNoCommit,
   conflictedFiles,
   mergeAbort,
+  workspaceFingerprint,
   type CommitRecord,
   type CommitInput,
   type LogQuery,
@@ -199,6 +200,17 @@ export {
   gateJob,
   type AgentCheckConfig,
 } from './core/condition.ts';
+// No-progress (stall) detection — the third hard stop, alongside `max` and
+// `budget`. Configured per-loop via `LoopConfig.noProgress`; exported so a
+// custom harness can drive the same tracker.
+export {
+  ProgressTracker,
+  resolveNoProgress,
+  type NoProgressConfig,
+  type NoProgressInput,
+  type ProgressSample,
+  type StallReport,
+} from './core/progress.ts';
 export { LoopError, type LoopErrorCode } from './core/errors.ts';
 export { Budget, type BudgetConfig } from './core/budget.ts';
 
