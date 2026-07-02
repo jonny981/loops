@@ -3,11 +3,15 @@ name: Release
 # Publish to npm when a version tag is pushed. Cut a release with:
 #   npm version patch    # or minor / major — bumps package.json + tags
 #   git push --follow-tags
+# The manual trigger publishes whatever version main's package.json carries —
+# for re-running a failed publish, or releasing from an environment that can
+# push commits but not tags.
 # Requires an NPM_TOKEN repo secret (an npm automation token with publish rights
 # to the @loops-adk scope). Publishes with provenance (needs a public repo).
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 jobs:
   publish:
