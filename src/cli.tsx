@@ -25,6 +25,7 @@ import { jobMeta, renderPlan } from './core/describe.ts';
 import {
   listRuns,
   readRunStatus,
+  readRunProgress,
   runEventsPath,
   runSemanticRecordsPath,
   runsHome,
@@ -335,6 +336,13 @@ function printResumeGuidance(
   }
 }
 
+/** Flatten model-influenced text (gate reasons, error messages, prompts) to a
+ *  single terminal-safe line: control characters could spoof output lines or
+ *  carry ANSI/OSC escape sequences. */
+function toLine(s: string): string {
+  return s.replace(/[\u0000-\u001f\u007f]+/g, ' ');
+}
+
 /** Compact relative age, e.g. `8s`, `5m`, `2h`, `3d`. */
 function relAge(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -587,13 +595,22 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command('status')
     .argument('<runId>', 'a run id from `loops list`')
     .description("show a supervised run's live state and shape")
-    .action((runId: string) => {
+    .option(
+      '--recent [n]',
+      'also show the last n formatted events from the run (default 10)',
+    )
+    .action((runId: string, flags: { recent?: boolean | string }) => {
       const r = readRunStatus(runId);
       if (!r) {
         process.stderr.write(`no run "${runId}" in ${runsHome()}\n`);
         process.exitCode = 1;
         return;
       }
+      const recentN =
+        typeof flags.recent === 'string'
+          ? parsePositiveIntFlag(flags.recent, '--recent')
+          : 10;
+      const progress = readRunProgress(runId, { recent: recentN });
       const state =
         r.status === 'running'
           ? r.alive
@@ -615,6 +632,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           : '',
         o ? `  last:    ${o.status}${o.summary ? `: ${o.summary}` : ''}` : '',
         `  tokens:  ${r.live.usage.inputTokens} in / ${r.live.usage.outputTokens} out (${r.live.usage.calls} calls)`,
+        progress?.blocker
+          ? `  blocker: ${progress.blocker.kind}: ${toLine(progress.blocker.detail)}`
+          : '',
       ].filter(Boolean);
       process.stdout.write(`${lines.join('\n')}\n`);
       if (r.shape)
@@ -622,6 +642,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           `\n  shape:\n${renderPlan(r.shape)
             .map((l) => `    ${l}`)
             .join('\n')}\n`,
+        );
+      if (flags.recent && progress?.recent.length)
+        process.stdout.write(
+          `\n  recent:\n${progress.recent.map((l) => `    ${toLine(l)}`).join('\n')}\n`,
         );
     });
 

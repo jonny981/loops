@@ -210,6 +210,10 @@ export function isAlive(pid: number): boolean {
 
 /** Read one run's status, with `alive` computed from its pid. */
 export function readRunStatus(runId: string): RunStatus | undefined {
+  // Reject ids that could traverse outside the registry (`../…`): the id may
+  // come from an untrusted caller (an agent over MCP), and every real id
+  // matches `newRunId`'s alphabet.
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(runId)) return undefined;
   try {
     const raw = readFileSync(join(runsHome(), runId, 'status.json'), 'utf8');
     const s = JSON.parse(raw) as RunStatus;
@@ -235,6 +239,119 @@ export function listRuns(): RunStatus[] {
 /** Path to a run's appended event stream (for tailing). */
 export function runEventsPath(runId: string): string {
   return join(runsHome(), runId, 'events.jsonl');
+}
+
+/**
+ * A one-read rollup of where a run is and what (if anything) is holding it:
+ * `readRunStatus` plus a digest of the event-stream tail. `blocker` is a
+ * heuristic read of that tail, not ground truth — the run itself only knows
+ * its status; the blocker names the most plausible reason it is not moving.
+ */
+export interface RunProgress {
+  runId: string;
+  status: RunStatus['status'];
+  alive?: boolean;
+  title: string;
+  /** `live.path` joined with ' / '; '(root)' when the run is at the top. */
+  stage: string;
+  iteration: number;
+  lastGate?: RunLive['lastGate'];
+  lastOutcome?: RunLive['lastOutcome'];
+  usage: RunLive['usage'];
+  startedAt: number;
+  updatedAt: number;
+  blocker?: {
+    kind: 'gate-failing' | 'limit-pause' | 'human-gate' | 'error';
+    detail: string;
+  };
+  /** The most recent events, rendered through `formatEvent`. */
+  recent: string[];
+}
+
+/** How far back into events.jsonl the rollup reads (lines, before parsing). */
+const PROGRESS_TAIL = 200;
+
+/** Parse the tail of a run's event stream, skipping unparseable lines (the
+ *  same stance the CLI's record readers take — a torn write never breaks a read). */
+function readEventTail(runId: string): LoopEvent[] {
+  let raw: string;
+  try {
+    raw = readFileSync(runEventsPath(runId), 'utf8');
+  } catch {
+    return [];
+  }
+  const events: LoopEvent[] = [];
+  for (const line of raw.split('\n').slice(-PROGRESS_TAIL)) {
+    if (!line.trim()) continue;
+    try {
+      events.push(JSON.parse(line) as LoopEvent);
+    } catch {
+      /* skip an unparseable line */
+    }
+  }
+  return events;
+}
+
+/** Scan the tail backwards for the first blocking signal (first match wins). */
+function deriveBlocker(
+  status: RunStatus['status'],
+  events: LoopEvent[],
+  live: RunLive,
+): RunProgress['blocker'] {
+  // A run that ended in success has nothing blocking it, whatever its tail
+  // holds (e.g. a recovered mid-run error).
+  if (status === 'pass') return undefined;
+  // Pause events are hard stops: within one events file a `human:gate` or
+  // `limit:pause` means the run is pausing (an acked gate never emits the
+  // event, and a resumed run writes a fresh file), so neither is cleared by
+  // later events — a pausing dag still appends its in-flight siblings'
+  // completions after the pause event. A recovered error is different: any
+  // later sign of progress (an iteration, a node, a pass) clears it.
+  let progressSince = false;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]!;
+    if (e.kind === 'human:gate')
+      return { kind: 'human-gate', detail: `${e.name}: ${e.prompt}` };
+    if (e.kind === 'limit:pause')
+      return { kind: 'limit-pause', detail: e.reason };
+    if (e.kind === 'error' && !progressSince)
+      return { kind: 'error', detail: e.message };
+    if (
+      e.kind === 'loop:iteration' ||
+      e.kind === 'dag:node' ||
+      ((e.kind === 'loop:end' || e.kind === 'dag:end') &&
+        e.outcome.status === 'pass')
+    )
+      progressSince = true;
+  }
+  if (live.lastGate && live.lastGate.met === false)
+    return { kind: 'gate-failing', detail: live.lastGate.reason };
+  return undefined;
+}
+
+/** Build a `RunProgress` rollup for a run; undefined when the run is unknown. */
+export function readRunProgress(
+  runId: string,
+  opts?: { recent?: number },
+): RunProgress | undefined {
+  const status = readRunStatus(runId);
+  if (!status) return undefined;
+  const tail = readEventTail(runId);
+  return {
+    runId: status.runId,
+    status: status.status,
+    alive: status.alive,
+    title: status.title,
+    stage: status.live.path.length ? status.live.path.join(' / ') : '(root)',
+    iteration: status.live.iteration,
+    lastGate: status.live.lastGate,
+    lastOutcome: status.live.lastOutcome,
+    usage: status.live.usage,
+    startedAt: status.startedAt,
+    updatedAt: status.updatedAt,
+    blocker: deriveBlocker(status.status, tail, status.live),
+    recent: tail.slice(-(opts?.recent ?? 10)).map(formatEvent),
+  };
 }
 
 /** Path to a run's semantic record stream. */

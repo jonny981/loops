@@ -127,4 +127,30 @@ export interface EngineOptions {
    * to `bypassPermissions`.
    */
   permissionMode?: PermissionMode;
+  /**
+   * Minimum interval between tool executions, in ms. Honored by engines that
+   * mediate tool calls in-process (agent-sdk, via an awaited PreToolUse hook).
+   * Engines whose subprocess executes tools autonomously (claude-cli, codex —
+   * their tool events are post-hoc observations) and engines that drive no
+   * tool loop at all (anthropic-api) ignore it: there is no honest seam to
+   * pace at outside the SDK.
+   */
+  minToolIntervalMs?: number;
+}
+
+/**
+ * A serial pacer: calls resolve at least `minIntervalMs` apart (first call: no
+ * wait). Each caller reserves its slot in the synchronous prefix, before any
+ * await, so concurrent callers — the SDK awaits parallel-safe tools'
+ * PreToolUse hooks concurrently — get strictly spaced slots instead of
+ * collapsing onto one. Backs `EngineOptions.minToolIntervalMs`.
+ */
+export function toolPacer(minIntervalMs: number): () => Promise<void> {
+  let nextAt = 0;
+  return async () => {
+    const now = Date.now();
+    const at = Math.max(now, nextAt);
+    nextAt = at + minIntervalMs;
+    if (at > now) await new Promise((res) => setTimeout(res, at - now));
+  };
 }

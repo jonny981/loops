@@ -75,6 +75,13 @@ export {
 // Job introspection — read a loop's shape without running it (powers `loops
 // validate` / `loops describe`, and lets an agent inspect what it authored)
 export { jobMeta, renderPlan, describeConditions } from './core/describe.ts';
+// The assertion half: turns loops-describe introspection into test assertions
+// (a partial shape expectation over `jobMeta`, mismatch => a path-carrying Error)
+export {
+  assertGraph,
+  type GraphShape,
+  type GraphNodeShape,
+} from './core/assert-graph.ts';
 
 // Agent definitions — job-specific agents (persona in markdown, structure in TS)
 export {
@@ -92,6 +99,8 @@ export {
   type AgentTier,
   type Skill,
 } from './core/agent.ts';
+// Load a Claude Code agent .md (frontmatter + body) into an AgentDef
+export { defineAgentFromMarkdown } from './core/agent-md.ts';
 
 // Human gates — the runtime half of `AgentDef.humanGates`: a job that pauses
 // the run (`paused`, exit 75) until a person acknowledges the named gate
@@ -278,12 +287,14 @@ export { Stats, type StatsSnapshot } from './core/stats.ts';
 export {
   listRuns,
   readRunStatus,
+  readRunProgress,
   runEventsPath,
   runSemanticRecordsPath,
   runsHome,
   formatEvent,
   type RunStatus,
   type RunLive,
+  type RunProgress,
 } from './runtime/supervisor.ts';
 export {
   semanticRecordsFromEvent,

@@ -6,8 +6,14 @@
 
 import pTimeout from 'p-timeout';
 
+// Type-only, so the SDK import stays lazy at runtime. Pinning the hooks value
+// to the SDK's own `Options['hooks']` makes an SDK shape drift fail typecheck
+// instead of silently at runtime (the options object itself is a cast Record).
+import type { Options as SdkOptions } from '@anthropic-ai/claude-agent-sdk';
+
 import {
   SUBAGENT_TOOLS,
+  toolPacer,
   type AgentRequest,
   type AgentResult,
   type Engine,
@@ -73,7 +79,13 @@ function classifySdkLimit(error: unknown): LoopError | undefined {
 
 export class AgentSdkEngine implements Engine {
   readonly name = 'agent-sdk';
-  constructor(private readonly opts: EngineOptions = {}) {}
+  /** One pacer per engine instance, so the interval spans turns, not just one. */
+  private readonly pace?: () => Promise<void>;
+
+  constructor(private readonly opts: EngineOptions = {}) {
+    if (opts.minToolIntervalMs && opts.minToolIntervalMs > 0)
+      this.pace = toolPacer(opts.minToolIntervalMs);
+  }
 
   async run(
     req: AgentRequest,
@@ -91,6 +103,26 @@ export class AgentSdkEngine implements Engine {
     if (signal.aborted) abort.abort();
     else signal.addEventListener('abort', onAbort, { once: true });
 
+    // Pacing hook only — an empty-object return makes no permission decision,
+    // so the SDK's permission model is untouched. PreToolUse callbacks are
+    // awaited before each tool executes: the in-process seam that makes
+    // `minToolIntervalMs` honest here and nowhere else.
+    const pace = this.pace;
+    const hooks: SdkOptions['hooks'] = pace
+      ? {
+          PreToolUse: [
+            {
+              hooks: [
+                async () => {
+                  await pace();
+                  return {};
+                },
+              ],
+            },
+          ],
+        }
+      : undefined;
+
     // The SDK option surface drifts across versions; cast at this boundary.
     const options = {
       model: req.model ?? this.opts.defaultModel,
@@ -104,6 +136,7 @@ export class AgentSdkEngine implements Engine {
       // request's vars to keep merge-over-parent parity with the CLI engines.
       env: req.env ? { ...process.env, ...req.env } : undefined,
       permissionMode: this.opts.permissionMode,
+      ...(hooks ? { hooks } : {}),
       includePartialMessages: true,
       abortController: abort,
     } as Record<string, unknown>;
