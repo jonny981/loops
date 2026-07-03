@@ -24,13 +24,13 @@ import { execa } from 'execa';
 
 import type { EngineRef } from '../engines/engine.ts';
 import { LoopError } from './errors.ts';
-import { mergeEnv } from './env-overlay.ts';
+import { resolveEnv } from './env-overlay.ts';
 import { setLabel, setMeta } from './describe.ts';
 import { assertBudget } from './budget.ts';
 import { resolveSystem, type AgentDef } from './agent.ts';
 import { GhForge } from './forge.ts';
 import { truncate } from './text.ts';
-import { redactSecrets, redactEnvValues } from './redact.ts';
+import { redactSecrets, redactEnvValues, scrubCapture } from './redact.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -131,12 +131,7 @@ export function commandSucceeds(
 ): Condition {
   return setLabel(async (ctx) => {
     try {
-      // The layered pinning, least → most specific: the running environment's
-      // vars (BASE_URL, …, so the gate can test the live preview), the
-      // `withEnv` overlay, then this call's own env. execa merges the result
-      // over `process.env` (`extendEnv` default), completing the precedence
-      // chain; all-absent stays `undefined`.
-      const env = mergeEnv(ctx.environment?.env, ctx.envOverlay, opts.env);
+      const env = resolveEnv(ctx, opts.env);
       const r = await execa(command, args, {
         cwd: opts.cwd ?? ctx.workspace.dir,
         timeout: opts.timeoutMs,
@@ -152,15 +147,13 @@ export function commandSucceeds(
         met: false,
         reason: `\`${command}\` exited ${r.exitCode ?? '?'}`,
         // The evidence behind the failure, in the same shape `reviewContext`
-        // gives a judge. Scrubbed because it flows into JSONL event records —
-        // the injected env values verbatim (a failing command often echoes its
-        // config, and a pinned credential's shape is unknowable to pattern
-        // scrubbing), then the shape patterns, each stream BEFORE it is cut,
-        // so a secret split at the truncation boundary cannot survive.
+        // gives a judge. Scrubbed (`scrubCapture`) because it flows into JSONL
+        // event records — a failing command often echoes its config, and a
+        // pinned credential's shape is unknowable to pattern scrubbing.
         output:
           `exit: ${r.exitCode ?? '(command did not run)'}\n\n` +
-          `stdout:\n${truncate(redactSecrets(redactEnvValues(r.stdout ?? '', env)), 4000)}\n\n` +
-          `stderr:\n${truncate(redactSecrets(redactEnvValues(r.stderr ?? '', env)), 4000)}`,
+          `stdout:\n${scrubCapture(r.stdout ?? '', env, 4000)}\n\n` +
+          `stderr:\n${scrubCapture(r.stderr ?? '', env, 4000)}`,
       };
     } catch (e) {
       return {
@@ -535,13 +528,15 @@ interface ScoreVerdict {
   reason: string;
 }
 
+/** Cap on a judge reply / findings carried in `ConditionResult.output`. */
+const JUDGE_OUTPUT_CAP = 20_000;
+
 /**
- * Scrub + cap a judge's raw reply before it becomes `ConditionResult.output`
- * (which flows into JSONL event records). Redaction runs on the full text so
- * a secret split at the truncation cut cannot survive.
+ * Scrub + cap a judge's (already env-scrubbed) reply before it becomes
+ * `ConditionResult.output`, which flows into JSONL event records.
  */
 function judgeOutput(text: string): string {
-  return truncate(redactSecrets(text), 20_000);
+  return scrubCapture(text, undefined, JUDGE_OUTPUT_CAP);
 }
 
 /** Pull per-dimension scores from a model reply; any missing dimension is 0. */
@@ -612,7 +607,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
     const system = config.agent ? `${resolveSystem(config.agent)}\n\n${baseSystem}` : baseSystem;
 
     // A tool-using judge needs the same pinned vars as the work it rules on.
-    const env = mergeEnv(ctx.environment?.env, ctx.envOverlay);
+    const env = resolveEnv(ctx);
     let result;
     try {
       assertBudget(ctx); // count validator calls against the run's token budget
@@ -672,7 +667,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
         reason: `confidence ${pct}% (need ${need}%)${findings ? ` — ${findings.slice(0, maxReasonChars)}` : ''}`,
         // The FULL findings — what lets a failing check brief a fix-up body
         // without re-running the judge. A tag-only reply has no evidence to carry.
-        output: findings ? truncate(findings, 20_000) : undefined,
+        output: findings ? truncate(findings, JUDGE_OUTPUT_CAP) : undefined,
       };
     }
 

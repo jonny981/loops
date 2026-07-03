@@ -125,10 +125,20 @@ export function tournament(config: TournamentConfig): Job {
       ),
     );
 
+    // A paused candidate (a human gate inside a candidate) is a deliberate
+    // halt, not a loss — mirror dag's precedence and propagate the pause to
+    // the root instead of flattening it into "no candidate passed" (and never
+    // land a winner past an unacknowledged gate). The worktrees are still torn
+    // down below: resume re-executes the tournament from the top (the
+    // library's documented resume model), so nothing durable is lost.
+    const paused = attempts.find((a) => a.outcome.status === 'paused');
+
     // Winner: highest score among passing candidates; ties to the earliest.
-    const winner = [...attempts]
-      .filter((a) => a.outcome.status === 'pass' && a.score >= 0)
-      .sort((a, b) => b.score - a.score || a.i - b.i)[0];
+    const winner = paused
+      ? undefined
+      : [...attempts]
+          .filter((a) => a.outcome.status === 'pass' && a.score >= 0)
+          .sort((a, b) => b.score - a.score || a.i - b.i)[0];
 
     let landed = false;
     if (winner) {
@@ -150,7 +160,9 @@ export function tournament(config: TournamentConfig): Job {
         }).catch(() => {});
     }
 
-    const outcome: Outcome = winner
+    const outcome: Outcome = paused
+      ? { ...paused.outcome }
+      : winner
       ? {
           status: landed ? 'pass' : 'fail',
           confidence: winner.outcome.confidence,

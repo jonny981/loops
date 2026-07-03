@@ -71,6 +71,38 @@ describe('defineAgentFromMarkdown', () => {
     expect(defineAgentFromMarkdown(path).tools).toEqual(['Read', 'Grep']);
   });
 
+  it('a spawn tool cannot hide inside a multi-token item (folded/literal/quoted scalars)', () => {
+    // Each of these grammar shapes yields ONE item carrying several tool
+    // names. The claude CLI accepts space-separated names inside a single
+    // --allowedTools value, so the filter must see individual names or a
+    // folded `Read Task` would resurrect the spawn tool downstream.
+    const folded = fixture(
+      'folded-tools.md',
+      ['---', 'tools: >', '  Read', '  Task', '---', 'Work.'].join('\n'),
+    );
+    expect(defineAgentFromMarkdown(folded).tools).toEqual(['Read']);
+
+    const literal = fixture(
+      'literal-tools.md',
+      ['---', 'tools: |', '  Read', '  Agent', '---', 'Work.'].join('\n'),
+    );
+    expect(defineAgentFromMarkdown(literal).tools).toEqual(['Read']);
+
+    const quoted = fixture(
+      'quoted-tools.md',
+      ['---', 'tools: "Read Task"', '---', 'Work.'].join('\n'),
+    );
+    expect(defineAgentFromMarkdown(quoted).tools).toEqual(['Read']);
+
+    const quotedItem = fixture(
+      'quoted-item-tools.md',
+      ['---', 'tools:', '  - "Task Agent"', '  - Grep', '---', 'Work.'].join(
+        '\n',
+      ),
+    );
+    expect(defineAgentFromMarkdown(quotedItem).tools).toEqual(['Grep']);
+  });
+
   it('a file with no frontmatter: body is the system, name from the filename', () => {
     const path = fixture('plain-worker.md', 'Just do the thing.\n');
     const def = defineAgentFromMarkdown(path);

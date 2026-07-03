@@ -49,9 +49,9 @@ describe('buildClaudeArgs', () => {
     expect(args.indexOf('--add-dir')).toBeLessThan(args.indexOf('--'));
   });
 
-  it('disallows the sub-agent tool for a leaf agent', () => {
+  it('disallows the sub-agent tools for a leaf agent', () => {
     const args = buildClaudeArgs({ prompt: 'go', leaf: true }, {});
-    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Task');
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Task,Agent');
     // a non-leaf turn never restricts spawning
     expect(buildClaudeArgs({ prompt: 'go' }, {})).not.toContain('--disallowedTools');
   });

@@ -16,7 +16,7 @@
 import { execa } from 'execa';
 
 import { LoopError } from './errors.ts';
-import { redactSecrets } from './redact.ts';
+import { scrubCapture } from './redact.ts';
 
 /** Identifies a pull request on the host. */
 export interface PrRef {
@@ -177,7 +177,7 @@ function ghOrThrow(
   if (r.exitCode !== 0)
     throw new LoopError({
       code: 'CONFIG',
-      message: `gh ${action} failed (exit ${r.exitCode}): ${redactSecrets(String(r.all).slice(0, 400))}`,
+      message: `gh ${action} failed (exit ${r.exitCode}): ${scrubCapture(String(r.all), undefined, 400)}`,
     });
 }
 

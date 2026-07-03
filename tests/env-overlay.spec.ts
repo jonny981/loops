@@ -187,6 +187,34 @@ describe('agentJob request env', () => {
     });
   });
 
+  it("scrubs the injected env values from the reply's outcome (summary + data)", async () => {
+    const repo = await tmpRepo();
+    const events: LoopEvent[] = [];
+    // The agent echoes the credential it was handed — the most likely leak.
+    const echo = new MockEngine(
+      (req) => `connected using ${req.env?.LOOPS_WAVE3_CRED}, done`,
+    );
+    const { outcome } = await run(
+      withEnv(
+        { LOOPS_WAVE3_CRED: 'postgres://app:S3cretPw@db/prod' },
+        agentJob({ label: 'leaf', prompt: 'migrate' }),
+      ),
+      {
+        engine: 'mock',
+        engines: { mock: () => echo },
+        cwd: repo,
+        onEvent: (e) => events.push(e),
+      },
+    );
+    expect(outcome.status).toBe('pass');
+    expect(outcome.summary).toContain('[redacted]');
+    expect(outcome.summary).not.toContain('S3cretPw');
+    expect(outcome.data).not.toContain('S3cretPw');
+    // The job:end event (what the supervisor persists) is clean too.
+    const end = events.find((e) => e.kind === 'job:end');
+    expect(JSON.stringify(end)).not.toContain('S3cretPw');
+  });
+
   it('req.env stays undefined when nothing is configured (no {} regression)', async () => {
     const repo = await tmpRepo();
     const reqs: AgentRequest[] = [];

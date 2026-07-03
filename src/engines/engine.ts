@@ -22,8 +22,11 @@ export interface Usage {
   outputTokens: number;
 }
 
-/** Tools an agent uses to spawn sub-agents / fan out. A `leaf` request disallows these. */
-export const SUBAGENT_TOOLS = ['Task'];
+/** Tools an agent uses to spawn sub-agents / fan out. A `leaf` request disallows
+ *  these, and the markdown agent loader (`agent-md.ts`) drops them from a file's
+ *  allowlist — one list, so the engine backstop and the loader filter can never
+ *  disagree on what counts as a spawn tool. */
+export const SUBAGENT_TOOLS = ['Task', 'Agent'];
 
 export interface AgentRequest {
   prompt: string;

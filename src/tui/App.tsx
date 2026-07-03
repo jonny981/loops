@@ -215,6 +215,14 @@ export function App({ hub, title, onAbort }: AppProps): React.ReactElement {
         </Box>
       )}
 
+      {m.notice && (
+        <Box marginTop={1}>
+          <Text color="yellow" wrap="truncate-end">
+            {m.notice}
+          </Text>
+        </Box>
+      )}
+
       <Box marginTop={1} justifyContent="space-between">
         <Text color="gray">
           {m.calls} call(s) · {m.tokensIn} in / {m.tokensOut} out tok

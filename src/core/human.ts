@@ -1,10 +1,11 @@
 /**
  * The human gate — a deliberate pause only a person can lift. `humanGate(config)`
  * returns a `Job`: acknowledged ⇒ `pass`; not ⇒ it emits a `human:gate` event
- * and returns `paused`, which `loop()` and `dag()` propagate to the root, so
- * the run stops (exit code 75) with a surfaced prompt and a resume hint. This
- * is the runtime half of `AgentDef.humanGates` — an `AgentHumanGate` is
- * structurally a `HumanGateConfig`, so `humanGate(def.humanGates[0])` works.
+ * and returns `paused`, which the composites (`loop()`, `dag()`, and
+ * `tournament()`) propagate to the root, so the run stops (exit code 75) with
+ * a surfaced prompt and a resume hint. This is the runtime half of
+ * `AgentDef.humanGates` — an `AgentHumanGate` is structurally a
+ * `HumanGateConfig`, so `humanGate(def.humanGates[0])` works.
  *
  * The acknowledgement lives in `ctx.state` — the ONLY thing a checkpoint
  * persists (`persist.ts` snapshots `{ts, state}`). Resume re-executes the whole
@@ -45,8 +46,11 @@ export interface HumanGateConfig {
 // The safe-slug charset for gate names. The name flows into the `--ack <name>`
 // hint the user pastes into a shell, so anything outside this set (`;`, `$(`,
 // backticks…) is an injection vector once gate definitions arrive as data
-// rather than code. Enforced here — the single choke point shared by the gate,
-// the CLI's `--ack` flag, and the state key.
+// rather than code. Enforced at the writer (`humanGateKey`, below) and
+// re-checked at the reader (`pausedHumanGate`): the `{humanGate, prompt}`
+// outcome-data contract is public, so a name can arrive in raw outcome data —
+// e.g. from a custom `outcome` mapper parsing model text — without ever
+// passing through the constructor.
 const GATE_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 
 /**
@@ -122,18 +126,28 @@ export function humanGate(config: HumanGateConfig): Job {
  * `data` with its node-results map, so the contract may sit at any nesting
  * depth — this follows paused sub-outcomes down to the gate. Returns the gate
  * name, or `undefined` when the pause is not a human gate (a limit pause).
+ *
+ * Only a `GATE_NAME` slug is returned: the name is pasted into a shell as
+ * `--ack <name>` in the printed resume hint, and outcome data is a public
+ * contract that need not have passed the constructor's validation — a
+ * non-slug name falls back to the generic guidance instead of the hint.
  */
 export function pausedHumanGate(outcome: Outcome): string | undefined {
-  if (outcome.status !== 'paused') return undefined;
-  const data = outcome.data;
+  return findGateName(outcome);
+}
+
+/** The recursive walk, on `unknown`: nested values are outcome-shaped by
+ *  convention (a dag's node-results map), not by type — narrow, don't cast. */
+function findGateName(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { status, data } = value as { status?: unknown; data?: unknown };
+  if (status !== 'paused') return undefined;
   if (!data || typeof data !== 'object') return undefined;
   const gate = (data as { humanGate?: unknown }).humanGate;
-  if (typeof gate === 'string' && gate) return gate;
-  for (const value of Object.values(data)) {
-    if (value && typeof value === 'object') {
-      const name = pausedHumanGate(value as Outcome);
-      if (name) return name;
-    }
+  if (typeof gate === 'string' && GATE_NAME.test(gate)) return gate;
+  for (const nested of Object.values(data)) {
+    const name = findGateName(nested);
+    if (name) return name;
   }
   return undefined;
 }

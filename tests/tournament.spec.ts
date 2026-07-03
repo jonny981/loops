@@ -2,7 +2,15 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { run, tournament, fnJob, log, MockEngine } from '../src/api.ts';
+import {
+  run,
+  tournament,
+  fnJob,
+  log,
+  humanGate,
+  pausedHumanGate,
+  MockEngine,
+} from '../src/api.ts';
 import type { RunOptions } from '../src/api.ts';
 import { tmpRepo, tmpBareDir, write, cleanupRepos } from './git-helpers.ts';
 
@@ -43,6 +51,28 @@ describe('tournament (branch-and-select)', () => {
     // and the loser branches were cleaned up
     const branches = (await log({ cwd: repo })).map((c) => c.subject);
     expect(branches.some((s) => /land candidate 2/.test(s))).toBe(true);
+  });
+
+  it('a paused candidate propagates the pause instead of flattening it into a loss', async () => {
+    const repo = await tmpRepo();
+    const job = tournament({
+      name: 'gated',
+      n: 2,
+      candidate: (i) =>
+        i === 0
+          ? humanGate({ name: 'cand-approval', prompt: 'sign off' })
+          : fnJob('c1', async (ctx) => {
+              write(ctx.workspace.dir, 'result.txt', 'candidate 1\n');
+              return { status: 'pass', data: { score: 1 } };
+            }),
+      judge: () => 1,
+    });
+    const { outcome } = await run(job, { ...base, cwd: repo });
+    // The deliberate halt outranks the win: nothing lands past an
+    // unacknowledged gate, and the root sees `paused` (exit 75), not a fail.
+    expect(outcome.status).toBe('paused');
+    expect(pausedHumanGate(outcome)).toBe('cand-approval');
+    expect(existsSync(join(repo, 'result.txt'))).toBe(false);
   });
 
   it('fails when no candidate passes', async () => {

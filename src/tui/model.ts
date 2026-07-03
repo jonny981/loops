@@ -59,6 +59,10 @@ export interface ViewModel {
   tokensOut: number;
   calls: number;
   errors: string[];
+  /** A pause banner: the run is deliberately held (a human gate awaiting its
+   *  acknowledgement, a limit pause) — without this the TUI would just show a
+   *  node stuck on `paused` with no reason until the exit summary. */
+  notice?: string;
   startedAt: number;
 }
 
@@ -213,6 +217,12 @@ export function reduce(vm: ViewModel, e: LoopEvent): void {
       }
       break;
     }
+    case 'human:gate':
+      vm.notice = `⏸ human gate "${e.name}": ${e.prompt}`;
+      break;
+    case 'limit:pause':
+      vm.notice = `⏸ paused (${e.code}): ${e.reason}`;
+      break;
     case 'error':
       vm.errors.push(`[${e.code}] ${e.message}`);
       break;

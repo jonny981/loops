@@ -15,7 +15,7 @@
  * overlay only adds or shadows values.
  */
 
-import type { Job } from './types.ts';
+import type { Job, JobContext } from './types.ts';
 import { childContext } from './context.ts';
 import { LoopError } from './errors.ts';
 import { jobMeta, setMeta } from './describe.ts';
@@ -41,6 +41,21 @@ export function mergeEnv(
     }
   }
   return merged;
+}
+
+/**
+ * The layered env for one engine/subprocess call, least → most specific: the
+ * running environment's vars, then the `withEnv` overlay, then the per-call
+ * layer (`commandSucceeds` `opts.env` / `agentJob` `config.env`). execa (and
+ * the SDK adapter) merge the result over `process.env`, completing the
+ * precedence chain in the header. One helper so a new call seam cannot forget
+ * a layer and silently break `withEnv`'s "everything beneath it" contract.
+ */
+export function resolveEnv(
+  ctx: JobContext,
+  perCall?: Record<string, string>,
+): Record<string, string> | undefined {
+  return mergeEnv(ctx.environment?.env, ctx.envOverlay, perCall);
 }
 
 /** Pin env vars for `job` and everything beneath it (see the header above). */

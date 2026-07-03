@@ -22,6 +22,7 @@ import {
 } from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
+import { scrubCapture } from '../core/redact.ts';
 
 /**
  * Best-effort classification of an Agent SDK error into a provider-limit
@@ -34,10 +35,18 @@ import { LoopError } from '../core/errors.ts';
  *   - a billing / usage / credits signal → QUOTA. A `resetsAt` (when present)
  *     makes it auto-waitable; otherwise QUOTA has no reset.
  */
-function classifySdkLimit(error: unknown): LoopError | undefined {
+function classifySdkLimit(
+  error: unknown,
+  env?: Record<string, string>,
+): LoopError | undefined {
   const err = (error ?? {}) as Record<string, unknown>;
   const tag = typeof err.error === 'string' ? err.error : '';
-  const message = error instanceof Error ? error.message : String(error);
+  // The SDK's message shapes are outside this repo's control and the request's
+  // env was handed to its subprocess — scrub like the sibling CLI engines do.
+  const message = scrubCapture(
+    error instanceof Error ? error.message : String(error),
+    env,
+  );
   const haystack = `${tag} ${message}`.toLowerCase();
 
   const info = (err.rate_limit_info ?? {}) as Record<string, unknown>;
@@ -159,9 +168,18 @@ export class AgentSdkEngine implements Engine {
           phase: 'engine',
           message: 'agent-sdk run aborted',
         });
-      const limit = classifySdkLimit(e);
+      const limit = classifySdkLimit(e, req.env);
       if (limit) throw limit;
-      throw LoopError.from(e, { code: 'ENGINE', phase: 'engine' });
+      if (e instanceof LoopError) throw e;
+      throw new LoopError({
+        code: 'ENGINE',
+        phase: 'engine',
+        message: scrubCapture(
+          e instanceof Error ? e.message : String(e),
+          req.env,
+        ),
+        cause: e,
+      });
     } finally {
       signal.removeEventListener('abort', onAbort);
     }

@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 
 import { defineAgent, type AgentDef } from './agent.ts';
 import { LoopError } from './errors.ts';
+import { SUBAGENT_TOOLS } from '../engines/engine.ts';
 
 type Frontmatter = Record<string, string | string[]>;
 
@@ -105,14 +106,20 @@ function parseFrontmatter(lines: string[]): Frontmatter {
 }
 
 /** Sub-agent spawn tools, dropped from a markdown agent's allowlist (case-sensitive:
- *  CC tool names are case-sensitive, so `task` would be a different tool). */
-const SPAWN_TOOLS = new Set(['Task', 'Agent']);
+ *  CC tool names are case-sensitive, so `task` would be a different tool). The set is
+ *  the engines' own `SUBAGENT_TOOLS`, so the loader filter and the engine-side leaf
+ *  backstop (`--disallowedTools`) can never disagree. */
+const SPAWN_TOOLS = new Set(SUBAGENT_TOOLS);
 
 function toTools(value: string | string[] | undefined): string[] | undefined {
   if (value == null) return undefined;
-  const list = Array.isArray(value)
-    ? value
-    : value.split(',').map((t) => t.trim());
+  const items = Array.isArray(value) ? value : [value];
+  // Split every item on commas AND whitespace: the frontmatter grammar can fold
+  // several names into ONE item (a `>`/`|` block scalar, a quoted "Read Task"),
+  // and the claude CLI accepts space-separated names inside a single
+  // --allowedTools value — so a multi-token item surviving the filter would
+  // resurrect a spawn tool downstream. Filtering must see individual names.
+  const list = items.flatMap((item) => item.split(/[\s,]+/));
   return list.filter((t) => t && !SPAWN_TOOLS.has(t));
 }
 

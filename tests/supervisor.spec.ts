@@ -9,6 +9,7 @@ import {
   readRunStatus,
   readRunProgress,
   runEventsPath,
+  formatEvent,
 } from '../src/api.ts';
 
 // A supervised run registers itself under LOOPS_HOME/runs and writes its live
@@ -164,6 +165,24 @@ describe('out-of-process supervision', () => {
       expect(readRunProgress('no-such-run-000000')).toBeUndefined();
       // A traversal-shaped id is rejected outright, never joined into a path.
       expect(readRunProgress('../../outside/registry')).toBeUndefined();
+    });
+  });
+
+  describe('formatEvent (the terminal seam)', () => {
+    it('flattens control characters in model-influenced text (ANSI/OSC spoofing)', () => {
+      // A judge that quoted hostile content could emit escape sequences into
+      // the reason; `loops tail`/`status --recent` print formatEvent straight
+      // to the operator's terminal, so the rendering is always sanitised.
+      const line = formatEvent({
+        kind: 'error',
+        ts: 0,
+        path: ['l'],
+        code: 'ENGINE',
+        message: 'bad\u001b]52;c;evil\u0007\nfake \u2713 line',
+      });
+      expect(line).not.toMatch(/[\u0000-\u001f\u007f]/);
+      expect(line).toContain('bad');
+      expect(line).toContain('fake \u2713 line');
     });
   });
 });

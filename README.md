@@ -652,7 +652,7 @@ The error taxonomy backs this: an engine classifies a throttle into a `RATE_LIMI
 
 ## Human gates: a pause only a person lifts
 
-Some steps must not proceed on any model's say-so — deploying to production, spending real money. `humanGate(config)` is a `Job` that holds the run at a named gate until a person acknowledges it. Unacknowledged, it emits a `human:gate` event and returns `paused`; loops and dags propagate `paused` straight to the root (a deliberate halt, not a failure — it outranks a coexisting failure and stops further scheduling), so the run exits **75** with the resume command printed, `--ack <name>` appended.
+Some steps must not proceed on any model's say-so — deploying to production, spending real money. `humanGate(config)` is a `Job` that holds the run at a named gate until a person acknowledges it. Unacknowledged, it emits a `human:gate` event and returns `paused`; loops, dags, and tournaments propagate `paused` straight to the root (a deliberate halt, not a failure — it outranks a coexisting failure and stops further scheduling, and a tournament never lands a winner past an unacknowledged gate), so the run exits **75** with the resume command printed, `--ack <name>` appended.
 
 ```ts
 import { defineJob, sequence, humanGate } from '@loops-adk/core';

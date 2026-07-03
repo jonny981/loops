@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 
 import {
   run,
@@ -11,6 +11,9 @@ import {
 } from '../src/api.ts';
 import type { RunOptions } from '../src/api.ts';
 import { MockEngine } from '../src/api.ts';
+import { tmpRepo, cleanupRepos } from './git-helpers.ts';
+
+afterAll(cleanupRepos);
 
 const mockOpts: RunOptions = {
   engine: 'mock',
@@ -205,6 +208,27 @@ describe('pipeline', () => {
     } catch (e) {
       expect((e as LoopError).code).toBe('CONFIG');
     }
+  });
+
+  it('passes per-stage isolate through to the dag node', async () => {
+    const repo = await tmpRepo();
+    const dirs: Record<string, string> = {};
+    const dirOf = (name: string) =>
+      fnJob(name, async (ctx) => {
+        dirs[name] = ctx.workspace.dir;
+        return { status: 'pass' as const };
+      });
+    const { outcome } = await run(
+      pipeline('iso', [
+        { name: 'shared', job: dirOf('shared') },
+        { name: 'writer', job: dirOf('writer'), isolate: true },
+      ]),
+      { ...mockOpts, cwd: repo },
+    );
+    expect(outcome.status).toBe('pass');
+    // The isolated stage ran in its own worktree; the shared one did not.
+    expect(dirs.writer).toBeDefined();
+    expect(dirs.writer).not.toBe(dirs.shared);
   });
 
   it('passes opts through to the dag (stopOnError: false)', async () => {

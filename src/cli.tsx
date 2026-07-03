@@ -31,6 +31,7 @@ import {
   runSemanticRecordsPath,
   runsHome,
   formatEvent,
+  toLine,
 } from './runtime/supervisor.ts';
 import type { SemanticRunRecord } from './runtime/semantic.ts';
 import type { Job, LoopConfig, Outcome } from './core/types.ts';
@@ -338,13 +339,6 @@ export function printResumeGuidance(
   }
 }
 
-/** Flatten model-influenced text (gate reasons, error messages, prompts) to a
- *  single terminal-safe line: control characters could spoof output lines or
- *  carry ANSI/OSC escape sequences. */
-function toLine(s: string): string {
-  return s.replace(/[\u0000-\u001f\u007f]+/g, ' ');
-}
-
 /** Compact relative age, e.g. `8s`, `5m`, `2h`, `3d`. */
 function relAge(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -637,10 +631,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         r.live.iteration
           ? `  at:      ${r.live.path.join(' › ')} (iteration ${r.live.iteration})`
           : '',
+        // Gate reasons and outcome summaries quote judge/agent text — the most
+        // model-influenced strings in this output — so they get the same
+        // terminal sanitisation as the blocker line below.
         g
-          ? `  gate:    ${g.which} ${g.met ? 'met' : 'not met'}${g.confidence != null ? ` @ ${g.confidence.toFixed(2)}` : ''}: ${g.reason}`
+          ? `  gate:    ${g.which} ${g.met ? 'met' : 'not met'}${g.confidence != null ? ` @ ${g.confidence.toFixed(2)}` : ''}: ${toLine(g.reason)}`
           : '',
-        o ? `  last:    ${o.status}${o.summary ? `: ${o.summary}` : ''}` : '',
+        o ? `  last:    ${o.status}${o.summary ? `: ${toLine(o.summary)}` : ''}` : '',
         `  tokens:  ${r.live.usage.inputTokens} in / ${r.live.usage.outputTokens} out (${r.live.usage.calls} calls)`,
         progress?.blocker
           ? `  blocker: ${progress.blocker.kind}: ${toLine(progress.blocker.detail)}`
@@ -653,9 +650,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
             .map((l) => `    ${l}`)
             .join('\n')}\n`,
         );
+      // `recent` lines come out of `formatEvent`, which sanitises every event.
       if (flags.recent && progress?.recent.length)
         process.stdout.write(
-          `\n  recent:\n${progress.recent.map((l) => `    ${toLine(l)}`).join('\n')}\n`,
+          `\n  recent:\n${progress.recent.map((l) => `    ${l}`).join('\n')}\n`,
         );
     });
 
@@ -779,7 +777,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         return;
       }
       for (const record of filtered) {
-        process.stdout.write(`${formatSemanticRecord(record)}\n`);
+        // Semantic records carry outcome summaries and revision reasons —
+        // model-influenced text — so this seam sanitises like the others.
+        process.stdout.write(`${toLine(formatSemanticRecord(record))}\n`);
       }
     });
 

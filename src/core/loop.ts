@@ -441,6 +441,14 @@ export function loop(config: LoopConfig): Job {
               iteration,
             });
           }
+          // A paused review is a deliberate halt (a human gate as the
+          // converged-now-sign-off step), not a rejection — propagate it like
+          // a paused body instead of burning iterations re-entering the loop
+          // while the gate waits. Before the `loop:review` emit, so a records
+          // consumer never reads the pause as a rejected review.
+          if (reviewOutcome.status === 'paused') {
+            return finish({ ...reviewOutcome }, iteration);
+          }
           // Decide whether this failing review will actually re-enter the loop
           // before emitting, so the event carries an honest accept/reject bit
           // (a downstream records consumer must not read a dropped review as

@@ -81,6 +81,31 @@ describe('tui view-model', () => {
     expect(vm.stream).toBe('');
     expect(vm.errors).toEqual(['[ENGINE] nope']);
   });
+
+  it('surfaces a human gate and a limit pause as the notice banner', () => {
+    const vm = emptyVM();
+    expect(vm.notice).toBeUndefined();
+    reduce(
+      vm,
+      at({
+        kind: 'human:gate',
+        path: ['deploy'],
+        name: 'prod-approval',
+        prompt: 'sign off on prod',
+      }),
+    );
+    expect(vm.notice).toBe('⏸ human gate "prod-approval": sign off on prod');
+    reduce(
+      vm,
+      at({
+        kind: 'limit:pause',
+        path: ['deploy'],
+        code: 'QUOTA',
+        reason: 'usage limit reached',
+      }),
+    );
+    expect(vm.notice).toBe('⏸ paused (QUOTA): usage limit reached');
+  });
 });
 
 describe('tui view-model — iteration history', () => {

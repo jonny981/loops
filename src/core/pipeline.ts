@@ -32,6 +32,10 @@ export interface PipelineStage {
    * (two stages needing the same producer) and fan-in (one stage needing both).
    */
   needs?: string[];
+  /** Per-stage isolation override (dag's per-node `isolate`). */
+  isolate?: boolean;
+  /** Kickback allowlist for this stage (dag's per-node `acceptsKickbackTo`). */
+  acceptsKickbackTo?: string[];
 }
 
 /** Ordered named stages, auto-chained: stage i needs stage i-1. Sugar over `dag`. */
@@ -63,6 +67,8 @@ export function pipeline(
       needs: stage.needs ?? (i > 0 ? [stages[i - 1]!.name] : []),
       when: stage.when,
       optional: stage.optional,
+      isolate: stage.isolate,
+      acceptsKickbackTo: stage.acceptsKickbackTo,
     };
   });
   // A plain dag underneath — meta stays kind:'dag', so renderPlan, the TUI,

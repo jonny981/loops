@@ -8,8 +8,9 @@
 import type { Outcome, Job, JobContext } from './types.ts';
 import { setMeta } from './describe.ts';
 import type { EngineRef } from '../engines/engine.ts';
-import { mergeEnv } from './env-overlay.ts';
+import { resolveEnv } from './env-overlay.ts';
 import { LoopError } from './errors.ts';
+import { scrubCapture } from './redact.ts';
 import { assertBudget } from './budget.ts';
 import { isRepo, stageAll, commit } from './git.ts';
 import {
@@ -86,10 +87,12 @@ export interface AgentJobConfig {
   /**
    * Map the agent's raw text into an `Outcome`. Default: `pass`, with the text
    * as the summary. Return `fail` to keep an enclosing loop going. `text` is
-   * the reply verbatim (any handoff block still embedded); `parts` is
-   * `parseHandoff(text)` — `parts.work` is the reply with the handoff block
-   * stripped, the right input for decision-token parsing (a token restated
-   * inside the handoff's sections cannot false-score).
+   * the reply after the capture scrub (injected env values and secret-shaped
+   * tokens are redacted — the outcome flows into persisted records), with any
+   * handoff block still embedded; `parts` is `parseHandoff(text)` —
+   * `parts.work` is the reply with the handoff block stripped, the right input
+   * for decision-token parsing (a token restated inside the handoff's sections
+   * cannot false-score).
    */
   outcome?: (
     text: string,
@@ -280,6 +283,9 @@ export function agentJob(config: AgentJobConfig): Job {
           ? resolveSystem(config.agent)
           : undefined;
 
+    // Hoisted so the reply scrub below can strike the same injected values the
+    // engine subprocess was handed.
+    const env = resolveEnv(ctx, config.env);
     let result;
     const toolUses = new Map<string, number>();
     try {
@@ -294,7 +300,7 @@ export function agentJob(config: AgentJobConfig): Job {
           leaf: config.leaf ?? config.agent?.leaf,
           cwd: config.cwd ?? ctx.workspace.dir,
           timeoutMs: config.timeoutMs,
-          env: mergeEnv(ctx.environment?.env, ctx.envOverlay, config.env),
+          env,
         },
         (e) => {
           const ts = Date.now();
@@ -358,8 +364,16 @@ export function agentJob(config: AgentJobConfig): Job {
       return outcome;
     }
 
+    // The reply is the largest capture sink in the library: it becomes the
+    // emitted outcome (summary + full data) and from there every persisted
+    // record (events.jsonl, status.json, --record files), and via the ledger
+    // it reaches commit bodies (persisted in git). An agent handed a pinned
+    // credential often echoes it, so the reply gets the same scrub as every
+    // other capture path — once, up front, before anything consumes it.
+    const text = scrubCapture(result.text, env);
+
     // Parsed once here; the auto-capture and the `outcome` mapper share it.
-    const parts = parseHandoff(result.text);
+    const parts = parseHandoff(text);
 
     // Auto-capture: when memory is on, the harness records the turn from the agent's
     // own reply — no reliance on it writing a side file. The reply is split at the
@@ -377,8 +391,8 @@ export function agentJob(config: AgentJobConfig): Job {
     }
 
     const outcome = config.outcome
-      ? await config.outcome(result.text, ctx, parts)
-      : TERMINAL(result.text);
+      ? await config.outcome(text, ctx, parts)
+      : TERMINAL(text);
     ctx.emit({
       kind: 'job:end',
       ts: Date.now(),

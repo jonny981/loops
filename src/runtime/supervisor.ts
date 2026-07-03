@@ -16,10 +16,14 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
@@ -270,13 +274,30 @@ export interface RunProgress {
 
 /** How far back into events.jsonl the rollup reads (lines, before parsing). */
 const PROGRESS_TAIL = 200;
+/** Byte window read from the end of events.jsonl. A long run's stream can be
+ *  tens of MB and `loops status` (a fleet supervisor's poll) reads this on
+ *  every invocation, so the read stays O(tail), not O(run) — generous per-line
+ *  headroom for `PROGRESS_TAIL` records. */
+const PROGRESS_TAIL_BYTES = 256 * 1024;
 
 /** Parse the tail of a run's event stream, skipping unparseable lines (the
  *  same stance the CLI's record readers take — a torn write never breaks a read). */
 function readEventTail(runId: string): LoopEvent[] {
   let raw: string;
   try {
-    raw = readFileSync(runEventsPath(runId), 'utf8');
+    const fd = openSync(runEventsPath(runId), 'r');
+    try {
+      const size = fstatSync(fd).size;
+      const start = Math.max(0, size - PROGRESS_TAIL_BYTES);
+      const buf = Buffer.alloc(size - start);
+      readSync(fd, buf, 0, buf.length, start);
+      raw = buf.toString('utf8');
+      // A mid-file window opens on a torn line (and possibly a torn UTF-8
+      // sequence); drop everything up to the first newline.
+      if (start > 0) raw = raw.slice(raw.indexOf('\n') + 1);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return [];
   }
@@ -359,8 +380,23 @@ export function runSemanticRecordsPath(runId: string): string {
   return join(runsHome(), runId, 'semantic.jsonl');
 }
 
-/** A compact one-line rendering of an event, for `loops tail`. */
+/** Flatten model-influenced text (gate reasons, outcome summaries, prompts,
+ *  error messages) to a single terminal-safe line: control characters could
+ *  spoof output lines or carry ANSI/OSC escape sequences. The single owner of
+ *  that invariant — `formatEvent` applies it to every rendered event, and the
+ *  CLI applies it to the lines it composes from `status.json` itself. */
+export function toLine(s: string): string {
+  return s.replace(/[\u0000-\u001f\u007f]+/g, ' ');
+}
+
+/** A compact one-line rendering of an event, for `loops tail`/`status`.
+ *  Always sanitised (`toLine`): event text quotes judges, agents, and
+ *  subprocesses, and the rendering goes straight to a terminal. */
 export function formatEvent(event: LoopEvent): string {
+  return toLine(renderEvent(event));
+}
+
+function renderEvent(event: LoopEvent): string {
   const at = event.path.length ? `${event.path.join(' › ')} ` : '';
   switch (event.kind) {
     case 'loop:start':
