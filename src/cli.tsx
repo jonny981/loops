@@ -8,6 +8,7 @@
  */
 
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import React from 'react';
@@ -314,8 +315,9 @@ function quoteArg(value: string): string {
   return /[\s'"]/.test(value) ? `'${value.replace(/'/g, `'\\''`)}'` : value;
 }
 
-/** Print resume guidance to stderr on a paused run (a TUI-safe channel). */
-function printResumeGuidance(
+/** Print resume guidance to stderr on a paused run (a TUI-safe channel).
+ *  Exported for the regression test pinning the `--ack <name>` hint. */
+export function printResumeGuidance(
   file: string | undefined,
   flags: RunFlags,
   outcome: Outcome,
@@ -420,6 +422,14 @@ function formatSemanticRecord(record: SemanticRunRecord): string {
   }
 }
 
+// The package version, read at runtime rather than hardcoded (a literal here
+// goes stale on every release). Both homes of this module sit one level below
+// the package root — `src/` under tsx, `dist/` when built — so '../package.json'
+// resolves to the same file from either.
+const { version: PKG_VERSION } = createRequire(import.meta.url)(
+  '../package.json',
+) as { version: string };
+
 export async function main(argv: string[] = process.argv): Promise<void> {
   const program = new Command();
   program
@@ -427,7 +437,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description(
       'Run a prompt/agent in a loop with a fresh context every iteration. A nestable job primitive: loops, DAG stages, agent-validated conditions, review-restart.',
     )
-    .version('0.1.0');
+    .version(PKG_VERSION);
 
   program
     .command('run', { isDefault: true })

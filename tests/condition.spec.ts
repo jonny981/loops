@@ -446,6 +446,23 @@ describe('agentCheck request options and output', () => {
     expect(outcome.data).not.toContain('hunter2secret');
   });
 
+  it('scrubs a credential in a plain-verdict reason', async () => {
+    const { engine } = capturing(
+      JSON.stringify({
+        verdict: 'no',
+        confidence: 0.3,
+        reason: 'config echoes token=hunter2secret',
+      }),
+    );
+    const { outcome } = await run(
+      gateJob('g', agentCheck({ question: 'sound?', engine })),
+      noEngine,
+    );
+    expect(outcome.summary).not.toContain('hunter2secret');
+    expect(outcome.summary).toContain('[redacted]');
+    expect(outcome.data).not.toContain('hunter2secret');
+  });
+
   it('a tag-only reply leaves output undefined (no empty-string evidence)', async () => {
     const { engine } = capturing('<confidence>95%</confidence>');
     const { outcome } = await run(

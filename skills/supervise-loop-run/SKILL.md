@@ -15,7 +15,7 @@ loops run build.loop.ts --supervise   # in one terminal (or backgrounded)
 
 **`loops list`** (alias `ls`) discovers runs. Each line is the runId, state (`running` / `dead` / a terminal status like `pass`/`fail`/`paused`), current iteration, age, and title. A run whose process is gone is marked `dead`.
 
-**`loops status <runId>`** prints a point-in-time snapshot: terminal-or-live state, the loop's shape, the last gate verdict (which gate, met, confidence, reason), the last outcome, and token usage. Use this to answer where a run stands and whether it is healthy.
+**`loops status <runId>`** prints a point-in-time snapshot: terminal-or-live state, the loop's shape, the last gate verdict (which gate, met, confidence, reason), the last outcome, token usage, and — when something is holding the run — a **blocker** line naming the most plausible reason it is not moving (a failing gate, a limit pause, a human gate awaiting `--ack`, an error with no progress since). Add `--recent [n]` to append the last n formatted events (default 10). Use this to answer where a run stands and whether it is healthy.
 
 **`loops tail <runId>`** streams the raw event log live (Ctrl-C to stop). It ends on its own when the run reaches a terminal status or its process disappears. Use this to watch a turn unfold.
 
@@ -56,9 +56,9 @@ Read `records` (and `status` for tokens/gate) to choose an action, since loops d
 The read side is on the public surface, so an agent supervising a fleet (killing the ones that drift, watching the ones mid-revision) reads the same files programmatically:
 
 ```ts
-import { listRuns, readRunStatus, runEventsPath, runSemanticRecordsPath } from '@loops-adk/core';
+import { listRuns, readRunStatus, readRunProgress, runEventsPath, runSemanticRecordsPath } from '@loops-adk/core';
 ```
 
-`listRuns()` and `readRunStatus(runId)` mirror `list`/`status`; `runEventsPath`/`runSemanticRecordsPath` locate the two JSONL streams to read directly. `semanticRecordsFromEvent(event)` derives the semantic records from a raw event if you tail the event stream yourself.
+`listRuns()` and `readRunStatus(runId)` mirror `list`/`status`; `readRunProgress(runId, { recent })` is the one-read rollup behind the blocker line (stage, iteration, last gate verdict, usage, blocker, recent events); `runEventsPath`/`runSemanticRecordsPath` locate the two JSONL streams to read directly. `semanticRecordsFromEvent(event)` derives the semantic records from a raw event if you tail the event stream yourself.
 
 To author or shape the run you are supervising, see `skills/author-loop/SKILL.md`; to compose the agent team inside it, see `skills/design-agent-team/SKILL.md`.

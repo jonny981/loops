@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { printResumeGuidance } from '../src/cli.tsx';
 
 import {
   run,
@@ -326,6 +328,36 @@ describe('pausedHumanGate (the outcome-data contract reader)', () => {
       pausedHumanGate({ status: 'paused', summary: 'rate limit hit' }),
     ).toBeUndefined();
     expect(pausedHumanGate({ status: 'pass' })).toBeUndefined();
+  });
+});
+
+describe('the printed resume hint', () => {
+  it('appends --ack <name> for a gate paused inside a dag', async () => {
+    const { outcome } = await run(
+      dag({ name: 'd', nodes: { gate: humanGate({ name: 'approve' }) } }),
+      mockOpts,
+    );
+    const chunks: string[] = [];
+    const write = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk) => {
+        chunks.push(String(chunk));
+        return true;
+      });
+    try {
+      printResumeGuidance(
+        'deploy.loop.ts',
+        { checkpoint: 'ckpt.json' },
+        outcome,
+      );
+    } finally {
+      write.mockRestore();
+    }
+    const text = chunks.join('');
+    // The dag replaced the gate's `data` with its node-results map, so the
+    // hint only carries the name if the CLI followed the contract down.
+    expect(text).toContain('--ack approve');
+    expect(text).toContain('--resume ckpt.json');
   });
 });
 

@@ -250,7 +250,7 @@ loop({
 });
 ```
 
-With no `until`, a `pass` body ends the loop. Terminal status is one of `pass · fail · exhausted · aborted · paused` (CLI exit codes `0 · 1 · 2 · 130 · 75`). `paused` is a limit-driven, resumable stop. See [Rate limits, quotas, and budgets](#rate-limits-quotas-and-budgets-wait-or-resume).
+With no `until`, a `pass` body ends the loop. Terminal status is one of `pass · fail · exhausted · aborted · paused` (CLI exit codes `0 · 1 · 2 · 130 · 75`). `paused` is a resumable stop: a hit limit ([Rate limits, quotas, and budgets](#rate-limits-quotas-and-budgets-wait-or-resume)) or an unacknowledged [human gate](#human-gates-a-pause-only-a-person-lifts).
 
 ## Conditions: honest convergence
 
@@ -280,6 +280,26 @@ agentCheck({
 
 **Builders:** `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds` (a shell command exits 0), `all`, `any`, `not`, `quorum` (k-of-n), `agentCheck` (small-model judge), `always`, `never`, and `gateJob` (lift a condition into a `Job`, e.g. a reviewer).
 
+### The gate briefs the next attempt
+
+A failing gate is not just "no". The evidence-bearing conditions — `commandSucceeds`, `agentCheck`, and the combinators that wrap them — carry their verbatim diagnostic evidence on `ConditionResult.output` (a failing command's stdout/stderr, a judge's full findings), truncated and secret-scrubbed, and the loop hands the previous iteration's `until` verdict to the next body as `ctx.lastGate`. The point: the next fresh context reads **why** the gate failed instead of spending a turn re-running it to find out.
+
+```ts
+loop({
+  name: 'build',
+  body: agentJob({
+    prompt: (c) =>
+      c.lastGate && !c.lastGate.met
+        ? `The gate failed:\n${c.lastGate.output ?? c.lastGate.reason}\n\nFix exactly that.`
+        : 'Implement the feature in TASK.md.',
+  }),
+  until: commandSucceeds('npm', ['test']),
+  max: 10,
+});
+```
+
+`gateJob` lifts the same evidence across the Job boundary (it rides `Outcome.data`). The judge itself is tunable: `agentCheck` takes `cwd` (a tool-using judge that must read the artifact it rules on), `timeoutMs`, and `maxReasonChars` (the excerpt cap on a `confidenceTag` reason; the full findings always travel via `output`).
+
 ## No progress: the third hard stop
 
 The gate detects success; nothing above detects a loop that is failing to converge. `max` bounds the attempt count and `budget` bounds the cost, but both fire only after the waste, and neither can tell slow-but-real convergence from the same failure five turns running. `noProgress` is that sensor: the loop ends `exhausted` once `n` consecutive iterations reach no state the run has not already seen.
@@ -298,7 +318,8 @@ Progress means **novelty**, not change. An iteration counts as progress when any
 
 - **the workspace fingerprint** (HEAD, pending diff, untracked content) is a state this run has never visited, so an agent oscillating A→B→A gets no credit for the return trip;
 - **the gate confidence** beats its previous best by `minConfidenceDelta` (default 0.02), a high-water mark, so judge jitter is not progress but slow steady improvement accumulates until it clears the bar;
-- **a custom `signal`** returns a value not already seen, the escape hatch for progress the worktree cannot show (a queue length, a passing-test count): `noProgress: { window: 3, signal: (ctx) => queueDepth() }`.
+- **a custom `signal`** returns a value not already seen, the escape hatch for progress the worktree cannot show (a queue length, a passing-test count): `noProgress: { window: 3, signal: (ctx) => queueDepth() }`;
+- **(opt-in) the failing gate's output** is new: `noProgress: { window: 3, gate: true }` fingerprints the failing `until` gate's diagnostic `output`, so the same failure signature repeating is itself stall evidence. For deterministic gates whose output is stable across identical failures (a judge's prose varies between identical verdicts, so leave it off for agent gates); it requires an explicit `until`, since without one there is no gate verdict to fingerprint.
 
 The default is conservative: one channel showing novelty keeps the loop alive, so real-but-slow work is never cut short. And the exit is a diagnosis, not just a stop: the outcome carries `Outcome.stall` (the flat iterations, the repeated gate reason, the per-channel evidence) and a `loop:stall` event fires for supervisors, so "stalled since iteration 5 on the same scope error" replaces "reached max iterations" and a fleet watcher can re-brief the loop instead of shrugging at it. This is also what makes a generous `max` safe to grant: the safety net and the runway stop being the same number.
 
@@ -316,13 +337,19 @@ The three tiers below form a progression. The scratch files record what failed a
   appendPrompt(ctx.workspace, { heading: 'Why', body: 'tried a token refresh; the gate still failed on scope' });
   ```
 
+  The handoff is a parseable contract, not a convention: a grounded turn closes its reply with the `HANDOFF_MARK` marker (`===HANDOFF===`), and `parseHandoff(text)` splits the reply into `{ work, handoff }` — the same split the auto-capture uses. An `agentJob`'s `outcome` mapper receives that split as its third argument, so decision-token parsing reads `parts.work` and a token restated inside the handoff's sections cannot false-score:
+
+  ```ts
+  agentJob({ prompt, ground: true, outcome: (text, ctx, parts) => ({ status: parts.work.includes('DONE') ? 'pass' : 'fail' }) });
+  ```
+
 - **Milestone commits: crystallise it.** A commit is a _milestone_, not an iteration. When a loop converges, `commitJob` composes one structured body, the handoff plus a compacted working log (the **way**), welded to the diff (the **what**), then clears both scratch files. Turn it on with `commit:`; iterations stay durable in the workspace + scratch files, so the log holds only converged, reasoned-over checkpoints. Welded to its diff, a commit body is a permanent record any later agent can look back to, as far back as it wants. Finer milestones? Compose finer loops/nodes.
 
   ```ts
   loop({ name: 'build', body, until, commit: { subject: 'feat: the feature' } });
   ```
 
-- **Grounding: read it back.** A fresh turn reads the recent committed commit log (past milestones) and this run's live scratch files (working memory + handoff), prepended to its prompt, so it knows what was already tried. The reach is **branch-local**: adjacent branches are in-flight and may never land, and the merge is where work becomes shared truth.
+- **Grounding: read it back.** A fresh turn reads the recent committed commit log (past milestones) and this run's live scratch files (working memory + handoff), prepended to its prompt, so it knows what was already tried. The reach is **branch-local**: adjacent branches are in-flight and may never land, and the merge is where work becomes shared truth. `RunOptions.ground` (CLI `--ground`) sets the default for every `agentJob` in a run; a job's own `ground` — including an explicit `false` — wins.
 
   ```ts
   agentJob({ label: 'work', prompt: 'Continue the task.', ground: true });
@@ -372,6 +399,8 @@ await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
 
 That's the whole contract: implement `run`, register a name. A managed/durable runner could be a drop-in engine too.
 
+`EngineOptions.minToolIntervalMs` puts a floor between consecutive tool executions, for backends that throttle bursty tool use. Only `agent-sdk` honors it, because only the SDK mediates tool calls in-process (an awaited PreToolUse hook). The subprocess engines (`claude-cli`, `codex`) execute tools autonomously and report them after the fact, and `anthropic-api` drives no tool loop, so all three ignore it: there is no honest seam to pace at outside the SDK.
+
 ## Agents: define a specialist once
 
 Instead of a wall of inline prompt, define each agent as a reusable, job-specific **`AgentDef`**: the persona and methodologies live in editable **markdown files**, the structure and types live in TypeScript. The `.ts` is the strongly-typed wrapper around the `.md`:
@@ -402,7 +431,15 @@ agentJob({ agent: storeEngineer, prompt: 'Build the store to its tests.', ground
 For a small runnable contract plus feedback example, see
 [`examples/contracted-agent.loop.ts`](examples/contracted-agent.loop.ts).
 
-`agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work: TDD, writing-plans), not a worker. The extra contract fields are optional metadata for validation, `loops describe`, docs, and future discovery. They do not give an agent dispatch authority. This is what turns a `dag` into a named **team** (`storeEngineer`, `apiEngineer`, `securityReviewer` as small files) orchestrated by the DAG and gated by `quorum(...)`.
+`agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work: TDD, writing-plans), not a worker. The extra contract fields are optional metadata for validation, `loops describe`, docs, and future discovery — except `humanGates`, whose entries are structurally `HumanGateConfig`s, so each declared gate drops straight into the graph as a runtime pause: `humanGate(def.humanGates[0])` (see [Human gates](#human-gates-a-pause-only-a-person-lifts)). None of it gives an agent dispatch authority. This is what turns a `dag` into a named **team** (`storeEngineer`, `apiEngineer`, `securityReviewer` as small files) orchestrated by the DAG and gated by `quorum(...)`.
+
+A Claude Code agent file loads directly: `defineAgentFromMarkdown(path, overrides?)` maps the `.md`'s frontmatter (`name`, `description`, `model`, `tools`) onto the def and takes the body as `system`. The result is always a leaf — the sub-agent spawn tools (`Task`, `Agent`) are dropped from its allowlist — and `overrides` spread last, so the caller wins:
+
+```ts
+import { defineAgentFromMarkdown } from '@loops-adk/core';
+
+const reviewer = defineAgentFromMarkdown(new URL('./agents/reviewer.md', import.meta.url), { model: 'opus' });
+```
 
 ## Environments: test the running thing
 
@@ -442,6 +479,24 @@ Environments are **optional**: a research pipeline that never deploys just leave
 
 SDK-bound adapters (e.g. the AWS SDK) add a real dependency, so they belong in your own package or loop definition, not the core.
 
+### Pinning env vars: `withEnv`
+
+An Environment brings a stack up and owns its lifecycle. When you only need to **pin** variables over part of a run — no `up`/`down`, no handle — wrap the subtree in `withEnv`:
+
+```ts
+import { withEnv } from '@loops-adk/core';
+
+withEnv({ API_BASE: 'https://staging.example.dev' }, buildLoop);
+```
+
+Everything beneath the wrapper — gate commands, judge calls, and the subprocesses agent leaves spawn — sees the overlay, without mutating the global `process.env`. Precedence, least to most specific:
+
+```
+process.env < environment.env < withEnv overlay < per-call env
+```
+
+The per-call layer is `commandSucceeds(cmd, args, { env })` and `agentJob({ env })`. Nested `withEnv` wrappers merge inner-over-outer, and an overlay only adds or shadows values (it cannot unset an inherited var). Values pinned through any layer are scrubbed verbatim from captured gate output and judge replies before they reach event records, since a failing command often echoes its config and a pinned credential's shape is unknowable to pattern scrubbing.
+
 ## Composition: loops and DAGs
 
 ```ts
@@ -459,7 +514,46 @@ dag({
 });
 ```
 
-`needs` = dependencies; a non-`pass` required dependency blocks its dependents; `optional` nodes never block or fail the DAG; an unmet `when` skips a node (counts green); cycles are detected before any work runs. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
+`needs` = dependencies; a non-`pass` required dependency blocks its dependents; a failed `optional` producer neither fails the DAG nor blocks its dependents, which run and must tolerate its artifacts being absent; an unmet `when` skips a node (counts green); cycles are detected before any work runs. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
+
+### `pipeline`: ordered stages
+
+When the graph is a straight line, declare it as one: `pipeline(name, stages)` chains ordered named stages, pure sugar over `dag()` (stage *i* `needs` stage *i−1*; an explicit `needs` replaces that default, so fan-out and fan-in are still just edges):
+
+```ts
+import { pipeline, renderPipelineTable } from '@loops-adk/core';
+
+const ship = pipeline('ship', [
+  { name: 'build', job: buildLoop },
+  { name: 'bench', job: benchJob, optional: true }, // a failure neither fails the pipeline nor blocks `docs`
+  { name: 'docs', job: docsJob, when: docsChanged }, // unmet ⇒ skipped, counts green, the chain continues
+  { name: 'release', job: releaseJob },
+]);
+
+console.log(renderPipelineTable(ship)); // the stages as a markdown table
+```
+
+All dag semantics apply unchanged — a pipeline's meta stays `kind: 'dag'`, so `describe`, the TUI, and run records read it like any other dag.
+
+### Pin the shape in a test
+
+The same introspection that powers `loops describe` works as a test assertion: `assertGraph(job, shape)` compares a **partial** expectation against the built graph and throws with the JSON path to the first mismatch, so a composer test fails with `nodes[bench].needs: expected […], got […]` instead of a dump of two meta trees:
+
+```ts
+import { assertGraph } from '@loops-adk/core';
+
+it('wires the ship pipeline', () => {
+  assertGraph(ship, {
+    kind: 'dag',
+    nodes: [
+      { name: 'bench', needs: ['build'], optional: true },
+      { name: 'release', needs: ['docs'] },
+    ],
+  });
+});
+```
+
+Only asserted fields are compared, and extra actual nodes are allowed unless `exactNodes: true`.
 
 ### Feedback between nodes
 
@@ -556,6 +650,34 @@ A wait is **interruptible** (Ctrl-C unwinds it). When the policy gives up (the r
 
 The error taxonomy backs this: an engine classifies a throttle into a `RATE_LIMIT` or `QUOTA` `LoopError` carrying the reset hint (`retryAfterMs` / `resetAt`) it could read. `RATE_LIMIT` is retryable; `QUOTA` is retryable only when a reset is known; `BUDGET` never is.
 
+## Human gates: a pause only a person lifts
+
+Some steps must not proceed on any model's say-so — deploying to production, spending real money. `humanGate(config)` is a `Job` that holds the run at a named gate until a person acknowledges it. Unacknowledged, it emits a `human:gate` event and returns `paused`; loops and dags propagate `paused` straight to the root (a deliberate halt, not a failure — it outranks a coexisting failure and stops further scheduling), so the run exits **75** with the resume command printed, `--ack <name>` appended.
+
+```ts
+import { defineJob, sequence, humanGate } from '@loops-adk/core';
+
+export default defineJob(
+  sequence(
+    'deploy',
+    buildLoop,
+    humanGate({ name: 'prod-approval', prompt: 'Review the staging deploy, then approve.' }),
+    deployJob,
+  ),
+);
+```
+
+```bash
+loops run deploy.loop.ts --checkpoint .loops/state.json
+# … exits 75:
+#   Paused at human gate "prod-approval". Resume with:
+#     loops run deploy.loop.ts --resume .loops/state.json --checkpoint .loops/state.json --ack prod-approval
+```
+
+The acknowledgement lives in `ctx.state` under `humanGateKey(name)` — seeded by CLI `--ack <name>` (repeatable), a `--state` JSON seed, or an earlier job writing the key — and a pause's checkpoint carries it across the process boundary. Resume re-executes the job from the top (the workspace is the state), and the seeded ack makes the gate pass on the second run; guard expensive pre-gate steps with `when` conditions or state markers. A custom `ack` function (e.g. a marker file exists) replaces the state lookup and owns its own durability.
+
+An `AgentDef`'s `humanGates` entries are structurally `HumanGateConfig`s, so the gate an agent declares (`humanGates: [{ name: 'prod-approval', … }]`) drops into the graph unchanged: `humanGate(def.humanGates[0])`. `pausedHumanGate(outcome)` reads the gate name back out of any nested paused outcome — it is how the CLI knows which `--ack` to print.
+
 ## Output: TUI, plain, JSON
 
 - **Ink TUI** (default on a TTY): a live loop/dag tree, a per-iteration detail panel you can browse while the run continues, and a stats footer. Navigate with `↑/↓` (nodes), `←/→` (iterations), `f`/`space` (follow-live), `q`/`Esc`/`Ctrl-C` (abort).
@@ -575,7 +697,11 @@ loops status <runId>                   # its shape plus where it is now: iterati
 loops tail <runId>                     # stream its events live
 ```
 
-Each run keeps the raw event stream in `events.jsonl` and a smaller semantic stream in `semantic.jsonl` with dispatch, completion, surfacing, `revision-emitted`, and `revision-routed` records. Use `loops records <runId>` to inspect those records without knowing the registry path; add `--kind revision-routed`, `--kind revision` (both revision kinds), `--path ship/implementation`, `--since <time>`, `--last <n>`, or `--json` when an agent needs a filtered machine-readable stream. `list` marks a run dead if its process is gone. The read side is also on the public surface (`listRuns`, `readRunStatus`, `runEventsPath`, `runSemanticRecordsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
+Each run keeps the raw event stream in `events.jsonl` and a smaller semantic stream in `semantic.jsonl` with dispatch, completion, surfacing, `revision-emitted`, and `revision-routed` records. Use `loops records <runId>` to inspect those records without knowing the registry path; add `--kind revision-routed`, `--kind revision` (both revision kinds), `--path ship/implementation`, `--since <time>`, `--last <n>`, or `--json` when an agent needs a filtered machine-readable stream. `list` marks a run dead if its process is gone.
+
+`loops status <runId>` prints, when something is holding the run, a **blocker** line, and `--recent [n]` appends the last *n* formatted events (default 10). The blocker is a heuristic read of the event tail naming the most plausible reason it is not moving — a failing gate, a limit pause, a human gate awaiting `--ack`, or an error with no progress since. The same rollup is one call on the public surface: `readRunProgress(runId, { recent })` returns a `RunProgress` (stage, iteration, last gate verdict, usage, blocker, recent events) — the one-read "where is it and what is it waiting on" a fleet supervisor polls.
+
+The read side is also on the public surface (`listRuns`, `readRunStatus`, `readRunProgress`, `runEventsPath`, `runSemanticRecordsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
 
 ## What `loops` is (and isn't)
 

@@ -38,12 +38,12 @@ const storeEngineer = defineAgent({
   skills: [tdd],                  // methodologies fold into the system
   requiresSkills: ['contract-first'], // metadata unless also in `skills`
   usesSkills: ['small-diff'],
-  humanGates: [{ name: 'prod-approval', when: 'deploying production changes' }],
+  humanGates: [{ name: 'prod-approval', when: 'deploying production changes' }], // runtime pause: humanGate(def.humanGates[0])
   failureModes: [{ mode: 'tests-flaky', recovery: 'isolate the flake, retry once', severity: 'should-fix' }],
 });
 ```
 
-`agentJob({ agent: storeEngineer, prompt, ground: true })` resolves the def into the engine request (`system` = persona + folded skills, plus `model`/`tools`). Inline `system`/`model`/`tools`/`allowedTools` on the `agentJob` still override the def. The contract fields beyond `system`/`model`/`tools` are **optional metadata** for validation, `loops describe`, docs, and future discovery. They change nothing at runtime; they do not grant dispatch authority.
+`agentJob({ agent: storeEngineer, prompt, ground: true })` resolves the def into the engine request (`system` = persona + folded skills, plus `model`/`tools`). Inline `system`/`model`/`tools`/`allowedTools` on the `agentJob` still override the def. The contract fields beyond `system`/`model`/`tools` are **optional metadata** for validation, `loops describe`, docs, and future discovery — except `humanGates`, whose entries are structurally `HumanGateConfig`s: `humanGate(def.humanGates[0])` drops the declared gate into the graph as a runtime pause (unacknowledged ⇒ the run pauses with exit code 75; resume with `--ack <name>`). None of them grant dispatch authority.
 
 **`leaf` is the fan-out brake.** A leaf agent cannot spawn sub-agents (the engine withholds the sub-agent tool). Use it to stop a thorough worker from quietly expanding into a slow, expensive swarm. The team's shape stays the graph you drew, not one the agent invents.
 

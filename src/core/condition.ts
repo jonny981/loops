@@ -694,7 +694,9 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       return {
         met: sv.score >= threshold,
         confidence: sv.score,
-        reason: `geo ${sv.score.toFixed(2)} (need ${threshold}) [${detail}] — ${sv.reason}`,
+        // The judge's free-prose reason gets the same scrub as `output` — it
+        // flows into the same persisted records.
+        reason: `geo ${sv.score.toFixed(2)} (need ${threshold}) [${detail}] — ${redactSecrets(sv.reason)}`,
         output: judgeOutput(text),
       };
     }
@@ -716,7 +718,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
     return {
       met,
       confidence: v.confidence,
-      reason: `${v.verdict} @ ${v.confidence.toFixed(2)} (need ${threshold}) — ${v.reason}`,
+      reason: `${v.verdict} @ ${v.confidence.toFixed(2)} (need ${threshold}) — ${redactSecrets(v.reason)}`,
       output: judgeOutput(text),
     };
   }, `judge "${config.question}" >=${threshold}`);

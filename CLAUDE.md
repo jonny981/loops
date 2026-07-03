@@ -12,7 +12,9 @@ There is one universal unit of work and two supporting types:
 - `Condition = (ctx, last) => Promise<{ met, reason, confidence? }>` — a yes/no gate.
 - `Engine` — a one-method interface (`run(req, onEvent, signal)`) where an agent turn actually executes.
 
-`loop()` returns a `Job`. `dag()` returns a `Job`. So loops and DAGs nest both ways: a DAG node can be a loop, a loop body can be a DAG. **Nesting is the absence of a special case, not a feature.** Preserve that property in any change; do not add a node type that only works in one position.
+`loop()` returns a `Job`. `dag()` returns a `Job`. So loops and DAGs nest both ways: a DAG node can be a loop, a loop body can be a DAG. **Nesting is the absence of a special case, not a feature.** Preserve that property in any change; do not add a node type that only works in one position. `pipeline()` is sugar over `dag()`, not a new node type.
+
+The failure policy rides the `Outcome` status. In a dag, a failed **required** producer blocks its dependents; a failed **optional** producer neither fails the dag nor blocks its dependents (consumers must tolerate its artifacts being absent); an unmet `when` skips the node, which counts green. `paused` is a halt, not a failure: a paused body or node (an unacknowledged `humanGate`, a hit limit) stops the enclosing loop/dag immediately and propagates to the root, so the run exits 75 with resume guidance; the acknowledgement lives in `ctx.state` (seeded by CLI `--ack <name>` or a `state` seed), and resume re-executes the whole job from the top — the workspace is the state, so the seeded ack makes the gate pass on the second run.
 
 Two design tenets that must survive every edit:
 
@@ -24,36 +26,90 @@ Two design tenets that must survive every edit:
 ```
 src/api.ts            public surface — the package's only export ("." → ./src/api.ts)
 src/index.ts          CLI entry (run via tsx)
-src/cli.tsx           commander CLI: flags mode + `run <file>` definition mode
+src/cli.tsx           commander CLI: flags mode + `run <file>` definition mode, --ack /
+                      --ground / resume guidance, validate/describe, and the
+                      supervision reads (list / status --recent / tail / records)
+src/config.ts         flags mode → the standard worker → until → review loop (zod-validated)
+src/reporters.ts      --no-tui (plain) and --json (NDJSON) reporters + the exit summary
 src/core/
-  job.ts              the Job type + helpers (defineJob, agentJob, gateJob)
-  loop.ts             loop(): start → body → until → review, with retry/delay/caps
+  types.ts            shared types: Job/Outcome/Condition (ConditionResult.output is the
+                      evidence channel), JobContext (lastGate, envOverlay, groundDefault),
+                      LoopConfig/DagConfig, the LoopEvent union
+  job.ts              job builders: agentJob (env, ground, leaf, the outcome mapper's
+                      `parts`), fnJob, commitJob; parseHandoff/HANDOFF_MARK (the
+                      handoff contract)
+  loop.ts             loop(): start → body → until → review, with retry/delay/caps;
+                      threads lastGate, samples noProgress, propagates paused
   dag.ts              dag()/sequence()/parallel(): toposort, needs/optional/when,
-                      bounded cross-stage kickback (re-run a dirty subgraph)
-  condition.ts        commandSucceeds, agentCheck, quorum, all/any/not, predicate,
-                      forgeChecks, toVerdict, the dimensional-judge geometric mean
+                      bounded cross-stage kickback (re-run a dirty subgraph); a failed
+                      optional producer neither fails the dag nor blocks dependents
+  pipeline.ts         pipeline(name, stages): ordered named stages as sugar over dag(),
+                      plus renderPipelineTable (stages as a markdown table)
+  condition.ts        commandSucceeds, agentCheck (dimensions, confidenceTag, cwd,
+                      timeoutMs, maxReasonChars), quorum, all/any/not, predicate,
+                      forgeChecks, toVerdict, gateJob (output rides Outcome.data)
+  progress.ts         no-progress (stall) detection — the ProgressTracker novelty
+                      rule behind LoopConfig.noProgress, the third hard stop (opt-in
+                      `gate` channel fingerprints the failing gate's output)
+  human.ts            humanGate()/humanGateKey/pausedHumanGate — the pause only a person
+                      lifts (paused, exit 75; ack via ctx.state, seeded by CLI --ack)
+  agent.ts            AgentDef/defineAgent/defineSkill/fromFile — the typed contract
+                      around a markdown persona (humanGates, failureModes, tiers)
+  agent-md.ts         defineAgentFromMarkdown: load a Claude Code agent .md into an
+                      AgentDef (scoped frontmatter grammar; Task/Agent dropped; leaf)
+  feedback.ts         reviewPanel/reviewContext, revisionRequest/kickback,
+                      feedbackBlock/graphPositionBlock — the structured review channel
+  describe.ts         JobMeta side tables: jobMeta/renderPlan/describeConditions
+                      (powers `loops validate`/`describe`)
+  assert-graph.ts     assertGraph(job, shape): jobMeta introspection as test assertions
+  git.ts              the git substrate: thin execa wrappers (commit, log, worktrees,
+                      merge, workspaceFingerprint)
+  draft.ts            the scratch files: ledger.md (working memory) + prompt.md (handoff)
+  ground.ts           the read side: groundingText/retrieveLedger (branch-local commit log)
+  consolidate.ts      consolidate/consolidateJob/compactLedger/composeCommitBody —
+                      decision-preserving folds of the log
+  merge.ts            mergeSynthesis: an agent resolves the conflict + writes a unified way
   forge.ts            Forge seam (PR host): GhForge (gh CLI) + MockForge, arg-builders
   pr.ts               pushJob / pullRequestJob / mergeJob — keep the squash body a
                       consolidation of the branch so the Ledger survives a squash merge
+  isolated.ts         isolated(job): per-dispatch worktree fork + land-back (dynamic Tend)
+  tournament.ts       tournament(): N candidates in isolated worktrees, judge, land the winner
+  env-overlay.ts      withEnv(overlay, job) + mergeEnv — env pinning for a job subtree
+                      (process.env < environment.env < overlay < per-call env)
   budget.ts           Budget + assertBudget (non-retryable BUDGET LoopError)
-  progress.ts         no-progress (stall) detection — the ProgressTracker novelty
-                      rule behind LoopConfig.noProgress, the third hard stop
-  context.ts          JobContext (iteration, state, lastReview, signal)
+  limits.ts           RATE_LIMIT/QUOTA classification + the reset-hint math behind onLimit
+  redact.ts           redactSecrets (shape patterns) + redactEnvValues (pinned values)
+  stats.ts            event-stream fold for the TUI footer and exit summary
+  text.ts             oneLine/truncate helpers
+  context.ts          childContext: thread JobContext fields in exactly one place
   errors.ts           LoopError + terminal status taxonomy
-  types.ts            shared types
 src/engines/
-  engine.ts           Engine interface + EngineOptions (incl. permissionMode)
+  engine.ts           Engine interface + EngineOptions (permissionMode,
+                      minToolIntervalMs) + toolPacer
   claude-cli.ts       `claude` subprocess via execa; exported buildClaudeArgs()
-  agent-sdk.ts        @anthropic-ai/claude-agent-sdk
+  agent-sdk.ts        @anthropic-ai/claude-agent-sdk; the only engine honoring
+                      minToolIntervalMs (it mediates tool calls in-process)
   anthropic-api.ts    @anthropic-ai/sdk (token streaming; cheapest for judges)
+  codex.ts            `codex exec` subprocess — a genuinely different model behind the
+                      same seam; read-only unless bypassPermissions
+  message-map.ts      shared stream-json → EngineStreamEvent mapping (SDK + claude CLI)
   mock.ts             scripted, offline — for tests/examples
-  registry.ts         name → Engine resolution
+  registry.ts         name → Engine resolution (lazy factories)
 src/runtime/
-  runner.ts           the run() driver
+  runner.ts           the run() driver: RunOptions (ground, budget, checkpoint/resume,
+                      supervise, onLimit) → RunResult; owns the root context
   persist.ts          makeRecorder (JSONL), makeCheckpointer/loadCheckpoint
+  supervisor.ts       the file registry (~/.loops/runs): startSupervisor writes;
+                      listRuns/readRunStatus/readRunProgress/formatEvent read
+  semantic.ts         semanticRecordsFromEvent + makeSemanticRecorder — the decision
+                      stream (dispatch/completion/surfacing/revision) behind `records`
   hub.ts, signals.ts  event fan-out + abort plumbing
+src/env/
+  environment.ts      the Environment seam (up/down, EnvHandle) — where the code runs
+  command.ts          commandEnvironment: the generic deploy/outputs/destroy CLI factory
+  sst.ts, docker.ts   thin presets over commandEnvironment (per-branch stage / compose project)
+  mock.ts             scripted, offline environment — for tests/examples
 src/tui/              Ink TUI (App.tsx, model.ts, theme.ts)
-src/reporters.ts      --no-tui (plain) and --json (NDJSON) reporters
 bin/loops.mjs         the bin shim (see "Running" below)
 examples/*.loop.ts    runnable definition files (mock engine = offline)
 tests/                vitest

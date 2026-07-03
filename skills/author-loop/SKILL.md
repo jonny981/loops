@@ -41,7 +41,7 @@ export default defineJob(
 );
 ```
 
-`loop()` config worth knowing: `body` (the Job per iteration), `until` (stop gate), `start` (gate before iterating), `stopOn` (hard early-exit), `review` (runs when `until` is met; a failing review folds its findings back into the next iteration), `max` (iteration cap), `delayMs` (polling delay), `commit` (milestone commit on convergence).
+`loop()` config worth knowing: `body` (the Job per iteration), `until` (stop gate), `start` (gate before iterating), `stopOn` (hard early-exit), `review` (runs when `until` is met; a failing review folds its findings back into the next iteration), `max` (iteration cap), `noProgress` (end `exhausted` after n consecutive iterations that reach no new state; `{ window, gate: true }` also fingerprints the failing gate's `output`, so the same failure signature repeating counts as stall evidence — deterministic gates only, and it requires an explicit `until`), `delayMs` (polling delay), `commit` (milestone commit on convergence).
 
 ## The gate is the whole point
 
@@ -62,11 +62,22 @@ until: [
 ],
 ```
 
+A failing gate briefs the next attempt. The previous iteration's `until` verdict — including its diagnostic `output` (a failing command's stdout/stderr, a judge's full findings, scrubbed and truncated) — arrives as `ctx.lastGate`, so write a fix-up body that reads **why** the gate failed instead of spending a turn re-running it:
+
+```ts
+body: agentJob({
+  prompt: (c) =>
+    c.lastGate && !c.lastGate.met
+      ? `The gate failed:\n${c.lastGate.output ?? c.lastGate.reason}\n\nFix exactly that.`
+      : 'Implement the feature in TASK.md.',
+}),
+```
+
 ## Memory is git
 
 Progress accumulates on disk, so each iteration starts with a clean context but not a blank one.
 
-- `ground: true` on an `agentJob` reads the recent commit log + this run's scratch files into the next prompt, so a fresh turn knows what was already tried.
+- `ground: true` on an `agentJob` reads the recent commit log + this run's scratch files into the next prompt, so a fresh turn knows what was already tried. To default it on for every `agentJob` in a run, set `RunOptions.ground` or pass `--ground`; a job's own `ground` (including an explicit `false`) wins.
 - `commit: { subject }` (or `commit: true`) writes one structured milestone commit on convergence: the reasoning welded to the diff. Later turns ground on it.
 - For long, noisy histories use `ground: { retrieve: true }` (select relevant commits, not recent-N); for indefinite processes add `consolidateJob` to fold history into a bounded, decision-preserving record.
 
@@ -95,11 +106,27 @@ dag({
 });
 ```
 
-`needs` are dependencies; `optional` nodes never block; an unmet `when` skips a node; `isolation: 'worktree'` (on the dag) or `isolate: true` (per node) runs writers in parallel worktrees that land back on pass. `sequence` and `parallel` are sugar over `dag`.
+`needs` are dependencies; a failed `optional` producer neither fails the dag nor blocks its dependents (they run, and must tolerate its artifacts being absent); an unmet `when` skips a node; `isolation: 'worktree'` (on the dag) or `isolate: true` (per node) runs writers in parallel worktrees that land back on pass. `sequence` and `parallel` are sugar over `dag`.
+
+When the graph is a straight line, declare it as one: `pipeline(name, stages)` chains ordered named stages (stage *i* `needs` stage *i−1*; an explicit `needs` replaces that default, so fan-out/fan-in stays available). All dag semantics apply: a skipped stage counts green so the chain continues, and an `optional` stage's failure does not block later stages.
+
+```ts
+pipeline('ship', [
+  { name: 'build', job: buildLoop },
+  { name: 'bench', job: benchJob, optional: true },
+  { name: 'release', job: releaseJob },
+]);
+```
+
+To pin env vars over a subtree (gate commands, judges, and agent subprocesses all see them, with no `process.env` mutation), wrap it in `withEnv({ API_BASE: '…' }, job)`. Precedence, least to most specific: `process.env < environment.env < withEnv overlay < per-call env` (`commandSucceeds(cmd, args, { env })` / `agentJob({ env })`).
+
+## Human gates
+
+A step no model may approve (deploy to prod, spend real money) is a `humanGate({ name })` node: unacknowledged, it pauses the whole run (`paused`, exit code 75) and the CLI prints the resume command with `--ack <name>` appended; acknowledged, it passes. Run with `--checkpoint <path>` so the pause is resumable, then `loops run <file> --resume <path> --ack <name>`. Resume re-executes from the top (the workspace is the state), so guard expensive pre-gate steps with `when` conditions or state markers. An `AgentDef`'s `humanGates` entries construct directly: `humanGate(def.humanGates[0])`.
 
 ## Agents and feedback
 
-A node can be a named specialist instead of an inline prompt. Define it once with `defineAgent` (persona in markdown via `fromFile`, structure in TS) and hand it to `agentJob({ agent })`; `defineSkill` folds a methodology into its system. The contract fields (`tier`, `outputs`, `failureModes`, …) are metadata for `describe` and validation, not scheduling power: the `dag` orchestrates, agents stay workers.
+A node can be a named specialist instead of an inline prompt. Define it once with `defineAgent` (persona in markdown via `fromFile`, structure in TS) and hand it to `agentJob({ agent })`; `defineSkill` folds a methodology into its system. An existing Claude Code agent `.md` loads directly with `defineAgentFromMarkdown(path, overrides?)`: frontmatter (`name`/`description`/`model`/`tools`) maps onto the def, the body becomes `system`, and the result is always a leaf (the `Task`/`Agent` spawn tools are dropped). The contract fields (`tier`, `outputs`, `failureModes`, …) are metadata for `describe` and validation, not scheduling power: the `dag` orchestrates, agents stay workers.
 
 Review feedback is a structured revision request that flows back to the worker on one channel. In a loop, a failing `review` is threaded into the next turn as `ctx.lastReview`; set `consumeFeedback: true` and `agentJob` folds it into the prompt. Aggregate several reviewers with `reviewPanel`; route a fix back to an earlier dag node with a targeted `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) when the dag's `maxKickbacks` allows it.
 
@@ -117,6 +144,8 @@ loops run path/to/feature.loop.ts --json   # raw NDJSON event firehose (to super
 ```
 
 Always `loops validate` first. It imports and constructs the loop (catching syntax, import, and bad-export errors) without running it, so you fix authoring mistakes for free before spending a single agent turn. It also prints the loop's shape (its gate, body, and dag nodes), so you can confirm you built what you intended. `loops describe` prints that shape on its own.
+
+In a composer's test suite, pin the shape with `assertGraph(job, shape)`: a partial expectation over the same introspection (`{ kind: 'dag', nodes: [{ name: 'bench', needs: ['build'], optional: true }] }`), throwing with the JSON path to the first mismatch. Only asserted fields are compared; add `exactNodes: true` to also reject extra nodes.
 
 `loops run` works from any repo, including one that uses `loops` as a submodule or dependency. The recipe's folder must be an ES module scope (a `package.json` with `{"type":"module"}`); repos that consume `loops` already have this. If a load fails with an ES-module error, that scope is what is missing.
 
