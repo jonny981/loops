@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
 </p>
 
-`loops` is a nestable library for running an agent in a convergence loop. The loop finds the work, hands it to an agent, checks the result, records what it learned, and goes again until a gate _you_ define says the work is finished. You write the loop once and it drives the agent, rather than prompting by hand. Compose loops and DAGs both ways, run them against any model behind a one-method `Engine`, and watch a run in a live terminal UI.
+`loops` is a library for building agentic workflows that converge on work that is *actually* done. The unit is a loop: an agent does a bit of work with a fresh context, a gate _you_ define checks the result, and if it is not done it goes again, so you write the loop once and it drives the run rather than prompting by hand. Because `loop()` and `dag()` both return the same `Job`, that unit scales without a new abstraction, from a single retry loop to a nested, multi-agent team that builds a whole service, run against any model behind a one-method `Engine` and watched in a live terminal UI.
 
 Every iteration runs with a **fresh context**, so a long run never rots. Progress accumulates in **git, not the chat transcript**: the agent forgets between turns, the repository does not. The loop stops only when the gate clears: a deterministic check (the tests genuinely pass) alongside a separate judge in its own context, so the model that did the work is never the one that grades it. That gate is what keeps a loop from declaring itself finished on a half-built job.
 
