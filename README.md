@@ -18,7 +18,7 @@
 
 Every iteration runs with a **fresh context**, so a long run never rots. Progress accumulates in **git, not the chat transcript**: the agent forgets between turns, the repository does not. The loop stops only when the gate clears: a deterministic check (the tests genuinely pass) alongside a separate judge in its own context, so the model that did the work is never the one that grades it. That gate is what keeps a loop from declaring itself finished on a half-built job.
 
-Where most "agent memory" recalls a _conversation_, this keeps your _decisions_ consistent across long work. No vector database, no embeddings, no index to sync or let go stale. **Git is the memory.**
+Where most "agent memory" recalls a _conversation_, this keeps your _decisions_ consistent across long work. Git is the substrate, with no extra architecture: no vector database, no embeddings, no index to sync or let go stale. The discipline is what makes it memory and not just history. The loop persists curated decisions to commit bodies deterministically as work converges, and reads them back deliberately (recent, selected, or consolidated), never by pasting the whole log into a prompt. **Git is the memory.**
 
 A loop is a single file:
 
