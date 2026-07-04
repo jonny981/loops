@@ -43,15 +43,21 @@ export default loop({
 
 ## Features
 
-Seven parts that share one substrate (git and the workspace), one unit of work (the `Job`), and one control model (conditions and outcomes). Not separate tools bolted together, which is why they nest without a special case.
+A loop is easy to start and hard to keep on track. What decides whether `loops` earns its cost is a set of parts that share one substrate (git and the workspace), one unit of work (the `Job`), and one control model (conditions and outcomes). Not separate tools bolted together, which is why they nest without a special case.
 
 - **Curated memory on git, no extra architecture.** Decisions persist to commit bodies deterministically as work converges and are read back deliberately (recent, selected, or consolidated). No vector store, no embeddings, no side database to sync. ([Ledger](#ledger-memory-built-on-git))
 - **Nested workflows from two primitives.** `loop()` and `dag()` both return a `Job`, so a loop inside a dag inside a loop composes to any depth. ([Composition](#composition-loops-and-dags))
 - **Multi-agent orchestration without context rot.** Every turn runs on a fresh context; a team coordinates through the workspace and the Ledger, never a ballooning transcript.
+- **Parallelism without collisions.** `isolation: 'worktree'` gives each writer its own branch and worktree, landed back on pass with a `--no-ff` merge; `tournament` races N approaches in isolated worktrees, judges them, and keeps only the winner. ([Composition](#composition-loops-and-dags))
 - **Deterministic gates for repeatable workflows.** A real check (`commandSucceeds`) plus a judge (`agentCheck`), hardened by k-of-n `quorum` and a rubric that fails closed, so "done" is reproducible, not a self-report. ([Conditions](#conditions))
+- **Environments: gate on the running thing.** A third provider axis beside the engine (where the agent thinks) and the workspace (where the code lives): bring up a local stack or per-branch preview so `until` tests what actually runs, not just files on disk. ([Environments](#environments-test-the-running-thing))
+- **Bounded and resumable.** `max` caps iterations, `budget` caps tokens (a stop the engine refuses to cross), and stall detection ends a loop that reaches no new state; a rate limit, quota, or hit budget pauses and resumes warm from a checkpoint instead of failing. ([No progress](#no-progress-the-third-hard-stop), [resume](#budget-records-resume))
 - **Any model, any harness.** The agent launch touches only a one-method `Engine`, so a reviewer runs on a genuinely different model than the worker. The model that did the work never grades it. ([Engines](#engines-bring-any-model))
+- **Ship via PR, memory survives the squash.** `pullRequestJob`/`mergeJob` keep the PR body a consolidation of the branch, so a squash merge doesn't flatten the Ledger into a list of subject lines. ([Ledger](#ledger-memory-built-on-git))
 - **Human-in-the-loop gates.** `humanGate` holds the run at a named checkpoint until a person acknowledges it, for the steps that must not proceed on any model's say-so. ([Human gates](#human-gates-a-pause-only-a-person-lifts))
 - **First-class agent UX.** `validate`/`describe` print a loop's shape before it spends a token; `--supervise`, `list`/`status`/`tail`, and the semantic `records` stream make a running fleet introspectable; a live TUI renders it. ([Supervise](#supervise-a-running-loop))
+
+Two things are deliberately out of scope. The heartbeat that fires a loop on a schedule belongs in cron, GitHub Actions, or a workflow engine, with a `loops` job inside. Acting in external tools is the agent's own job through its tools. `loops` is the body of the loop.
 
 ## Install
 
@@ -176,25 +182,6 @@ loop({
 ```
 
 With no `until`, a `pass` body ends the loop. Terminal status is one of `pass · fail · exhausted · aborted · paused` (CLI exit codes `0 · 1 · 2 · 130 · 75`). `paused` is a resumable stop: a hit limit ([Rate limits, quotas, and budgets](#rate-limits-quotas-and-budgets-wait-or-resume)) or an unacknowledged [human gate](#human-gates-a-pause-only-a-person-lifts).
-
-## What loops does differently
-
-A loop is easy to start and hard to keep on track. Four parts decide whether it earns its cost, and `loops` is built around them.
-
-| The hard part | In `loops` |
-| --- | --- |
-| **The gate.** Knowing the work is actually done, not just that the agent stopped. | A deterministic check (`commandSucceeds`) and a separate judge (`agentCheck`) in its own context, hardened with a k-of-n `quorum` and a geometric-mean rubric so one weak dimension sinks the verdict. The model that did the work never grades it. |
-| **Memory.** Carrying what was learned across a run without dragging a transcript along. | The git commit log is the memory: a structured handoff per milestone, read back before the next turn. No `STATE.md` the model is trusted to keep tidy, no vector store to sync. |
-| **Parallelism.** Running several agents without collisions on the same files. | `isolation: 'worktree'` gives each writer its own branch and worktree, landed back on pass with a `--no-ff` merge. |
-| **Hard stops.** Bounding a loop so it cannot run forever or empty your account. | `max` caps iterations, `budget` caps tokens (a non-retryable stop the engine calls refuse to cross), and `noProgress` stalls out a loop whose iterations reach no new state, with the evidence on the outcome. |
-
-Three things `loops` does that most loop libraries do not:
-
-- **Nesting is a primitive.** `loop()` and `dag()` both return a `Job`, so loops nest inside DAGs and DAGs nest inside loops, to any depth. Orchestrating many loops is one expression, not a separate harness.
-- **Memory survives a squash merge.** A squash merge flattens a branch's commit bodies into a list of subject lines and loses the reasoning. `pullRequestJob` and `mergeJob` keep the squashed commit body a consolidation of the branch.
-- **It runs against any model or tool.** The agent launch only touches a one-method `Engine`, so the same loop runs on Claude, on a different model, or on your own provider, unchanged.
-
-Two parts are deliberately out of scope. The heartbeat that fires a loop on a schedule belongs in cron, GitHub Actions, or a workflow engine, with a `loops` job inside. Acting in external tools is the agent's own job through its tools. `loops` is the body of the loop.
 
 ## What `loops` is (and isn't)
 
