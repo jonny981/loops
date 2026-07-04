@@ -41,6 +41,18 @@ export default loop({
 });
 ```
 
+## Features
+
+Seven parts that share one substrate (git and the workspace), one unit of work (the `Job`), and one control model (conditions and outcomes). Not separate tools bolted together, which is why they nest without a special case.
+
+- **Curated memory on git, no extra architecture.** Decisions persist to commit bodies deterministically as work converges and are read back deliberately (recent, selected, or consolidated). No vector store, no embeddings, no side database to sync. ([Ledger](#ledger-memory-built-on-git))
+- **Nested workflows from two primitives.** `loop()` and `dag()` both return a `Job`, so a loop inside a dag inside a loop composes to any depth. ([Composition](#composition-loops-and-dags))
+- **Multi-agent orchestration without context rot.** Every turn runs on a fresh context; a team coordinates through the workspace and the Ledger, never a ballooning transcript.
+- **Deterministic gates for repeatable workflows.** A real check (`commandSucceeds`) plus a judge (`agentCheck`), hardened by k-of-n `quorum` and a rubric that fails closed, so "done" is reproducible, not a self-report. ([Conditions](#conditions))
+- **Any model, any harness.** The agent launch touches only a one-method `Engine`, so a reviewer runs on a genuinely different model than the worker. The model that did the work never grades it. ([Engines](#engines-bring-any-model))
+- **Human-in-the-loop gates.** `humanGate` holds the run at a named checkpoint until a person acknowledges it, for the steps that must not proceed on any model's say-so. ([Human gates](#human-gates-a-pause-only-a-person-lifts))
+- **First-class agent UX.** `validate`/`describe` print a loop's shape before it spends a token; `--supervise`, `list`/`status`/`tail`, and the semantic `records` stream make a running fleet introspectable; a live TUI renders it. ([Supervise](#supervise-a-running-loop))
+
 ## Install
 
 ```bash
