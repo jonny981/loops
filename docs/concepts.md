@@ -1,9 +1,10 @@
 # Concepts — loops, memory, and the shapes of looping
 
-This is the conceptual map behind `loops`: the two problems it solves, the two
-faces of its memory, the three shapes a loop takes, how they nest, and where the
-memory helps versus where it is only overhead. The runnable tour is
-[`README.md`](../README.md); the measured evidence is
+This is the conceptual map behind `loops`: its memory (the two problems it solves,
+its two faces, the three shapes a loop takes, how they nest, and where it helps
+versus where it is only overhead), and how that memory sits inside the wider
+system, gates, orchestration, multi-model review, human gates, and introspection.
+The runnable tour is [`README.md`](../README.md); the measured evidence is
 [`bench/RESULTS.md`](../bench/RESULTS.md).
 
 ## The bet: fresh context, and a memory it reads
@@ -167,25 +168,53 @@ where things actually stand. Keeping evolving decisions coherent over a long hor
 what agentic work needs, and the axis a recall-the-conversation memory benchmark never
 tests.
 
-## Two halves: memory *and* enforcement
+## The whole system
 
-Memory is one half of `loops`. The other is **enforcement of how the graph
-executes**: gates that loop until verified (`commandSucceeds` + `agentCheck`),
-k-of-n `quorum` judging, the dimensional gate that fails closed, retry/backoff,
-budget caps, deterministic DAG control flow, worktree isolation, and bounded
-cross-stage **feedback**. A later node sends work back to an earlier one
-(`kickback`), the dag re-runs that subgraph with the objection threaded in, capped
-so it provably terminates. A feedback cycle is a loop boundary, not a backward
-edge: the graph stays acyclic and the convergence is what ends it. See
+Memory is one pillar of `loops`, not the whole of it. The primitives compose into
+a cohesive system, each part covering a failure mode the others cannot:
+
+- **Deterministic, curated memory, no added architecture.** Git is the substrate;
+  the loop persists curated decisions to commit bodies deterministically as work
+  converges, and reads them back deliberately (recent, selected, or consolidated).
+  No vector store, no embeddings, no side database to sync or let go stale.
+- **Complex nested workflows from simple primitives.** `loop()` and `dag()` both
+  return a `Job`, so a loop inside a dag inside a loop is ordinary composition to
+  any depth, not a bespoke harness.
+- **Multi-agent orchestration without context rot.** Every turn runs on a fresh
+  context; a team coordinates through the workspace and the Ledger, so a long,
+  many-agent run never drags a ballooning transcript.
+- **Deterministic gates for repeatable workflows.** A gate pairs a real check
+  (`commandSucceeds`) with a judge (`agentCheck`), hardened by k-of-n `quorum` and
+  a dimensional rubric that fails closed, so "done" is reproducible, not a
+  self-report. Retry, backoff, and budget caps bound the run.
+- **First-class agent UX.** `validate`/`describe` print a loop's shape before it
+  spends a token; `--supervise` plus `list`/`status`/`tail` and the semantic
+  `records` stream make a running fleet introspectable; the TUI renders it live.
+  Bounded cross-stage **feedback** (`kickback`) sends work back to an earlier node
+  with the objection threaded in, capped so it provably terminates.
+- **Any model, any harness.** The agent launch touches only a one-method `Engine`,
+  so a reviewer can run on a genuinely different model than the worker. The model
+  that did the work never grades it.
+- **Human-in-the-loop gates.** `humanGate` holds the run at a named checkpoint
+  until a person acknowledges it, for the steps that must not proceed on any
+  model's say-so.
+
+These are not separate tools bolted together. They share one substrate (git and
+the workspace), one unit of work (the `Job`), and one control model (conditions and
+outcomes), which is why the nesting above needs no special case. A feedback cycle
+is a loop boundary, not a backward edge: the graph stays acyclic and convergence is
+what ends it. See
 [patterns.md](patterns.md#feedback--a-later-stage-sends-work-back-to-an-earlier-one).
 
-This distinction matters when comparing approaches. Pasting the git log into a
-prompt replicates the *memory* half cheaply (on a short log it ties `loops`). It
-does not replicate the *enforcement* half: to match "classify → fork a worktree →
-run the right shape of gated loop → land back → remember across an indefinite
-stream," you do not write a prompt, you rebuild `loops`. The memory is the
-commodity; the enforcement of convergence over a nested, long-horizon structure is
-the part that is hard to hand-roll.
+This is what makes "why not just paste the git log into a prompt?" the wrong
+question. A dump imitates *recall* on a short history, but it is neither of the
+things that make the Ledger memory: it has no **write** discipline (it takes
+whatever was committed, curated or not) and no **read** discipline (it injects
+everything, which stops scaling the moment the log outgrows the window). And it
+replicates none of the rest of the system: to match "classify → fork a worktree →
+run the right shape of gated loop → land back → stay coherent across an indefinite
+stream," you do not write a prompt, you rebuild `loops`. Nobody runs an agent off a
+pasted git log; it was never the comparison.
 
 ## Where it helps — the scorecard
 
