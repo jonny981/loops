@@ -1,7 +1,6 @@
 /**
- * A tiny synchronous fan-out so multiple consumers (stats, the TUI, a JSON
- * reporter) can each observe the same event stream. Not worth a dependency —
- * it is six lines and never the gnarly part.
+ * Synchronous fan-out so multiple consumers (stats, the TUI, a JSON reporter)
+ * can each observe the same event stream.
  */
 
 import type { LoopEvent } from '../core/types.ts';

@@ -1,7 +1,7 @@
 /**
  * The `loops` CLI. Two ways to define a run:
- *   1. a definition file that default-exports a `Job`  — full power, nesting;
- *   2. flags (`--prompt`, `--until`, `--review`, …)    — the standard loop.
+ *   1. a definition file that default-exports a `Job` (supports nesting);
+ *   2. flags (`--prompt`, `--until`, `--review`, …) build the standard loop.
  *
  * Output mode: Ink TUI by default (a TTY), `--no-tui` for line logs, `--json`
  * for an NDJSON event stream. Ctrl-C / `q` aborts cleanly and still summarises.
@@ -97,9 +97,9 @@ async function loadJob(file: string): Promise<{ job: Job; title: string }> {
     );
   }
   // The bin registers tsx's loader globally, so this plain import transforms a
-  // `.loop.ts` wherever it lives — inside this package or in a consumer repo that
-  // has `loops` installed. (A scoped `tsImport` only covers this package's tree,
-  // which is why an out-of-tree recipe used to die on `Unexpected token 'export'`.)
+  // `.loop.ts` wherever it lives: inside this package or in a consumer repo that
+  // has `loops` installed. A scoped `tsImport` only covers this package's tree,
+  // which is why an out-of-tree recipe used to fail on `Unexpected token 'export'`.
   let mod: Record<string, unknown>;
   try {
     mod = (await import(pathToFileURL(resolved).href)) as Record<string, unknown>;
@@ -283,11 +283,10 @@ async function execute(
 }
 
 /**
- * Reconstruct a ready-to-paste resume command from the invocation, when there is
- * something to resume from: a checkpoint path. The resumed run reads warm state
- * from the checkpoint, so it picks up where the limit stopped it. Returns
- * `undefined` when no checkpoint is configured — a run with no checkpoint can
- * still pause cleanly, but it has no warm state to resume.
+ * Reconstruct a ready-to-paste resume command from the invocation. The resumed
+ * run reads state from the checkpoint, so it picks up where the limit stopped it.
+ * Returns `undefined` when no checkpoint is configured: such a run can still pause
+ * cleanly, but it has no state to resume.
  */
 function buildResumeCommand(
   file: string | undefined,
@@ -418,7 +417,7 @@ function formatSemanticRecord(record: SemanticRunRecord): string {
 
 // The package version, read at runtime rather than hardcoded (a literal here
 // goes stale on every release). Both homes of this module sit one level below
-// the package root — `src/` under tsx, `dist/` when built — so '../package.json'
+// the package root (`src/` under tsx, `dist/` when built), so '../package.json'
 // resolves to the same file from either.
 const { version: PKG_VERSION } = createRequire(import.meta.url)(
   '../package.json',
@@ -452,7 +451,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--worker-model <id>', 'model for the worker job')
     .option(
       '--validator-model <id>',
-      'small model for agent-validated conditions',
+      'cheap model for agent-validated conditions',
     )
     .option('--reviewer-model <id>', 'model for the review job')
     .option('-n, --max <n>', 'max iterations')
@@ -631,8 +630,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         r.live.iteration
           ? `  at:      ${r.live.path.join(' › ')} (iteration ${r.live.iteration})`
           : '',
-        // Gate reasons and outcome summaries quote judge/agent text — the most
-        // model-influenced strings in this output — so they get the same
+        // Gate reasons and outcome summaries quote judge/agent text, the most
+        // model-influenced strings in this output, so they get the same
         // terminal sanitisation as the blocker line below.
         g
           ? `  gate:    ${g.which} ${g.met ? 'met' : 'not met'}${g.confidence != null ? ` @ ${g.confidence.toFixed(2)}` : ''}: ${toLine(g.reason)}`
@@ -777,8 +776,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         return;
       }
       for (const record of filtered) {
-        // Semantic records carry outcome summaries and revision reasons —
-        // model-influenced text — so this seam sanitises like the others.
+        // Semantic records carry outcome summaries and revision reasons
+        // (model-influenced text), so this path sanitises like the others.
         process.stdout.write(`${toLine(formatSemanticRecord(record))}\n`);
       }
     });

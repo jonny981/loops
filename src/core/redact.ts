@@ -21,15 +21,15 @@ export function redactSecrets(text: string): string {
 /**
  * Scrub exact occurrences of injected env values from captured output. Shape
  * patterns cannot catch a pinned credential that doesn't look like one (a hex
- * token in an innocently named var, a password inside a `postgres://` URL),
- * but at every capture site the injected record is in scope — so its values
- * are replaced verbatim. Two carve-outs keep diagnostics useful: values under
- * 8 chars (a port, a flag — too short to be a credential, too common to
- * scrub), and origin-only http(s) URLs (a `BASE_URL` is how a gate names the
- * preview it failed against). The URL carve-out is host-only: anything with a
- * path, query, or fragment is scrubbed, because that is where URL-borne
- * credentials live (a webhook path, a `?token=` link, a presigned signature),
- * and a URL carrying userinfo (`@`) is scrubbed too.
+ * token in an innocently named var, a password inside a `postgres://` URL), but
+ * at every capture site the injected record is in scope, so its values are
+ * replaced verbatim. Two carve-outs keep diagnostics useful: values under 8
+ * chars (a port or flag, too short to be a credential and too common to scrub),
+ * and origin-only http(s) URLs (a `BASE_URL` names the preview a gate failed
+ * against). The URL carve-out is host-only: anything with a path, query, or
+ * fragment is scrubbed, because that is where URL-borne credentials live (a
+ * webhook path, a `?token=` link, a presigned signature), and a URL carrying
+ * userinfo (`@`) is scrubbed too.
  */
 export function redactEnvValues(
   text: string,
@@ -48,12 +48,12 @@ export function redactEnvValues(
 }
 
 /**
- * The one composition for captured text that flows into persisted records
- * (events, `--record` files, error messages, outcome summaries): the injected
- * env values verbatim, then the shape patterns, then the cap. Redaction always
- * runs on the FULL text, before the cut, so a secret split at the truncation
- * boundary cannot survive — every capture site routes through here rather than
- * hand-rolling the order. `max` omitted = no cap.
+ * Composition for captured text that flows into persisted records (events,
+ * `--record` files, error messages, outcome summaries): the injected env values
+ * verbatim, then the shape patterns, then the cap. Redaction always runs on the
+ * FULL text, before the cut, so a secret split at the truncation boundary cannot
+ * survive; every capture site routes through here rather than hand-rolling the
+ * order. `max` omitted = no cap.
  */
 export function scrubCapture(
   text: string,

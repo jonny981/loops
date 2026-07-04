@@ -1,15 +1,14 @@
 /**
- * Optional, deliberately-thin durability for a run. This is NOT a durable
- * execution engine (mid-graph replay is an orchestration concern — reach for
- * Temporal/Mastra if you need it). It does two small things:
+ * Optional durability for a run. This is not a durable execution engine;
+ * mid-graph replay is an orchestration concern (use Temporal/Mastra for that).
+ * It does two things:
  *
- *   - `makeRecorder(path)` — append every structured event as one JSON line: a
- *     readable run record. Token-delta noise is excluded so the record stays
- *     useful. This is the observability sink.
- *   - `makeCheckpointer(path, state)` — snapshot the shared run `state` at each
+ *   - `makeRecorder(path)` appends every structured event as one JSON line, a
+ *     readable run record. Token-delta noise is excluded.
+ *   - `makeCheckpointer(path, state)` snapshots the shared run `state` at each
  *     loop/dag/job boundary. `loadCheckpoint(path)` restores it on the next run.
  *
- * The contract is "the workspace is the state": real progress lives on disk
+ * The contract is that the workspace is the state: real progress lives on disk
  * (files, git), and the checkpoint restores the loop's shared scratchpad so a
  * re-run continues rather than starting cold. The body decides what to record in
  * `ctx.state` and how to act on it when resumed.
@@ -25,7 +24,7 @@ import { dirname } from 'node:path';
 
 import type { LoopEvent } from '../core/types.ts';
 
-/** High-frequency transcript deltas — excluded so the record stays useful. */
+/** High-frequency transcript deltas, excluded from the record. */
 const NOISE: ReadonlySet<LoopEvent['kind']> = new Set([
   'engine:text',
   'engine:thinking',
@@ -73,7 +72,7 @@ export function makeCheckpointer(
 /**
  * Write the shared run state to a checkpoint file immediately, outside the event
  * stream. Used to guarantee a paused run's state is durable before exit, even if
- * no boundary event flushed it. Best-effort — never throws.
+ * no boundary event flushed it. Best-effort; never throws.
  */
 export function flushCheckpoint(
   path: string,

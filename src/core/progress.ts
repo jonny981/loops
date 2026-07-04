@@ -1,9 +1,9 @@
 /**
- * No-progress (stall) detection — the third hard stop, alongside `max` and
+ * No-progress (stall) detection: the third hard stop, alongside `max` and
  * `budget`. `max` bounds how many attempts a loop gets and `budget` bounds what
- * they cost; neither can tell "slow but real convergence" from "the same failure
- * five turns running". This module supplies that sensor, so a doomed loop exits
- * at iteration N+window instead of burning everything it was given.
+ * they cost; neither can tell slow-but-real convergence from the same failure
+ * repeating. This module detects the latter, so a stalled loop exits at
+ * iteration N+window instead of running to its cap.
  *
  * The decision rule is NOVELTY, not change. An iteration makes progress when it
  * reaches a state this run has never seen:
@@ -54,7 +54,7 @@ export interface NoProgressConfig {
   ) => string | number | undefined | Promise<string | number | undefined>;
   /**
    * Read the workspace fingerprint each iteration (a few git subprocesses).
-   * Default true; set false when a custom `signal` is the only honest channel.
+   * Default true; set false when a custom `signal` is the only channel.
    */
   workspace?: boolean;
   /**

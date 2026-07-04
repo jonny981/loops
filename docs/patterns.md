@@ -1,14 +1,13 @@
 # Patterns — the loop archetypes as recipes
 
-`loops` deliberately ships **no** `converge()` / `sweep()` / `tend()` helpers — the
+`loops` deliberately ships **no** `converge()` / `sweep()` / `tend()` helpers: the
 archetypes are *patterns*, composed from the primitives, not API surface. These are
 the canonical recipes, named with the [concepts](concepts.md) terminology, so you
-can copy one and fill it in. The whole point: the core stays tiny and these stay
-yours to shape.
+can copy one and fill it in. The core stays minimal and these stay yours to shape.
 
-## Converge — retry one task until an honest gate passes
+## Converge — retry one task until a gate passes
 
-One hard target, a high quality bar, likely many attempts before true convergence.
+One hard target, a high quality bar, likely many attempts before convergence.
 The Ledger lets each attempt recover from the last one's dead ends.
 
 ```ts
@@ -22,7 +21,8 @@ export const build = loop({
     ground: true, // read prior attempts' why — don't re-walk a dead end
     prompt: (c) => `Attempt ${c.iteration}: make the feature pass its tests.`,
   }),
-  // Honest convergence: the tests really pass AND a judge agrees it matches intent.
+  // The gate combines a deterministic check with a judge: the tests really
+  // pass AND a judge agrees it matches intent.
   until: [
     commandSucceeds('npm', ['test']),
     agentCheck({ question: 'Does the work match the spec, with no shortcuts?', threshold: 0.85 }),
@@ -56,7 +56,7 @@ export function sweep(items: { id: string; name: string }[]) {
 
 An indefinite process that discovers the next unit each turn. The horizon is
 unbounded, so reach for **retrieval** (not recent-N) and **consolidation** to stay
-coherent — don't re-pick a done unit, keep prioritisation straight, terminate when
+coherent: don't re-pick a done unit, keep prioritisation straight, terminate when
 empty.
 
 ```ts
@@ -83,8 +83,8 @@ export const triage = loop({
 
 ## Tend ∘ Converge — dispatch each ticket to the right shape of sub-loop
 
-The real autonomous system: a Tend loop that evaluates each ticket, classifies it,
-and dispatches to the right sub-loop shape — each in its own worktree so parallel
+The full autonomous system: a Tend loop that evaluates each ticket, classifies it,
+and dispatches to the right sub-loop shape, each in its own worktree so parallel
 tickets never collide. Nesting is free because a `loop` and a `sweep` are both
 `Job`s; `isolated()` is the per-dispatch concurrency boundary.
 
@@ -123,7 +123,7 @@ sub-loops ground on their own **scratch files** (working memory + handoff). See
 ## Feedback — a later stage sends work back to an earlier one
 
 Real teams loop back: marketing reads the build and tells engineering the contract
-drifted. A feedback cycle is a **loop boundary, not a backward edge** — the graph
+drifted. A feedback cycle is a **loop boundary, not a backward edge**: the graph
 stays acyclic, the cycle lives in a bounded re-run, and because every feedback cycle
 in a working org *converges* (the objection is addressed or a cap is hit), it
 terminates. There are two granularities.
@@ -154,7 +154,7 @@ export const ship = dag({
 
 You set how far a kickback propagates by *which* loop holds the gate: the delivery
 loop sends work back to `spec`; an outer loop wrapping more stages sends it back
-further. The cost: a coarse re-run repeats the **whole** body — a nit on engineering
+further. The cost: a coarse re-run repeats the **whole** body, so a nit on engineering
 also re-runs spec and testing. Grounding makes that cheap (each re-run sees its prior
 committed work), not free.
 
@@ -198,15 +198,15 @@ export const ship = dag({
 The target must be an **ancestor** (a kickback to a non-ancestor, a disallowed
 target, or one past budget is rejected and logged via a `dag:kickback` event, never
 silently dropped). The default `kickback(...)` status is `fail`, so if the budget is
-spent before the work converges, the dag fails honestly rather than shipping
-unaddressed feedback. Same idea as Tier 1's review — a downstream check sends work
-back, bounded, with the feedback threaded in — at a finer grain. The runnable offline
-version is [`examples/feedback.loop.ts`](../examples/feedback.loop.ts).
+spent before the work converges, the dag fails rather than shipping unaddressed
+feedback. Same idea as Tier 1's review — a downstream check sends work back, bounded,
+with the feedback threaded in — at a finer grain. The runnable offline version is
+[`examples/feedback.loop.ts`](../examples/feedback.loop.ts).
 
-## Ship via PR — keep the squash-merge body honest
+## Ship via PR — keep the squash-merge body intact
 
 loops' memory *is* the commit log: each milestone commits a structured "way" welded to
-its diff. A **squash merge** threatens that — it collapses every milestone body on the
+its diff. A **squash merge** threatens that. It collapses every milestone body on the
 branch into one commit whose body GitHub defaults to a list of subject lines, so the
 reasoning is lost from the base branch's history. The fix reuses the fold loops already
 has: a PR body that is `consolidate`d from the branch's commit bodies, kept current, and
@@ -231,7 +231,7 @@ export const ship = sequence('ship',
 ```
 
 `pullRequestJob` is **idempotent create-or-update**: run it after each milestone (or at
-convergence) and the PR description tracks the branch — that is what makes the eventual
+convergence) and the PR description tracks the branch, which is what makes the eventual
 squash body correct. Two ways to gate the merge for "when CI passes":
 
 - `mergeJob({ auto: true })` → `gh pr merge --squash --auto` (non-blocking; GitHub lands it
@@ -242,5 +242,5 @@ squash body correct. Two ways to gate the merge for "when CI passes":
 `mergeJob` writes the synthesis as the squash body directly, so it survives the squash
 regardless of the repo's merge settings; body-only (drop `mergeJob`, let a human merge)
 instead relies on the repo's squash default being "PR title and description". The host is the
-injectable `Forge` seam (gh-backed by default), so the whole flow runs offline against a
+injectable `Forge` interface (gh-backed by default), so the whole flow runs offline against a
 `MockForge` — see [`examples/ship-pr.loop.ts`](../examples/ship-pr.loop.ts).

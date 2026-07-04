@@ -1,15 +1,15 @@
 /**
  * The Environment provider — the third axis, after Engine (where the agent
  * thinks) and Workspace (where the code lives). Environment is where the code
- * RUNS: local services, or a per-branch cloud preview. It is what lets the gate
- * be fully honest — "done" can mean "the e2e suite passes against the running
+ * runs: local services, or a per-branch cloud preview. It lets the gate test the
+ * running thing, so "done" can mean "the e2e suite passes against the running
  * preview", not just "unit tests pass against static files on disk".
  *
- * Like `Engine`, this is only an interface. loops owns the seam and the
+ * Like `Engine`, this is only an interface. loops owns the interface and the
  * lifecycle binding; the actual adapter (sst, Vercel, Docker, …) is
- * provider-specific and lives in the CONSUMER's loop definition, next to the
- * deploy config it wraps. loops never takes a dependency on a deploy tool. Bring
- * your own in a few lines: implement `up`, return a handle.
+ * provider-specific and lives in the consumer's loop definition, next to the
+ * deploy config it wraps. loops never takes a dependency on a deploy tool.
+ * Implement `up`, return a handle:
  *
  *   const sstEnv: Environment = {
  *     name: 'sst',
@@ -32,7 +32,7 @@ export interface EnvHandle {
   /** Addressable base URL (a preview deployment, or a local server), if any. */
   readonly url?: string;
   /**
-   * Variables injected into gate commands, judge calls, and agent turns — e.g.
+   * Variables injected into gate commands, judge calls, and agent turns, e.g.
    * `BASE_URL`, `DATABASE_URL`. This is how `commandSucceeds('playwright', …)`
    * reaches the running preview.
    */

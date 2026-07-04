@@ -450,7 +450,7 @@ export function loop(config: LoopConfig): Job {
             return finish({ ...reviewOutcome }, iteration);
           }
           // Decide whether this failing review will actually re-enter the loop
-          // before emitting, so the event carries an honest accept/reject bit
+          // before emitting, so the event carries an accurate accept/reject bit
           // (a downstream records consumer must not read a dropped review as
           // acted-on). Re-entry is blocked by the restart bound or by having no
           // iteration left; `consecutiveReviewFails` is still pre-increment here.

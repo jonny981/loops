@@ -1,10 +1,10 @@
 # loops — agent guide
 
-`loops` is a small, nestable job primitive for driving AI agents in **convergence loops**: do a bit of work with a fresh context, check whether the work is *actually* done against a gate you define, and if not, go again. The user-facing tour is `README.md`; this file is the operating guide for an agent working *on* the library.
+`loops` is a nestable job primitive for driving AI agents in **convergence loops**: do a bit of work with a fresh context, check whether the work is *actually* done against a gate you define, and if not, go again. The user-facing tour is `README.md`; this file is the operating guide for an agent working *on* the library.
 
 `AGENTS.md` is a symlink to this file.
 
-## Mental model (the one idea everything hangs off)
+## Mental model
 
 There is one universal unit of work and two supporting types:
 
@@ -18,7 +18,7 @@ The failure policy rides the `Outcome` status. In a dag, a failed **required** p
 
 Two design tenets that must survive every edit:
 
-1. **Honest convergence.** "Ask the model if it is done" is the trap the library exists to avoid. A gate combines a deterministic signal (`commandSucceeds` — the tests really pass) with a separate judge (`agentCheck`). Hardening lives in `quorum` (k-of-n jury) and the judge's `dimensions` (opens on the geometric mean, so one weak dimension drags the verdict down). `toVerdict` treats a missing confidence as `0` (fail-closed). Never reintroduce a "yes ⇒ 1.0" default.
+1. **A real done-check.** "Ask the model if it is done" lets the model grade its own homework. A gate combines a deterministic signal (`commandSucceeds`, the tests really pass) with a separate judge (`agentCheck`). Hardening lives in `quorum` (k-of-n jury) and the judge's `dimensions` (opens on the geometric mean, so one weak dimension drags the verdict down). `toVerdict` treats a missing confidence as `0` (fail-closed). Never reintroduce a "yes ⇒ 1.0" default.
 2. **The workspace is the state.** Progress accumulates on disk (files, git), so each iteration starts clean. The loop carries only thin bookkeeping. This is why the library deliberately does not do durable mid-run replay; that is an orchestration concern (embed a loops job inside Temporal/LangGraph/Mastra if you need it).
 
 ## Source map
@@ -69,7 +69,7 @@ src/core/
   consolidate.ts      consolidate/consolidateJob/compactLedger/composeCommitBody —
                       decision-preserving folds of the log
   merge.ts            mergeSynthesis: an agent resolves the conflict + writes a unified way
-  forge.ts            Forge seam (PR host): GhForge (gh CLI) + MockForge, arg-builders
+  forge.ts            Forge interface (PR host): GhForge (gh CLI) + MockForge, arg-builders
   pr.ts               pushJob / pullRequestJob / mergeJob — keep the squash body a
                       consolidation of the branch so the Ledger survives a squash merge
   isolated.ts         isolated(job): per-dispatch worktree fork + land-back (dynamic Tend)
@@ -90,8 +90,8 @@ src/engines/
   agent-sdk.ts        @anthropic-ai/claude-agent-sdk; the only engine honoring
                       minToolIntervalMs (it mediates tool calls in-process)
   anthropic-api.ts    @anthropic-ai/sdk (token streaming; cheapest for judges)
-  codex.ts            `codex exec` subprocess — a genuinely different model behind the
-                      same seam; read-only unless bypassPermissions
+  codex.ts            `codex exec` subprocess — a different model behind the
+                      same interface; read-only unless bypassPermissions
   message-map.ts      shared stream-json → EngineStreamEvent mapping (SDK + claude CLI)
   mock.ts             scripted, offline — for tests/examples
   registry.ts         name → Engine resolution (lazy factories)
@@ -105,7 +105,7 @@ src/runtime/
                       stream (dispatch/completion/surfacing/revision) behind `records`
   hub.ts, signals.ts  event fan-out + abort plumbing
 src/env/
-  environment.ts      the Environment seam (up/down, EnvHandle) — where the code runs
+  environment.ts      the Environment interface (up/down, EnvHandle) — where the code runs
   command.ts          commandEnvironment: the generic deploy/outputs/destroy CLI factory
   sst.ts, docker.ts   thin presets over commandEnvironment (per-branch stage / compose project)
   mock.ts             scripted, offline environment — for tests/examples
@@ -117,7 +117,7 @@ tests/                vitest
 
 ## Develop
 
-No build step to develop: [`tsx`](https://github.com/privatenumber/tsx) runs the TypeScript source directly from a checkout (tests, typecheck, examples, and the bin all execute `src/` with no compile). The **published** package is built — `npm run build` (tsup) compiles `src/` to `dist/` (ESM + `.d.ts`), and its `exports`/`main`/`types` point at `./dist`. So `src/api.ts` is the seam you edit; `dist/api.js` is what an installed consumer imports.
+No build step to develop: [`tsx`](https://github.com/privatenumber/tsx) runs the TypeScript source directly from a checkout (tests, typecheck, examples, and the bin all execute `src/` with no compile). The **published** package is built — `npm run build` (tsup) compiles `src/` to `dist/` (ESM + `.d.ts`), and its `exports`/`main`/`types` point at `./dist`. So `src/api.ts` is the entry point you edit; `dist/api.js` is what an installed consumer imports.
 
 ```bash
 npm test          # vitest — offline + deterministic via the mock engine
@@ -138,11 +138,11 @@ The authoring guide an agent reads to compose a loop is `skills/author-loop/SKIL
 
 ## Consumption
 
-Consumable two ways: as a published npm package (`npm i @loops-adk/core`, importing the built `dist` via the `.` export) or as a **git submodule** (source import via `tsx`, no build). Either way a parent recipe imports the public surface (`@loops-adk/core`, which is `src/api.ts`) and registers its own engines/conditions; it never reaches into `src/core` internals. Keep `src/api.ts` the single seam.
+Consumable two ways: as a published npm package (`npm i @loops-adk/core`, importing the built `dist` via the `.` export) or as a **git submodule** (source import via `tsx`, no build). Either way a parent recipe imports the public surface (`@loops-adk/core`, which is `src/api.ts`) and registers its own engines/conditions; it never reaches into `src/core` internals. Keep `src/api.ts` the single entry point.
 
 ## Conventions
 
-- Keep the core small; that smallness is the point. Resist adding configuration or node types that are not pulling their weight.
+- Keep the core focused. Resist adding configuration or node types that are not pulling their weight.
 - Match the surrounding style. Conditions are pure where they can be; side effects live in engines and the runner.
 - Evergreen language in all docs and comments (no "currently", "now", "recently"); use versions or explicit references where timing matters.
 - Tests run offline against the mock engine. A change to convergence logic needs a deterministic test, not a live model call.

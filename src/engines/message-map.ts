@@ -1,10 +1,10 @@
 /**
  * Shared mapping from the Claude stream-json message schema to our neutral
  * `EngineStreamEvent`s. Both the Agent SDK and the `claude` CLI emit this same
- * schema, so the two adapters share this one function and stay tiny.
+ * schema, so the two adapters share this one function.
  *
- * The boundary with an external schema is the right place for a little `any`:
- * we read defensively so a minor upstream shape change doesn't crash a run.
+ * The boundary with an external schema is where `any` is warranted: we read
+ * defensively so a minor upstream shape change doesn't crash a run.
  */
 
 import type { EngineEventSink, Usage } from './engine.ts';
@@ -101,7 +101,7 @@ export function mapMessage(
     }
     case 'result': {
       // `subtype` is the result *classification* (success / error_max_turns …),
-      // not the model stop reason — that is the sibling `stop_reason` field.
+      // not the model stop reason; that is the sibling `stop_reason` field.
       if (typeof msg.stop_reason === 'string') acc.stopReason = msg.stop_reason;
       const usage = msg.usage as AnyRecord | undefined;
       if (usage) {

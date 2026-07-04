@@ -50,7 +50,7 @@ export {
   kickback,
   revisionRequest,
   // The handoff contract: parse a grounded turn's reply into the work (before
-  // the marker) and the handoff (after it) — the same split the auto-capture
+  // the marker) and the handoff (after it), the same split the auto-capture
   // and an `outcome` mapper's `parts` argument use.
   parseHandoff,
   HANDOFF_MARK,
@@ -147,8 +147,8 @@ export {
   type MergeSynthesisResult,
 } from './core/merge.ts';
 
-// The Forge — the PR host seam (gh-backed by default), and PR jobs that keep a
-// PR body a faithful synthesis of the branch so the Ledger survives a squash merge
+// The Forge: the PR host interface (gh-backed by default), and PR jobs that keep
+// a PR body a synthesis of the branch so the Ledger survives a squash merge
 export {
   isForge,
   GhForge,
@@ -244,7 +244,7 @@ export {
 export { LoopError, type LoopErrorCode } from './core/errors.ts';
 export { Budget, type BudgetConfig } from './core/budget.ts';
 
-// Engines (the drop-in seam)
+// Engines (the drop-in interface)
 export type {
   Engine,
   EngineRef,
@@ -266,7 +266,7 @@ export {
   type EnvHandle,
 } from './env/environment.ts';
 export { MockEnvironment, type MockEnvOptions } from './env/mock.ts';
-// Env-var pinning for a job subtree — distinct from the Environment seam:
+// Env-var pinning for a job subtree, distinct from the Environment interface:
 // `withEnv` pins vars over a scope; an Environment brings a stack up and owns
 // its lifecycle (an overlay has no `down()`)
 export { withEnv } from './core/env-overlay.ts';

@@ -1,5 +1,5 @@
 /**
- * Tiny shared text helpers, so the same trim/truncate logic isn't re-implemented
+ * Shared text helpers, so the same trim/truncate logic isn't re-implemented
  * (subtly differently) across modules.
  */
 

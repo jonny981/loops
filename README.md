@@ -14,37 +14,13 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
 </p>
 
-`loops` is a small, nestable library for running an agent in a convergence loop. The loop finds the work, hands it to an agent, checks the result, records what it learned, and goes again until a gate _you_ define says the work is finished. You write the loop once and it drives the agent, rather than prompting the agent by hand. Compose loops and DAGs both ways, run them against any model behind a one-method `Engine`, and watch a run in a live terminal UI.
+`loops` is a nestable library for running an agent in a convergence loop. The loop finds the work, hands it to an agent, checks the result, records what it learned, and goes again until a gate _you_ define says the work is finished. You write the loop once and it drives the agent, rather than prompting by hand. Compose loops and DAGs both ways, run them against any model behind a one-method `Engine`, and watch a run in a live terminal UI.
 
-Every iteration runs with a **fresh context**, so a long run never rots. Progress accumulates in **git, not the chat transcript**: the agent forgets between turns, the repository does not. The loop stops only when an **honest gate** clears, a deterministic check (the tests genuinely pass) alongside a separate judge in its own context, so the model that did the work is never the one that grades it. The gate is the core idea. It keeps a loop from declaring itself finished on a half-built job and spending tokens with nothing to show.
+Every iteration runs with a **fresh context**, so a long run never rots. Progress accumulates in **git, not the chat transcript**: the agent forgets between turns, the repository does not. The loop stops only when the gate clears: a deterministic check (the tests genuinely pass) alongside a separate judge in its own context, so the model that did the work is never the one that grades it. That gate is what keeps a loop from declaring itself finished on a half-built job.
 
 Where most "agent memory" recalls a _conversation_, this keeps your _decisions_ consistent across long work. No vector database, no embeddings, no index to sync or let go stale. **Git is the memory.**
 
-## The fastest proof
-
-A downstream agent had to preserve one upstream decision: snapshots must start
-with the exact wire tag `SSv1|`. That decision lived only in a git commit body,
-not in the source files or the downstream task prompt. The commit was not just a
-fact store; it was the thread back through the journey, what was decided, why it
-was decided, and what downstream work had to honour.
-
-| Runner | What it could read | Result |
-| --- | --- | --- |
-| Memoryless graph | files plus task prompt | 0/10 preserved the contract |
-| Loops Ledger | gated commit bodies plus grounding | 9/10 preserved the contract |
-| Raw git dump | full git log pasted into every prompt | 10/10 on a toy log, not a real-repo operating mode |
-
-That is the honest shape of the claim. Loops is not just `git log`: it is the
-deterministic enforcement layer that makes agents write useful commit bodies when
-work converges, then the grounding layer that reads those verified reasons back
-into later fresh contexts. The value is not bare recall. A fresh agent can pull
-on one thread and reconstruct how and why the repository got here. Full-log dump
-is a useful sanity check on tiny histories, but on a repo with significant
-history it is context rot and cost.
-
-```bash
-npm run bench:compare
-```
+A loop is a single file:
 
 ```ts
 import { loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
@@ -65,8 +41,6 @@ export default loop({
 });
 ```
 
----
-
 ## Install
 
 ```bash
@@ -81,90 +55,6 @@ loops run your-feature.loop.ts         # run it (live TUI; add --no-tui or --jso
 ```
 
 The full CLI, the flags-only mode (no file), and the offline demo are in [Quick start](#quick-start) below.
-
-## A whole engineering team, defined as files
-
-The primitives compose into something bigger than a single loop: an **engineering team** that builds a multi-component service, holds it coherent across components, and converges only when each piece clears a bar one agent can't impose on itself: a report-only **review battery** of distinct lenses, including a genuinely different model.
-
-```ts
-// Five report-only lenses, each a markdown persona that closes with `<confidence>N%</confidence>`.
-// The adversarial lens runs on a DIFFERENT model (codex / GPT-5): any reviewer, any model.
-const battery = (name) =>
-  reviewPanel(name, [
-    ['adversarial', { engine: 'codex' }], // genuinely different priors
-    ['security',    { model: 'opus' }],
-    ['correctness', { model: 'sonnet' }],
-    ['conformance', { model: 'opus' }],
-    ['simplicity',  { model: 'haiku' }],
-  ]);
-
-const engineer = (name) =>
-  loop({
-    name,
-    body: agentJob({ agent: engineerFor(name), prompt: brief(name), ground: true }),
-    until: commandSucceeds('node', [`test-${name}.mjs`]), // deterministic truth
-    review: battery(name), // unanimous; a failing review hands its findings to the next iteration
-    commit: true,
-    max: 8,
-  });
-
-export default dag({
-  name: 'build-service',
-  nodes: {
-    store:     engineer('store'),
-    api:       { needs: ['store'],                job: engineer('api') },
-    serialize: { needs: ['store'], isolate: true, job: engineer('serialize') }, // parallel worktree
-    client:    { needs: ['api', 'serialize'],     job: engineer('client') },
-  },
-  isolation: 'worktree',
-});
-```
-
-The `dag` is the manager (toposort + dispatch). Each node is a Converge loop: the engineer builds to its `test` (`until`), then the **review battery** runs in the `review` slot: five report-only lenses with near-disjoint blind spots, each judging the actual source against the recorded contracts and closing with a `<confidence>N%</confidence>`. Because a reviewer is just an `AgentDef` and `agentCheck` takes an `engine` and `model`, **any reviewer runs on any model**: the adversarial lens on codex (GPT-5) for a true second-model signal, the rest spread across Claude. A failing review is not a dead end: its findings thread into the next iteration as `lastReview`, so the engineer fixes concrete concerns: the build → review → fix-up loop, with no human in it. `isolate` runs engineers in parallel worktrees that land back on pass; `ground: true` carries the contracts only `store` decides (stable ids, the `SSv1|` wire tag) to the engineers and reviewers downstream.
-
-A single autonomous agent grades its own homework. This team **structurally cannot**: "done" means past an independent, multi-lens, multi-model review battery it never applies to itself. That enforced honest-convergence gate is the deepest idea here; memory is one free pillar underneath it. The whole team (engineers and reviewers) is a folder of markdown personas plus the wiring above, runnable in [`examples/build-service.loop.ts`](examples/build-service.loop.ts).
-
-## Why loops?
-
-Agents rarely nail it in one shot. The reliable pattern is a **convergence loop**: do a bit of work, check whether you're _actually_ done, and if not, go again. Two things make or break it, and `loops` is built around both:
-
-- **A fresh context every turn.** Long-running agents rot as their history balloons. `loops` runs each iteration with a clean slate and lets progress accumulate where it belongs: in the **workspace** (files, git commits), not in a chat transcript. The loop carries only thin bookkeeping.
-- **Memory in git, not in the transcript.** Fresh context alone would mean amnesia. **Ledger** (below) writes the _why_ to git as the work happens and reads it back before the next turn, so a clean slate is never a blank one.
-- **A real done-check.** "Ask the model if it's finished" is the classic trap: the model grades its own homework. `loops` makes the gate a first-class value and lets you combine a **deterministic** signal (the tests genuinely pass) with a **separate judge**, so "done" means _converged_, not _claims to be_.
-
-Everything else (DAGs, nesting, engines, budgets, the TUI) hangs off those ideas. The whole thing is small enough to read in an afternoon.
-
-## What loops does differently
-
-A loop is easy to start and hard to keep honest. Four parts decide whether it earns its cost, and `loops` is built around them.
-
-| The hard part | In `loops` |
-| --- | --- |
-| **The gate.** Knowing the work is actually done, not just that the agent stopped. | A deterministic check (`commandSucceeds`) and a separate judge (`agentCheck`) in its own context, hardened with a k-of-n `quorum` and a geometric-mean rubric so one weak dimension sinks the verdict. The model that did the work never grades it. |
-| **Memory.** Carrying what was learned across a run without dragging a transcript along. | The git commit log is the memory: a structured handoff per milestone, read back before the next turn. No `STATE.md` the model is trusted to keep tidy, no vector store to sync. |
-| **Parallelism.** Running several agents without collisions on the same files. | `isolation: 'worktree'` gives each writer its own branch and worktree, landed back on pass with a `--no-ff` merge. |
-| **Hard stops.** Bounding a loop so it cannot run forever or empty your account. | `max` caps iterations, `budget` caps tokens (a non-retryable stop the engine calls refuse to cross), and `noProgress` stalls out a loop whose iterations reach no new state, with the evidence on the outcome. |
-
-Three things `loops` does that most loop libraries do not:
-
-- **Nesting is a primitive.** `loop()` and `dag()` both return a `Job`, so loops nest inside DAGs and DAGs nest inside loops, to any depth. Orchestrating many loops is one expression, not a separate harness.
-- **Memory survives a squash merge.** A squash merge flattens a branch's commit bodies into a list of subject lines and loses the reasoning. `pullRequestJob` and `mergeJob` keep the squashed commit body a consolidation of the branch.
-- **It runs against any model or tool.** The agent launch only touches a one-method `Engine`, so the same loop runs on Claude, on a different model, or on your own provider, unchanged.
-
-Two parts are deliberately out of scope. The heartbeat that fires a loop on a schedule belongs in cron, GitHub Actions, or a workflow engine, with a `loops` job inside. Acting in external tools is the agent's own job through its tools. `loops` is the body of the loop, kept small.
-
-## From source
-
-> **Status: alpha**, the API is still settling. To work on `loops` or run it from a checkout:
-
-```bash
-git clone https://github.com/jonny981/loops.git
-cd loops
-npm install
-node bin/loops.mjs --help        # or: npm link  →  loops --help
-```
-
-Requires **Node ≥ 20**. Running from a checkout needs no build step: the CLI runs the TypeScript source directly through [`tsx`](https://github.com/privatenumber/tsx).
 
 ## Quick start
 
@@ -213,6 +103,29 @@ Two supervision skills go deeper: [`skills/supervise-loop-run/SKILL.md`](skills/
 npm run example:poll
 ```
 
+## From source
+
+> **Status: alpha**, the API is still settling. To work on `loops` or run it from a checkout:
+
+```bash
+git clone https://github.com/jonny981/loops.git
+cd loops
+npm install
+node bin/loops.mjs --help        # or: npm link  →  loops --help
+```
+
+Requires **Node ≥ 20**. Running from a checkout needs no build step: the CLI runs the TypeScript source directly through [`tsx`](https://github.com/privatenumber/tsx).
+
+## Why loops?
+
+Agents rarely nail it in one shot. The reliable pattern is a **convergence loop**: do a bit of work, check whether you're _actually_ done, and if not, go again. Two things make or break it, and `loops` is built around both:
+
+- **A fresh context every turn.** Long-running agents rot as their history balloons. `loops` runs each iteration with a clean slate and lets progress accumulate where it belongs: in the **workspace** (files, git commits), not in a chat transcript. The loop carries only thin bookkeeping.
+- **Memory in git, not in the transcript.** Fresh context alone would mean amnesia. **Ledger** (below) writes the _why_ to git as the work happens and reads it back before the next turn, so a clean slate is never a blank one.
+- **A real done-check.** "Ask the model if it's finished" is the classic trap: the model grades its own homework. `loops` makes the gate a first-class value and lets you combine a **deterministic** signal (the tests genuinely pass) with a **separate judge**, so "done" means _converged_, not _claims to be_.
+
+Everything else (DAGs, nesting, engines, budgets, the TUI) hangs off those ideas.
+
 ## Core idea: everything is a `Job`
 
 There is one universal unit of work, and two supporting types:
@@ -252,7 +165,38 @@ loop({
 
 With no `until`, a `pass` body ends the loop. Terminal status is one of `pass · fail · exhausted · aborted · paused` (CLI exit codes `0 · 1 · 2 · 130 · 75`). `paused` is a resumable stop: a hit limit ([Rate limits, quotas, and budgets](#rate-limits-quotas-and-budgets-wait-or-resume)) or an unacknowledged [human gate](#human-gates-a-pause-only-a-person-lifts).
 
-## Conditions: honest convergence
+## What loops does differently
+
+A loop is easy to start and hard to keep on track. Four parts decide whether it earns its cost, and `loops` is built around them.
+
+| The hard part | In `loops` |
+| --- | --- |
+| **The gate.** Knowing the work is actually done, not just that the agent stopped. | A deterministic check (`commandSucceeds`) and a separate judge (`agentCheck`) in its own context, hardened with a k-of-n `quorum` and a geometric-mean rubric so one weak dimension sinks the verdict. The model that did the work never grades it. |
+| **Memory.** Carrying what was learned across a run without dragging a transcript along. | The git commit log is the memory: a structured handoff per milestone, read back before the next turn. No `STATE.md` the model is trusted to keep tidy, no vector store to sync. |
+| **Parallelism.** Running several agents without collisions on the same files. | `isolation: 'worktree'` gives each writer its own branch and worktree, landed back on pass with a `--no-ff` merge. |
+| **Hard stops.** Bounding a loop so it cannot run forever or empty your account. | `max` caps iterations, `budget` caps tokens (a non-retryable stop the engine calls refuse to cross), and `noProgress` stalls out a loop whose iterations reach no new state, with the evidence on the outcome. |
+
+Three things `loops` does that most loop libraries do not:
+
+- **Nesting is a primitive.** `loop()` and `dag()` both return a `Job`, so loops nest inside DAGs and DAGs nest inside loops, to any depth. Orchestrating many loops is one expression, not a separate harness.
+- **Memory survives a squash merge.** A squash merge flattens a branch's commit bodies into a list of subject lines and loses the reasoning. `pullRequestJob` and `mergeJob` keep the squashed commit body a consolidation of the branch.
+- **It runs against any model or tool.** The agent launch only touches a one-method `Engine`, so the same loop runs on Claude, on a different model, or on your own provider, unchanged.
+
+Two parts are deliberately out of scope. The heartbeat that fires a loop on a schedule belongs in cron, GitHub Actions, or a workflow engine, with a `loops` job inside. Acting in external tools is the agent's own job through its tools. `loops` is the body of the loop.
+
+## What `loops` is (and isn't)
+
+`loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress _and its reasoning_ live in git (the Ledger), so each iteration can start clean and still know what came before. If the process dies mid-run, you re-run against the same workspace (the worktree holds the files, the scratch files hold the why, the log holds the milestones) and continue. You lose the bookkeeping, not the work.
+
+It deliberately does **not** do durable mid-run replay (re-running a half-finished graph and skipping completed steps). That's an orchestration concern; for it, embed a `loops` job as a step inside [Temporal](https://temporal.io), [LangGraph](https://github.com/langchain-ai/langgraphjs), or [Mastra](https://mastra.ai). What it _does_ offer (run records, a thin state checkpoint, a token budget) is the lightweight version that fits the workspace-is-state model.
+
+| You want…                                          | Reach for…                          |
+| -------------------------------------------------- | ----------------------------------- |
+| Loop an agent to convergence with a real done-gate | **loops** (you're here)             |
+| Durable, resumable, replayable workflows           | Temporal / LangGraph / Mastra       |
+| One agent call with tool use                       | your provider's SDK directly        |
+
+## Conditions
 
 `start` / `until` / `stopOn` accept **one item or many**, freely mixing deterministic predicates and agent judges. Arrays are `all` by default (wrap in `any(...)` for or):
 
@@ -278,7 +222,7 @@ agentCheck({
 });
 ```
 
-**Builders:** `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds` (a shell command exits 0), `all`, `any`, `not`, `quorum` (k-of-n), `agentCheck` (small-model judge), `always`, `never`, and `gateJob` (lift a condition into a `Job`, e.g. a reviewer).
+**Builders:** `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds` (a shell command exits 0), `all`, `any`, `not`, `quorum` (k-of-n), `agentCheck` (model judge), `always`, `never`, and `gateJob` (lift a condition into a `Job`, e.g. a reviewer).
 
 ### The gate briefs the next attempt
 
@@ -361,13 +305,13 @@ The three tiers below form a progression. The scratch files record what failed a
   agentJob({ label: 'work', prompt: 'Continue.', ground: { retrieve: true } });
   ```
 
-- **Ship via PR: survive the squash.** The commit log is the memory, but a **squash merge** collapses a branch's milestone bodies into one commit whose body defaults to a list of subject lines, the reasoning lost from the base branch. `pullRequestJob` closes that: it pushes the branch and opens (or idempotently updates) a PR whose body is the same `consolidate` fold scoped to this branch, kept current as milestones land. `mergeJob` then squash-merges with that synthesis as the commit body, gated on CI (`auto: true` hands the wait to GitHub; `when: forgeChecks()` is a synchronous gate). The host is the injectable `Forge` seam (the `gh` CLI by default), so it runs offline against a `MockForge`.
+- **Ship via PR: survive the squash.** The commit log is the memory, but a **squash merge** collapses a branch's milestone bodies into one commit whose body defaults to a list of subject lines, the reasoning lost from the base branch. `pullRequestJob` closes that: it pushes the branch and opens (or idempotently updates) a PR whose body is the same `consolidate` fold scoped to this branch, kept current as milestones land. `mergeJob` then squash-merges with that synthesis as the commit body, gated on CI (`auto: true` hands the wait to GitHub; `when: forgeChecks()` is a synchronous gate). The host is the injectable `Forge` interface (the `gh` CLI by default), so it runs offline against a `MockForge`.
 
   ```ts
   sequence('ship', pullRequestJob({ base: 'main' }), mergeJob({ base: 'main', auto: true }));
   ```
 
-The Ledger has **two faces**: _cross-iteration_ (recover from your own failed attempts in a retry loop) and _cross-node_ (honour an upstream node's decision a downstream agent could not otherwise know). Both need headroom. On one-shot, single-node work memory is only a tax. See [docs/concepts.md](docs/concepts.md) for where it helps and the measured evidence in [bench/RESULTS.md](bench/RESULTS.md).
+The Ledger has **two faces**: _cross-iteration_ (recover from your own failed attempts in a retry loop) and _cross-node_ (honour an upstream node's decision a downstream agent could not otherwise know). Both need headroom. On one-shot, single-node work memory is only a tax; the lift shows up only once one attempt is not enough. For where it helps and where it doesn't, [docs/concepts.md](docs/concepts.md) has the discussion and [bench/RESULTS.md](bench/RESULTS.md) has the memory-on-vs-off ablation (run `npm run bench:compare` to reproduce).
 
 ## Engines: bring any model
 
@@ -399,7 +343,7 @@ await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
 
 That's the whole contract: implement `run`, register a name. A managed/durable runner could be a drop-in engine too.
 
-`EngineOptions.minToolIntervalMs` puts a floor between consecutive tool executions, for backends that throttle bursty tool use. Only `agent-sdk` honors it, because only the SDK mediates tool calls in-process (an awaited PreToolUse hook). The subprocess engines (`claude-cli`, `codex`) execute tools autonomously and report them after the fact, and `anthropic-api` drives no tool loop, so all three ignore it: there is no honest seam to pace at outside the SDK.
+`EngineOptions.minToolIntervalMs` puts a floor between consecutive tool executions, for backends that throttle bursty tool use. Only `agent-sdk` honors it, because only the SDK mediates tool calls in-process (an awaited PreToolUse hook). The subprocess engines (`claude-cli`, `codex`) execute tools autonomously and report them after the fact, and `anthropic-api` drives no tool loop, so all three ignore it: there is no interception point to pace at outside the SDK.
 
 ## Agents: define a specialist once
 
@@ -428,10 +372,10 @@ const storeEngineer = defineAgent({
 agentJob({ agent: storeEngineer, prompt: 'Build the store to its tests.', ground: true });
 ```
 
-For a small runnable contract plus feedback example, see
+For a runnable contract plus feedback example, see
 [`examples/contracted-agent.loop.ts`](examples/contracted-agent.loop.ts).
 
-`agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work: TDD, writing-plans), not a worker. The extra contract fields are optional metadata for validation, `loops describe`, docs, and future discovery — except `humanGates`, whose entries are structurally `HumanGateConfig`s, so each declared gate drops straight into the graph as a runtime pause: `humanGate(def.humanGates[0])` (see [Human gates](#human-gates-a-pause-only-a-person-lifts)). None of it gives an agent dispatch authority. This is what turns a `dag` into a named **team** (`storeEngineer`, `apiEngineer`, `securityReviewer` as small files) orchestrated by the DAG and gated by `quorum(...)`.
+`agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work: TDD, writing-plans), not a worker. The extra contract fields are optional metadata for validation, `loops describe`, docs, and future discovery — except `humanGates`, whose entries are structurally `HumanGateConfig`s, so each declared gate drops straight into the graph as a runtime pause: `humanGate(def.humanGates[0])` (see [Human gates](#human-gates-a-pause-only-a-person-lifts)). None of it gives an agent dispatch authority. This is what turns a `dag` into a named **team** (`storeEngineer`, `apiEngineer`, `securityReviewer` as separate files) orchestrated by the DAG and gated by `quorum(...)`.
 
 A Claude Code agent file loads directly: `defineAgentFromMarkdown(path, overrides?)` maps the `.md`'s frontmatter (`name`, `description`, `model`, `tools`) onto the def and takes the body as `system`. The result is always a leaf — the sub-agent spawn tools (`Task`, `Agent`) are dropped from its allowlist — and `overrides` spread last, so the caller wins:
 
@@ -443,7 +387,7 @@ const reviewer = defineAgentFromMarkdown(new URL('./agents/reviewer.md', import.
 
 ## Environments: test the running thing
 
-A gate is only as honest as what it tests. `commandSucceeds('npm', ['test'])` checks files on disk; to check that the thing _works_ you need it running. The **Environment** axis is where code runs (local services or a per-branch cloud preview), so `until` can gate on the live preview, not just static files. It is the third provider axis:
+A gate is only as good as what it tests. `commandSucceeds('npm', ['test'])` checks files on disk; to check that the thing _works_ you need it running. The **Environment** axis is where code runs (local services or a per-branch cloud preview), so `until` can gate on the live preview, not just static files. It is the third provider axis:
 
 | Axis          | Where it…       | Lives in              |
 | ------------- | --------------- | --------------------- |
@@ -590,9 +534,9 @@ const review = reviewPanel({
 In a DAG, a targeted `revisionRequest({ target, findings })` reruns the target
 node and its dependents when `maxKickbacks` allows it. `kickback(to, reason)` is
 the terse compatibility helper for the same routed feedback. Agents can opt into
-a small graph-position prompt block with `graphContext: true`.
+a graph-position prompt block with `graphContext: true`.
 
-**Worktree isolation: branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node honestly (loops does not auto-resolve; that's a separate layer). Each team gets its own branch, its own scratch files, and (with `DagConfig.environment`) its own stage, all born and torn down together.
+**Worktree isolation: branches as teams.** A concurrent node can run in its own git worktree on a fork branch (`isolation: 'worktree'` on the DAG, or `isolate: true` per node), so parallel writers never collide on files or the index. On pass, its committed work lands back into the line with a `--no-ff` merge; a conflict fails the node (loops does not auto-resolve; that's a separate layer). Each team gets its own branch, its own scratch files, and (with `DagConfig.environment`) its own stage, all born and torn down together.
 
 For **dynamic** dispatch (a loop that discovers each unit at runtime and routes it to its own isolated sub-loop), `isolated(job)` is the same boundary as a composable wrapper rather than a predeclared node (fork, run, land back on pass):
 
@@ -703,17 +647,47 @@ Each run keeps the raw event stream in `events.jsonl` and a smaller semantic str
 
 The read side is also on the public surface (`listRuns`, `readRunStatus`, `readRunProgress`, `runEventsPath`, `runSemanticRecordsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
 
-## What `loops` is (and isn't)
+## A whole engineering team, defined as files
 
-`loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress _and its reasoning_ live in git (the Ledger), so each iteration can start clean and still know what came before. If the process dies mid-run, you re-run against the same workspace (the worktree holds the files, the scratch files hold the why, the log holds the milestones) and continue. You lose the bookkeeping, not the work.
+The primitives compose into an **engineering team**: several loops that build a multi-component service, hold it coherent across components, and converge only when each piece clears a bar one agent can't impose on itself, a report-only **review battery** of distinct lenses, including a different model.
 
-It deliberately does **not** do durable mid-run replay (re-running a half-finished graph and skipping completed steps). That's an orchestration concern; for it, embed a `loops` job as a step inside [Temporal](https://temporal.io), [LangGraph](https://github.com/langchain-ai/langgraphjs), or [Mastra](https://mastra.ai). What it _does_ offer (run records, a thin state checkpoint, a token budget) is the lightweight version that fits the workspace-is-state model.
+```ts
+// Five report-only lenses, each a markdown persona that closes with `<confidence>N%</confidence>`.
+// The adversarial lens runs on a DIFFERENT model (codex / GPT-5): any reviewer, any model.
+const battery = (name) =>
+  reviewPanel(name, [
+    ['adversarial', { engine: 'codex' }], // genuinely different priors
+    ['security',    { model: 'opus' }],
+    ['correctness', { model: 'sonnet' }],
+    ['conformance', { model: 'opus' }],
+    ['simplicity',  { model: 'haiku' }],
+  ]);
 
-| You want…                                          | Reach for…                          |
-| -------------------------------------------------- | ----------------------------------- |
-| Loop an agent to convergence with a real done-gate | **loops** (you're here)             |
-| Durable, resumable, replayable workflows           | Temporal / LangGraph / Mastra       |
-| One agent call with tool use                       | your provider's SDK directly        |
+const engineer = (name) =>
+  loop({
+    name,
+    body: agentJob({ agent: engineerFor(name), prompt: brief(name), ground: true }),
+    until: commandSucceeds('node', [`test-${name}.mjs`]), // deterministic truth
+    review: battery(name), // unanimous; a failing review hands its findings to the next iteration
+    commit: true,
+    max: 8,
+  });
+
+export default dag({
+  name: 'build-service',
+  nodes: {
+    store:     engineer('store'),
+    api:       { needs: ['store'],                job: engineer('api') },
+    serialize: { needs: ['store'], isolate: true, job: engineer('serialize') }, // parallel worktree
+    client:    { needs: ['api', 'serialize'],     job: engineer('client') },
+  },
+  isolation: 'worktree',
+});
+```
+
+The `dag` is the manager (toposort + dispatch). Each node is a Converge loop: the engineer builds to its `test` (`until`), then the **review battery** runs in the `review` slot: five report-only lenses with near-disjoint blind spots, each judging the actual source against the recorded contracts and closing with a `<confidence>N%</confidence>`. Because a reviewer is just an `AgentDef` and `agentCheck` takes an `engine` and `model`, **any reviewer runs on any model**: the adversarial lens on codex (GPT-5) for a true second-model signal, the rest spread across Claude. A failing review is not a dead end: its findings thread into the next iteration as `lastReview`, so the engineer fixes concrete concerns: the build → review → fix-up loop, with no human in it. `isolate` runs engineers in parallel worktrees that land back on pass; `ground: true` carries the contracts only `store` decides (stable ids, the `SSv1|` wire tag) to the engineers and reviewers downstream.
+
+A single autonomous agent grades its own homework. This team **structurally cannot**: "done" means past an independent, multi-lens, multi-model review battery it never applies to itself. The whole team (engineers and reviewers) is a folder of markdown personas plus the wiring above, runnable in [`examples/build-service.loop.ts`](examples/build-service.loop.ts).
 
 ## Roadmap
 
@@ -737,7 +711,7 @@ npm test          # vitest: offline, deterministic via the mock engine
 npm run typecheck # tsc --noEmit
 ```
 
-Contributions welcome. Open an issue to discuss anything substantial first. Keep the core small; that smallness is the point.
+Contributions welcome. Open an issue to discuss anything substantial first. Keep the core focused: resist adding node types or configuration that don't earn their place.
 
 ## License
 

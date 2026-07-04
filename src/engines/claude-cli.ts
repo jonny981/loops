@@ -1,6 +1,6 @@
 /**
  * Engine adapter: the `claude` CLI as a subprocess. A fresh process per call =
- * a fresh context. Robust spawning + abort + timeout via `execa`; output is the
+ * a fresh context. Spawning, abort, and timeout via `execa`; output is the
  * same stream-json schema the Agent SDK emits, so we reuse `mapMessage`.
  */
 
@@ -74,8 +74,8 @@ function parseResetAt(text: string): number | undefined {
 
 /**
  * Build the `claude` argv for one run. Extracted (and exported) so the flag
- * wiring — model, system prompt, tool allowlist, permission mode, the `--`
- * argument-smuggling guard — is unit-testable without spawning a process.
+ * wiring (model, system prompt, tool allowlist, permission mode, the `--`
+ * argument-smuggling guard) is unit-testable without spawning a process.
  */
 export function buildClaudeArgs(
   req: AgentRequest,
@@ -87,7 +87,7 @@ export function buildClaudeArgs(
   if (req.system) args.push('--append-system-prompt', req.system);
   if (req.allowedTools?.length)
     args.push('--allowedTools', req.allowedTools.join(','));
-  // A leaf agent may not spawn sub-agents — disallow the spawn tool (wins over any allowlist).
+  // A leaf agent may not spawn sub-agents, so disallow the spawn tool (wins over any allowlist).
   if (req.leaf) args.push('--disallowedTools', SUBAGENT_TOOLS.join(','));
   if (opts.permissionMode) args.push('--permission-mode', opts.permissionMode);
   if (opts.cliArgs?.length) args.push(...opts.cliArgs);
@@ -119,7 +119,7 @@ export class ClaudeCliEngine implements Engine {
       // is inert, so a request with no env changes nothing.
       env: req.env,
       cancelSignal: signal,
-      // The prompt is passed as an argument, not piped — don't let `claude -p`
+      // The prompt is passed as an argument, not piped, so don't let `claude -p`
       // stall waiting on stdin.
       stdin: 'ignore',
       // If the child ignores the SIGTERM from an abort/timeout, escalate to
@@ -161,7 +161,7 @@ export class ClaudeCliEngine implements Engine {
       });
     if (result.failed) {
       // The child's stderr is outside our control and may echo credentials on
-      // an auth failure — `scrubCapture` redacts (env values verbatim, then
+      // an auth failure. `scrubCapture` redacts (env values verbatim, then
       // shape patterns, both on the FULL stream, before the cut) so nothing
       // secret lands in events/logs/the summary.
       const stderr =

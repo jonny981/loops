@@ -1,16 +1,16 @@
 /**
- * The Forge provider — the host where a branch becomes a pull request. It sits
- * alongside Engine (where the agent thinks) and Environment (where the code runs)
- * as a thin, swappable seam: loops owns the interface and the jobs that drive it
+ * The Forge provider is the host where a branch becomes a pull request. It sits
+ * alongside Engine (where the agent thinks) and Environment (where the code runs) as
+ * a swappable interface: loops owns the interface and the jobs that drive it
  * (`pullRequestJob`, `mergeJob` in `pr.ts`); the default adapter shells out to the
- * GitHub CLI (`gh`), the same subprocess instinct as the `git`/claude-cli engines.
+ * GitHub CLI (`gh`), like the `git`/claude-cli engines.
  *
- * Why a seam at all: the squash-merge boundary is where loops' commit-log memory
- * would otherwise be lost. A PR carries a body, and a squash merge can be made to
- * use that body as the merged commit message — so if loops keeps the PR body a
- * faithful synthesis of the branch's commit "ways", the Ledger survives the squash.
- * The Forge is how loops reaches the PR to write that body and (optionally) drive
- * the merge. A `MockForge` keeps the jobs offline-testable, the loops convention.
+ * Why the interface: the squash-merge boundary is where loops' commit-log memory
+ * would otherwise be lost. A PR carries a body, and a squash merge can be made to use
+ * that body as the merged commit message, so if loops keeps the PR body a synthesis
+ * of the branch's commits, the Ledger survives the squash. The Forge is how loops
+ * reaches the PR to write that body and (optionally) drive the merge. A `MockForge`
+ * keeps the jobs offline-testable.
  */
 
 import { execa } from 'execa';
@@ -37,7 +37,7 @@ export interface PrInput {
   draft?: boolean;
 }
 
-/** A partial update to an existing PR (the body is the synthesis we keep current). */
+/** A partial update to an existing PR (the body is the synthesis kept current). */
 export interface PrPatch {
   title?: string;
   body?: string;
@@ -50,11 +50,11 @@ export interface ForgeOpts {
 }
 
 export interface MergeOptions extends ForgeOpts {
-  /** Squash merge (default). The whole point — collapse the branch to one commit. */
+  /** Squash merge (default): collapse the branch to one commit. */
   squash?: boolean;
   /** The squash commit subject. */
   subject?: string;
-  /** The squash commit body — the synthesis, written directly so it cannot be lost. */
+  /** The squash commit body: the synthesis, written directly so it cannot be lost. */
   body?: string;
   /** Enqueue GitHub auto-merge: the merge happens once required checks pass. */
   auto?: boolean;
@@ -63,10 +63,9 @@ export interface MergeOptions extends ForgeOpts {
 }
 
 /**
- * The host seam. Five operations, each taking an explicit working dir — no hidden
- * global state, mirroring `git.ts`. `viewPr` answers an expected "no" with
- * `undefined` (no PR yet); the mutating ops throw a clear `CONFIG` error when the
- * CLI is missing/unauthed, never a cryptic crash.
+ * The host interface. Five operations, each taking an explicit working dir, no hidden
+ * global state, mirroring `git.ts`. `viewPr` answers an expected "no" with `undefined`
+ * (no PR yet); the mutating ops throw a `CONFIG` error when the CLI is missing/unauthed.
  */
 export interface Forge {
   readonly name: string;
@@ -89,7 +88,7 @@ export function isForge(value: unknown): value is Forge {
   );
 }
 
-// ── gh argv builders (pure — unit-tested without spawning, like buildClaudeArgs) ──
+// ── gh argv builders (pure; unit-tested without spawning, like buildClaudeArgs) ──
 
 export function buildViewArgs(branch: string): string[] {
   return ['pr', 'view', branch, '--json', 'number,url,headRefName'];
@@ -188,7 +187,7 @@ export class GhForge implements Forge {
 
   async viewPr(branch: string, opts: ForgeOpts): Promise<PrRef | undefined> {
     const r = await gh(this.bin, buildViewArgs(branch), opts);
-    if (r.exitCode !== 0) return undefined; // no PR for this branch — an expected "no"
+    if (r.exitCode !== 0) return undefined; // no PR for this branch, an expected "no"
     try {
       const j = JSON.parse(r.stdout) as {
         number: number;

@@ -1,14 +1,14 @@
 /**
  * The TUI view-model — a pure fold of events into render state. Kept free of
- * React/Ink so it is trivially unit-testable; `App.tsx` just renders it.
+ * React/Ink so it is unit-testable; `App.tsx` just renders it.
  *
  * Each loop node retains a per-iteration history (`IterationRecord[]`) derived
  * entirely from the event stream, so the TUI can browse the result of every
  * iteration after the fact. Attribution is by path: an event at path P updates
  * the loop node whose key === `P.join(' / ')`, and within that loop it lands on
- * the current (latest) iteration record. Nested loops therefore each track
- * their own iterations without colliding — a nested loop's events carry a longer
- * path and so attribute to the nested loop node, not its parent.
+ * the current (latest) iteration record. Nested loops each track their own
+ * iterations without colliding: a nested loop's events carry a longer path and
+ * so attribute to the nested loop node, not its parent.
  */
 
 import type { LoopEvent, Outcome } from '../core/types.ts';
@@ -60,8 +60,8 @@ export interface ViewModel {
   calls: number;
   errors: string[];
   /** A pause banner: the run is deliberately held (a human gate awaiting its
-   *  acknowledgement, a limit pause) — without this the TUI would just show a
-   *  node stuck on `paused` with no reason until the exit summary. */
+   *  acknowledgement, a limit pause). Without this the TUI would show a node
+   *  stuck on `paused` with no reason until the exit summary. */
   notice?: string;
   startedAt: number;
 }

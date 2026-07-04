@@ -1,7 +1,7 @@
 /**
  * Engine adapter: the Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`).
- * Each `run` is a fresh `query()` — a clean context per loop iteration, which
- * is the whole point. Uses the host's Claude Code auth, so it needs no API key.
+ * Each `run` is a fresh `query()`, giving a clean context per loop iteration.
+ * Uses the host's Claude Code auth, so it needs no API key.
  */
 
 import pTimeout from 'p-timeout';
@@ -42,7 +42,7 @@ function classifySdkLimit(
   const err = (error ?? {}) as Record<string, unknown>;
   const tag = typeof err.error === 'string' ? err.error : '';
   // The SDK's message shapes are outside this repo's control and the request's
-  // env was handed to its subprocess — scrub like the sibling CLI engines do.
+  // env was handed to its subprocess, so scrub like the sibling CLI engines do.
   const message = scrubCapture(
     error instanceof Error ? error.message : String(error),
     env,
@@ -112,10 +112,10 @@ export class AgentSdkEngine implements Engine {
     if (signal.aborted) abort.abort();
     else signal.addEventListener('abort', onAbort, { once: true });
 
-    // Pacing hook only — an empty-object return makes no permission decision,
+    // Pacing hook only. An empty-object return makes no permission decision,
     // so the SDK's permission model is untouched. PreToolUse callbacks are
-    // awaited before each tool executes: the in-process seam that makes
-    // `minToolIntervalMs` honest here and nowhere else.
+    // awaited before each tool executes; that in-process mediation is what
+    // makes `minToolIntervalMs` work here and nowhere else.
     const pace = this.pace;
     const hooks: SdkOptions['hooks'] = pace
       ? {
@@ -138,10 +138,10 @@ export class AgentSdkEngine implements Engine {
       systemPrompt: req.system,
       cwd: req.cwd,
       allowedTools: req.allowedTools,
-      // A leaf agent may not spawn sub-agents — disallow the spawn tool.
+      // A leaf agent may not spawn sub-agents, so disallow the spawn tool.
       disallowedTools: req.leaf ? SUBAGENT_TOOLS : undefined,
-      // The SDK's `env` REPLACES the subprocess environment entirely — the
-      // opposite merge semantics to execa — so spread `process.env` under the
+      // The SDK's `env` REPLACES the subprocess environment entirely, the
+      // opposite of execa's merge semantics, so spread `process.env` under the
       // request's vars to keep merge-over-parent parity with the CLI engines.
       env: req.env ? { ...process.env, ...req.env } : undefined,
       permissionMode: this.opts.permissionMode,

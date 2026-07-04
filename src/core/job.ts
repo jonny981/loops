@@ -62,7 +62,7 @@ export interface AgentJobConfig {
    */
   consumeFeedback?: boolean;
   /**
-   * Append a small DAG-position block: this node, its direct dependencies, and
+   * Append a compact DAG-position block: this node, its direct dependencies, and
    * its direct dependents, without handing the agent the whole orchestration graph.
    */
   graphContext?: boolean;
@@ -127,13 +127,12 @@ export interface GroundConfig {
 }
 
 /** The marker the agent closes its reply with; the harness parses everything after it
- *  as the handoff. A sentinel, not a file write — loops owns the turn, so the memory is
- *  captured from the agent's own words rather than a side file a strong model skips. */
+ *  as the handoff. A sentinel in the reply, not a file write, so the memory is captured
+ *  from the agent's own words. */
 export const HANDOFF_MARK = '===HANDOFF===';
 
-/** The handoff contract appended to a grounded turn. The guiding question does the work;
- *  the sections just scaffold the answer. The harness splits the reply at the marker into
- *  the working log (before) and the handoff (after) — see `parseHandoff`. */
+/** The handoff contract appended to a grounded turn. The harness splits the reply at the
+ *  marker into the working log (before) and the handoff (after); see `parseHandoff`. */
 function recordBlock(): string {
   return (
     `## Before you finish: the handoff\n` +
@@ -376,10 +375,9 @@ export function agentJob(config: AgentJobConfig): Job {
     const parts = parseHandoff(text);
 
     // Auto-capture: when memory is on, the harness records the turn from the agent's
-    // own reply — no reliance on it writing a side file. The reply is split at the
+    // own reply, without relying on it writing a side file. The reply is split at the
     // handoff marker: the working log (before) goes to `ledger.md`, the structured
     // handoff (after) to `prompt.md`. With no marker, the whole reply is working log.
-    // This is what turns a terse "done" into a real, structured memory.
     if (ground) {
       appendLedger(ctx.workspace, {
         label,
@@ -421,18 +419,18 @@ export interface CommitJobConfig {
     | string
     | ((ctx: JobContext, last: Outcome | undefined) => string | Promise<string>);
   /**
-   * The "way" — the structured commit body. Precedence when composing it:
-   *   1. this `body` (an explicit override — a string or function), else
+   * The structured commit body ("the way"). Precedence when composing it:
+   *   1. this `body` (an explicit override, a string or function), else
    *   2. the scratch files: the handoff (`prompt.md`) plus a compacted working log
-   *      (`ledger.md`) — the trusted source, capturing the why as it happens across
-   *      a long unit of work and across fanned-out sub-agents, else
+   *      (`ledger.md`), which capture the why across a long unit of work and across
+   *      fanned-out sub-agents, else
    *   3. a default composed from the last outcome (the floor).
    * Set `body` only to override the scratch files.
    */
   body?:
     | string
     | ((ctx: JobContext, last: Outcome | undefined) => string | Promise<string>);
-  /** Model for the (cheap) ledger-compaction call. A small one is plenty. */
+  /** Model for the (cheap) ledger-compaction call. A cheap one is plenty. */
   compactModel?: string;
   /** Stage every change before committing (default true). */
   stageAll?: boolean;
@@ -460,15 +458,14 @@ function composeWay(ctx: JobContext, last: Outcome | undefined): string {
 }
 
 /**
- * Commit the workspace — write the "way" (a structured body) welded to the
- * "what" (the staged diff) onto the work branch. This is the loop's memory: the
- * next fresh context reads these commits back. The body is composed from the
- * scratch files (the handoff plus a compacted working log agents accrued as they
- * worked), falling back to the outcome floor — so the rich why survives context
- * decay and fan-out. Both scratch files are cleared once the commit lands.
- * Engine-agnostic; it only touches `ctx.workspace.dir` and git. A non-repo
- * workspace fails loudly (a non-retryable CONFIG error) rather than silently
- * dropping the work's record.
+ * Commit the workspace: write the structured body ("the way") plus the staged
+ * diff onto the work branch. This is the loop's memory: the next fresh context
+ * reads these commits back. The body is composed from the scratch files (the
+ * handoff plus a compacted working log agents accrued as they worked), falling
+ * back to the outcome floor, so the why survives context decay and fan-out. Both
+ * scratch files are cleared once the commit lands. Engine-agnostic; it only
+ * touches `ctx.workspace.dir` and git. A non-repo workspace fails with a
+ * non-retryable CONFIG error rather than silently dropping the work's record.
  */
 export function commitJob(config: CommitJobConfig): Job {
   return async (ctx) => {
@@ -488,9 +485,9 @@ export function commitJob(config: CommitJobConfig): Job {
         typeof config.subject === 'function'
           ? await config.subject(ctx, last)
           : config.subject;
-      // The way, in precedence order: explicit override, then the scratch files
-      // (handoff + compacted working log, the trusted accumulated why), then the
-      // outcome floor.
+      // The body, in precedence order: explicit override, then the scratch files
+      // (handoff + compacted working log, the accumulated why), then the outcome
+      // floor.
       const body =
         config.body !== undefined
           ? typeof config.body === 'function'
@@ -507,7 +504,7 @@ export function commitJob(config: CommitJobConfig): Job {
         { subject, body, allowEmpty: config.allowEmpty },
         { cwd, signal: ctx.signal },
       );
-      // Crystallise, then reset: both scratch files' job ends at the commit.
+      // Committed, so reset: both scratch files' job ends at the commit.
       if (sha) {
         resetPrompt(ctx.workspace);
         resetLedger(ctx.workspace);

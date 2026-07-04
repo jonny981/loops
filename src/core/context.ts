@@ -46,7 +46,7 @@ export function childContext(
     environment: over.environment ?? parent.environment,
     // Inherited, not override-only: pinning deliberately survives the dag
     // worktree boundary, where a node ctx REPLACES `environment` with a
-    // per-team handle — an explicit `withEnv` wins over a per-team stack's vars.
+    // per-team handle. An explicit `withEnv` wins over a per-team stack's vars.
     envOverlay: over.envOverlay ?? parent.envOverlay,
     forge: parent.forge,
     budget: parent.budget,
@@ -60,7 +60,7 @@ export function childContext(
     graph: over.graph ?? parent.graph,
     // Inherit the enclosing iteration by default. A `loop` always passes one
     // explicitly; a `dag`/`sequence` does not, so without this a node nested in a
-    // loop would reset to 0 — the "Attempt 0" confound where a retry body could not
+    // loop would reset to 0, the "Attempt 0" confound where a retry body could not
     // see which attempt it was on. A top-level dag still gets 0 (the root's value).
     iteration: over.iteration ?? parent.iteration,
     lastOutcome: over.lastOutcome,

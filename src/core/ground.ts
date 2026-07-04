@@ -1,18 +1,15 @@
 /**
- * The read side — grounding. Where the draft carries the within-iteration why,
- * grounding carries the cross-iteration memory: before a fresh context does
- * work, it reads the recent commit log so it knows what prior iterations already
- * tried and why, and does not re-walk a dead end. This is the half of the
- * fresh-context bet that kills amnesia (the other half being that fresh context
- * kills rot).
+ * The read side: grounding. Where the draft carries the within-iteration
+ * reasoning, grounding carries cross-iteration memory: before a fresh context
+ * does work, it reads the recent commit log so it knows what prior iterations
+ * tried and why, and does not re-walk a dead end.
  *
- * The reach is deliberately BRANCH-LOCAL. `git log` on the current branch is the
+ * The reach is branch-local by design. `git log` on the current branch is the
  * committed truth of this line of work; adjacent active branches are in-flight
- * and may never land, so grounding on them feeds the agent premises that can
+ * and may never land, so grounding on them would feed the agent premises that can
  * vanish. When a sibling team's work matters, it lands back into this line and
- * grounding then picks it up naturally — the merge is where work becomes shared
- * truth. Cross-branch awareness, if ever wanted, is a separate, thin, opt-in
- * signal, not this read.
+ * grounding picks it up naturally. Cross-branch awareness, if ever wanted, is a
+ * separate opt-in signal, not this read.
  */
 
 import { log, type CommitRecord } from './git.ts';
@@ -68,10 +65,10 @@ export async function groundingText(
 
 // ── Retrieval grounding ─────────────────────────────────────────────────────
 // Recent-N grounding is noisy when the branch log carries unrelated work (e.g. a
-// shared monorepo). Retrieval fixes that the way DiffMem/GCC do — selectively —
-// but stays in the git grain: a cheap model reads the candidate commit SUBJECTS
-// and picks the shas relevant to the task; only those bodies are injected. No
-// embeddings, no index file — git's own log IS the index.
+// shared monorepo). Retrieval is selective instead but stays in the git grain: a
+// cheap model reads the candidate commit subjects and picks the shas relevant to
+// the task; only those bodies are injected. No embeddings, no index file; git's
+// own log is the index.
 
 export interface RetrieveOptions {
   /** The task/intent to find relevant prior commits for. */
@@ -91,7 +88,7 @@ export interface RetrieveOptions {
   bodyChars?: number;
   /** Engine for the (cheap) selection call. Default the run engine. */
   engine?: EngineRef;
-  /** Model for the selection call (a small one is plenty). */
+  /** Model for the selection call (a cheap one is plenty). */
   model?: string;
 }
 

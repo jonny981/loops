@@ -55,10 +55,10 @@ export interface RunOptions {
   /** Root working directory the run operates in. Default: process.cwd(). */
   cwd?: string;
   /**
-   * Bring an environment up for the run (the root workspace) before the job, and
-   * tear it down after — so the gate can test the running thing. The adapter
-   * (sst, Vercel, …) is yours; loops owns only the seam. Per-team environments
-   * at the worktree boundary are a separate, later binding.
+   * Bring an environment up for the run (the root workspace) before the job and
+   * tear it down after, so the gate can test the running thing. The adapter
+   * (sst, Vercel, …) is yours; loops owns only the interface. Per-team
+   * environments at the worktree boundary are a separate, later binding.
    */
   environment?: Environment;
   /**
@@ -80,14 +80,14 @@ export interface RunOptions {
    * Engine call sites refuse to spend past it (see `Budget`).
    */
   budget?: number | BudgetConfig;
-  /** Append every structured event as JSONL here — a readable run record. */
+  /** Append every structured event as JSONL here, a readable run record. */
   recordTo?: string;
   /** Snapshot the shared run state here at each loop/dag/job boundary. */
   checkpoint?: string;
   /**
    * Register this run in the global registry (`~/.loops/runs/<runId>`) and write
    * its live state there, so another process can `loops list` / `status` / `tail`
-   * it. Off by default — opt in to make a run observable from outside.
+   * it. Off by default; opt in to make a run observable from outside.
    */
   supervise?: boolean;
   /** Restore shared run state written by a prior `checkpoint` before starting. */
@@ -162,7 +162,7 @@ export async function run(
   }
 
   // Persistence sinks observe the same event stream as reporters. The
-  // checkpointer closes over `initialState`, which is `rootCtx.state` — so it
+  // checkpointer closes over `initialState`, which is `rootCtx.state`, so it
   // always snapshots the live, mutated scratchpad.
   const dir = options.cwd ?? process.cwd();
   const sinks: Array<(event: LoopEvent) => void> = [];

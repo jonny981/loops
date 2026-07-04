@@ -1,14 +1,12 @@
 /**
- * The git substrate. loops' answer to cross-iteration amnesia is to make the
- * commit log the convergence ledger: each unit of work commits the "way" (a
- * structured body) welded to the "what" (the diff), and the next fresh context
- * reads the log back. This module is the thin, engine-agnostic wrapper that lets
- * the core do that — every function takes an explicit `cwd` (the worktree dir)
- * and never throws for an expected "no" answer.
+ * The git substrate: the commit log is the convergence ledger. Each unit of work
+ * commits a structured body alongside its diff, and the next fresh context reads
+ * the log back. This module is the engine-agnostic wrapper: every function takes
+ * an explicit `cwd` (the worktree dir) and never throws for an expected "no"
+ * answer.
  *
- * It is deliberately small: a handful of plumbing/porcelain calls over `execa`,
- * the same subprocess primitive `commandSucceeds` already uses. No git library,
- * no parallel state. Git is the state.
+ * Plumbing/porcelain calls over `execa`, the same subprocess primitive
+ * `commandSucceeds` uses. No git library, no parallel state. Git is the state.
  */
 
 import { execa } from 'execa';
@@ -17,12 +15,12 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-/** One commit as the ledger sees it: the what (sha) plus the way (body). */
+/** One commit as the ledger sees it: sha plus body. */
 export interface CommitRecord {
   sha: string;
   /** Conventional-commit subject line. */
   subject: string;
-  /** The structured body (the "way") — everything after the subject. */
+  /** The structured body: everything after the subject. */
   body: string;
   /** ISO author date. */
   date: string;
@@ -148,7 +146,7 @@ export async function workspaceFingerprint(
 
 export interface CommitInput {
   subject: string;
-  /** The structured body — the "way". Joined to the subject with a blank line. */
+  /** The structured body. Joined to the subject with a blank line. */
   body?: string;
   /** Commit even with an empty index (default false). */
   allowEmpty?: boolean;
@@ -232,9 +230,9 @@ export interface WorktreeHandle {
 }
 
 /**
- * Fork an isolated worktree on a new branch from `base` (default HEAD). This is
- * how a concurrency boundary becomes a team: each concurrent writer gets its own
- * working dir and branch, so siblings never collide on files or the index.
+ * Fork an isolated worktree on a new branch from `base` (default HEAD). Each
+ * concurrent writer gets its own working dir and branch, so siblings never
+ * collide on files or the index.
  */
 export async function addWorktree(
   repoDir: string,
@@ -279,10 +277,10 @@ export interface MergeResult {
 }
 
 /**
- * Land a fork branch back into the branch checked out at `repoDir`, preserving
- * the team shape (`--no-ff`). On conflict the merge is aborted so the target
- * stays clean and the caller can fail the node honestly — loops does not
- * auto-resolve (a merge-resolver is a separate, later layer).
+ * Land a fork branch back into the branch checked out at `repoDir` (`--no-ff`).
+ * On conflict the merge is aborted so the target stays clean and the caller can
+ * fail the node; loops does not auto-resolve (a merge-resolver is a separate
+ * layer).
  */
 export async function mergeBranch(
   repoDir: string,
@@ -359,8 +357,8 @@ export interface PushResult {
 }
 
 /**
- * Push the branch to a remote — the one place loops reaches past the local
- * substrate. Honest like the rest of this module: a non-zero exit (no remote, a
+ * Push the branch to a remote, the one place loops reaches past the local
+ * substrate. Like the rest of this module, a non-zero exit (no remote, a
  * rejected non-fast-forward, no upstream) comes back as `{ ok: false, output }`
  * for the caller to surface, never a throw. `--force-with-lease` is the only
  * force offered, so a force push still refuses to clobber unseen remote work.

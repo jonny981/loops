@@ -173,8 +173,8 @@ export function dag(config: DagConfig): Job {
      * Run a node, in its own worktree when isolated. On pass the node's work is
      * captured (any uncommitted remainder is committed in the worktree) and
      * landed back into the parent branch (`--no-ff`, serialised). A merge
-     * conflict fails the node honestly — loops does not auto-resolve. The
-     * worktree is always removed; a cleanly-merged fork branch is deleted.
+     * conflict fails the node; loops does not auto-resolve. The worktree is
+     * always removed; a cleanly-merged fork branch is deleted.
      */
     const runNodeJob = async (
       name: string,
@@ -225,7 +225,7 @@ export function dag(config: DagConfig): Job {
             }),
           );
           if (!merged.ok) {
-            // Conflict. Either fail honestly, or synthesise the merge (an agent
+            // Conflict. Either fail, or synthesise the merge (an agent
             // resolves it and writes a synthesised body).
             if (config.onConflict !== 'synthesize') {
               return {
@@ -472,8 +472,8 @@ export function dag(config: DagConfig): Job {
         }
 
         if (used >= maxKickbacks) {
-          // Budget spent. Reject and stop — the unresolved kickback leaves the
-          // kicking node's own outcome to stand (a fail keeps the dag honest).
+          // Budget spent. Reject and stop: the unresolved kickback leaves the
+          // kicking node's own outcome to stand.
           emitKickback(
             from,
             to,

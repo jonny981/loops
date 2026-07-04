@@ -9,8 +9,7 @@
  *     writes, here automatically and in the registry).
  *
  * A separate process (a human `loops list/status/tail`, or an agent over MCP)
- * reads those files. No daemon, no socket: the filesystem is the channel, which
- * is the same "the workspace is the state" bet the rest of the library makes.
+ * reads those files. No daemon, no socket: the filesystem is the channel.
  * Liveness is a pid check, so a crashed run is distinguishable from a live one.
  */
 
@@ -248,8 +247,8 @@ export function runEventsPath(runId: string): string {
 /**
  * A one-read rollup of where a run is and what (if anything) is holding it:
  * `readRunStatus` plus a digest of the event-stream tail. `blocker` is a
- * heuristic read of that tail, not ground truth — the run itself only knows
- * its status; the blocker names the most plausible reason it is not moving.
+ * heuristic read of that tail, not ground truth. The run only knows its status;
+ * the blocker names the most plausible reason it is not moving.
  */
 export interface RunProgress {
   runId: string;
@@ -275,13 +274,13 @@ export interface RunProgress {
 /** How far back into events.jsonl the rollup reads (lines, before parsing). */
 const PROGRESS_TAIL = 200;
 /** Byte window read from the end of events.jsonl. A long run's stream can be
- *  tens of MB and `loops status` (a fleet supervisor's poll) reads this on
- *  every invocation, so the read stays O(tail), not O(run) — generous per-line
- *  headroom for `PROGRESS_TAIL` records. */
+ *  tens of MB and `loops status` reads this on every invocation, so the read
+ *  stays O(tail), not O(run). Sized for generous per-line headroom over
+ *  `PROGRESS_TAIL` records. */
 const PROGRESS_TAIL_BYTES = 256 * 1024;
 
-/** Parse the tail of a run's event stream, skipping unparseable lines (the
- *  same stance the CLI's record readers take — a torn write never breaks a read). */
+/** Parse the tail of a run's event stream, skipping unparseable lines so a
+ *  torn write never breaks a read. */
 function readEventTail(runId: string): LoopEvent[] {
   let raw: string;
   try {
@@ -325,7 +324,7 @@ function deriveBlocker(
   // Pause events are hard stops: within one events file a `human:gate` or
   // `limit:pause` means the run is pausing (an acked gate never emits the
   // event, and a resumed run writes a fresh file), so neither is cleared by
-  // later events — a pausing dag still appends its in-flight siblings'
+  // later events. A pausing dag still appends its in-flight siblings'
   // completions after the pause event. A recovered error is different: any
   // later sign of progress (an iteration, a node, a pass) clears it.
   let progressSince = false;
@@ -382,9 +381,9 @@ export function runSemanticRecordsPath(runId: string): string {
 
 /** Flatten model-influenced text (gate reasons, outcome summaries, prompts,
  *  error messages) to a single terminal-safe line: control characters could
- *  spoof output lines or carry ANSI/OSC escape sequences. The single owner of
- *  that invariant — `formatEvent` applies it to every rendered event, and the
- *  CLI applies it to the lines it composes from `status.json` itself. */
+ *  spoof output lines or carry ANSI/OSC escape sequences. `formatEvent` applies
+ *  it to every rendered event, and the CLI applies it to the lines it composes
+ *  from `status.json` itself. */
 export function toLine(s: string): string {
   return s.replace(/[\u0000-\u001f\u007f]+/g, ' ');
 }

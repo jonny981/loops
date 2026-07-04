@@ -1,12 +1,10 @@
 /**
- * Tournament — branch-and-select (GCC's `BRANCH` + pick-the-winner). Where a DAG
- * fans out DISJOINT work and lands all of it, a tournament explores ALTERNATIVE
- * approaches to the SAME task: run N candidates, each in its own isolated
- * worktree, judge them, land only the winner and discard the rest.
+ * Tournament runs alternative approaches to the same task. Where a DAG fans out
+ * disjoint work and lands all of it, a tournament runs N candidates, each in its own
+ * isolated worktree, judges them, lands only the winner and discards the rest.
  *
- * It is a thin composition over the worktree primitives — no new machinery. Only
- * one branch is ever merged (the winner, off an unchanged HEAD), so there is no
- * conflict to resolve. Small on purpose.
+ * It composes over the worktree primitives, no new machinery. Only one branch is ever
+ * merged (the winner, off an unchanged HEAD), so there is no conflict to resolve.
  */
 
 import pLimit from 'p-limit';
@@ -33,7 +31,7 @@ export interface TournamentConfig {
   name: string;
   /** Candidates to run. */
   n: number;
-  /** Build the candidate job for attempt `i` (0-based) — same task, varied angle. */
+  /** Build the candidate job for attempt `i` (0-based): same task, varied angle. */
   candidate: (i: number) => Job;
   /**
    * Score a finished candidate (higher wins). Run against the candidate's own
@@ -125,12 +123,12 @@ export function tournament(config: TournamentConfig): Job {
       ),
     );
 
-    // A paused candidate (a human gate inside a candidate) is a deliberate
-    // halt, not a loss — mirror dag's precedence and propagate the pause to
-    // the root instead of flattening it into "no candidate passed" (and never
-    // land a winner past an unacknowledged gate). The worktrees are still torn
-    // down below: resume re-executes the tournament from the top (the
-    // library's documented resume model), so nothing durable is lost.
+    // A paused candidate (a human gate inside a candidate) is a deliberate halt,
+    // not a loss: mirror dag's precedence and propagate the pause to the root
+    // instead of flattening it into "no candidate passed", and never land a winner
+    // past an unacknowledged gate. The worktrees are still torn down below: resume
+    // re-executes the tournament from the top (the documented resume model), so
+    // nothing durable is lost.
     const paused = attempts.find((a) => a.outcome.status === 'paused');
 
     // Winner: highest score among passing candidates; ties to the earliest.

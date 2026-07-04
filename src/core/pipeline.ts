@@ -1,11 +1,11 @@
 /**
- * `pipeline(name, stages)` — declarative ordered stages as pure sugar over
- * `dag()`: the Job graph IS the pipeline. Each stage becomes a dag node that
- * `needs` the stage before it; an explicit `needs` replaces that default,
- * so fan-out/fan-in is still just edges. All dag semantics apply unchanged:
- * a skipped stage (unmet `when`) counts green so the chain continues, and an
- * optional stage's failure neither fails the pipeline nor blocks the next
- * stage (its consumers must tolerate its artifacts being absent).
+ * `pipeline(name, stages)` is declarative ordered stages as sugar over `dag()`: the
+ * Job graph is the pipeline. Each stage becomes a dag node that `needs` the stage
+ * before it; an explicit `needs` replaces that default, so fan-out/fan-in is still
+ * just edges. All dag semantics apply unchanged: a skipped stage (unmet `when`) counts
+ * green so the chain continues, and an optional stage's failure neither fails the
+ * pipeline nor blocks the next stage (its consumers must tolerate its artifacts being
+ * absent).
  */
 
 import type {
@@ -22,12 +22,12 @@ import { LoopError } from './errors.ts';
 export interface PipelineStage {
   name: string;
   job: Job;
-  /** Gate (one or many) — when unmet the stage is skipped, not failed. */
+  /** Gate (one or many): when unmet the stage is skipped, not failed. */
   when?: ConditionInput;
   /** A failure here does not fail the pipeline, and does not block later stages. */
   optional?: boolean;
   /**
-   * Explicit dependencies, REPLACING the default `[previous stage]` entirely
+   * Explicit dependencies, replacing the default `[previous stage]` entirely
    * (`[]` detaches the stage). This is how a linear pipeline grows fan-out
    * (two stages needing the same producer) and fan-in (one stage needing both).
    */
@@ -71,8 +71,8 @@ export function pipeline(
       acceptsKickbackTo: stage.acceptsKickbackTo,
     };
   });
-  // A plain dag underneath — meta stays kind:'dag', so renderPlan, the TUI,
-  // and records all read a pipeline like any other dag.
+  // A plain dag underneath: meta stays kind:'dag', so renderPlan, the TUI, and
+  // records all read a pipeline like any other dag.
   return dag({ name, nodes, ...opts });
 }
 

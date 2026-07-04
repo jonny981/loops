@@ -1,8 +1,8 @@
 /**
- * The Ink TUI. It subscribes to the event hub, folds events into a small view
- * model in a ref (synchronous, no per-token re-render), and repaints on a timer
- * — so a fast token stream never thrashes React. Shows the live loop/dag tree, a
- * detail panel for the selected loop iteration, and a stats footer.
+ * The Ink TUI. It subscribes to the event hub, folds events into a view model in
+ * a ref (synchronous, no per-token re-render), and repaints on a timer, so a
+ * fast token stream never thrashes React. Shows the live loop/dag tree, a detail
+ * panel for the selected loop iteration, and a stats footer.
  *
  * Navigation: up/down (or k/j) move the selection across loop nodes in tree
  * order; left/right (or h/l) step through the selected loop's iterations; f or

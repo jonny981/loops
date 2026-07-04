@@ -1,11 +1,11 @@
 ---
 name: author-loop
-description: Use when writing, running, or validating a loops `.loop.ts`: the mental model, the honest-convergence gate, the git-memory tiers, the loop archetypes, and copy-paste recipes for authoring convergence loops with the `loops` library. Load this before composing a loop.
+description: Use when writing, running, or validating a loops `.loop.ts`: the mental model, the convergence gate, the git-memory tiers, the loop archetypes, and copy-paste recipes for authoring convergence loops with the `loops` library. Load this before composing a loop.
 ---
 
 # Authoring loops
 
-`loops` runs an agent in a convergence loop: do a bit of work with a fresh context, check whether it is *actually* done against a gate you define, and if not, go again. You author a loop as a small TypeScript file, validate it offline, then run it.
+`loops` runs an agent in a convergence loop: do a bit of work with a fresh context, check whether it is *actually* done against a gate you define, and if not, go again. You author a loop as a TypeScript file, validate it offline, then run it.
 
 ## The one idea
 
@@ -43,9 +43,9 @@ export default defineJob(
 
 `loop()` config worth knowing: `body` (the Job per iteration), `until` (stop gate), `start` (gate before iterating), `stopOn` (hard early-exit), `review` (runs when `until` is met; a failing review folds its findings back into the next iteration), `max` (iteration cap), `noProgress` (end `exhausted` after n consecutive iterations that reach no new state; `{ window, gate: true }` also fingerprints the failing gate's `output`, so the same failure signature repeating counts as stall evidence — deterministic gates only, and it requires an explicit `until`), `delayMs` (polling delay), `commit` (milestone commit on convergence).
 
-## The gate is the whole point
+## The gate
 
-The trap this library exists to avoid is "ask the model if it is done": the model grades its own homework and always says yes. Make the gate **honest**:
+A gate that just asks the model whether it is done lets it grade its own homework, and it always says yes. Make the gate real:
 
 - Combine a **deterministic** signal (`commandSucceeds('npm', ['test'])`: the tests really pass) with a **separate judge** (`agentCheck`). Prefer this mixed form over a lone judge.
 - `until`/`start`/`stopOn` take one item or many. Arrays are `all` by default; wrap in `any(...)` for or.

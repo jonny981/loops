@@ -1,19 +1,18 @@
 /**
- * The core contract. Borrowing the Jenkins instinct — "everything is a job" —
- * there is one universal runnable unit and two supporting types:
+ * The core contract: one universal runnable unit and two supporting types.
  *
  *   - a `Job`       — a unit of work that runs once and returns an `Outcome`.
  *                     Any size: a single agent turn, or a whole nested loop.
  *   - a `Condition` — a question answered against the current context (a `when`).
- *   - a `Loop`      — produced by `loop()`, and is *itself a `Job`*.
+ *   - a `Loop`      — produced by `loop()`, and is itself a `Job`.
  *
  * Because a `Loop` is a `Job`, a loop's `body`/`review`/any stage can be
- * another `loop(...)`. Nesting is the absence of a special case, not a feature.
+ * another `loop(...)`, so loops nest.
  *
- * The Jenkins mapping, for the parts we borrow: Job≈job/pipeline, Engine≈agent/
- * node (where it runs), `start`≈trigger, `Condition`≈`when`, `review`+`onComplete`
- * ≈`post`, `retry`≈`retry`/`catchError`. We deliberately do NOT import the
- * stage/DAG machinery — the primitive here is the loop, not a pipeline.
+ * Jenkins mapping: Job≈job/pipeline, Engine≈agent/node (where it runs),
+ * `start`≈trigger, `Condition`≈`when`, `review`+`onComplete`≈`post`,
+ * `retry`≈`retry`/`catchError`. The stage/DAG machinery is not imported here:
+ * the primitive is the loop, not a pipeline.
  */
 
 import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
@@ -52,8 +51,8 @@ export interface Outcome {
   /**
    * Present when a loop ended `exhausted` because its `noProgress` detector
    * tripped: the evidence that the last `window` iterations reached no state
-   * the run had not already seen. Lets a supervisor tell "stalled, re-brief it"
-   * from "ran out of runway mid-progress" without parsing the summary.
+   * the run had not already seen. Lets a supervisor distinguish a stall from a
+   * hit iteration cap without parsing the summary.
    */
   stall?: StallReport;
   /**
@@ -61,10 +60,9 @@ export interface Outcome {
    * single channel for it. When `revision.target` is set, the enclosing `dag`
    * re-runs that node and its transitive dependents with `revision.reason`
    * threaded in as `lastReview`, bounded by `DagConfig.maxKickbacks` (default
-   * 0 — ignored). A feedback cycle is a loop boundary, not a backward edge: the
-   * graph stays acyclic and the re-run budget guarantees it terminates. Produce
-   * one with `revisionRequest({ target, findings })` or the terse
-   * `kickback(to, reason)`.
+   * 0 — ignored). The re-run happens in execution only; the graph stays acyclic
+   * and the re-run budget guarantees termination. Produce one with
+   * `revisionRequest({ target, findings })` or `kickback(to, reason)`.
    */
   revision?: RevisionRequest;
 }
@@ -370,8 +368,8 @@ export interface DagConfig {
   environment?: Environment;
   /**
    * What to do when an isolated node's land-back conflicts. `'fail'` (default)
-   * fails the node honestly. `'synthesize'` runs `mergeSynthesis` — an agent
-   * resolves the conflict and writes a synthesised merge body.
+   * fails the node. `'synthesize'` runs `mergeSynthesis`: an agent resolves the
+   * conflict and writes a synthesised merge body.
    */
   onConflict?: 'fail' | 'synthesize';
   /**
@@ -380,7 +378,6 @@ export interface DagConfig {
    * threading the reason in as `lastReview`. Each such re-run spends one unit of
    * this budget; once it is exhausted, a further kickback is rejected and the dag
    * terminates. Default 0 — kickbacks are ignored and behaviour is unchanged.
-   * This bound is what makes a feedback cycle provably terminate.
    */
   maxKickbacks?: number;
 }

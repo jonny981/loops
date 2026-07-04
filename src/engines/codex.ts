@@ -1,9 +1,9 @@
 /**
- * Engine adapter: the `codex` CLI (GPT-5) as a non-interactive subprocess. The
- * point is a genuinely DIFFERENT model behind the same `Engine` seam — point any
- * reviewer at `engine: 'codex'` for a second-model adversarial signal, with no
- * bespoke integration. Read-only by default: a report-only reviewer never edits,
- * so the sandbox forbids writes and the run cannot touch the workspace.
+ * Engine adapter: the `codex` CLI (GPT-5) as a non-interactive subprocess. A
+ * different model behind the same `Engine` interface: point a reviewer at
+ * `engine: 'codex'` for a second-model signal, with no bespoke integration.
+ * Read-only by default: a report-only reviewer never edits, so the sandbox
+ * forbids writes and the run cannot touch the workspace.
  *
  * `codex exec` is non-interactive but blocks on an open stdin, so stdin is always
  * ignored; the final assistant message is captured via `-o <file>` rather than
@@ -94,7 +94,7 @@ export class CodexEngine implements Engine {
         });
 
       // codex bills a separate (GPT-5) account, so its tokens are out-of-band for
-      // the loops token budget — report zero rather than conflate providers.
+      // the loops token budget; report zero rather than conflate providers.
       const usage = { inputTokens: 0, outputTokens: 0 };
       if (text) onEvent({ type: 'text', delta: text });
       onEvent({ type: 'usage', usage, model: model ?? 'codex' });

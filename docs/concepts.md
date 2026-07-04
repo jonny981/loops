@@ -1,8 +1,8 @@
 # Concepts — loops, memory, and the shapes of looping
 
 This is the conceptual map behind `loops`: the two problems it solves, the two
-faces of its memory, the three shapes a loop takes, how they nest, and — honestly
-— where the memory earns its keep and where it is only a tax. The runnable tour is
+faces of its memory, the three shapes a loop takes, how they nest, and where the
+memory helps versus where it is only overhead. The runnable tour is
 [`README.md`](../README.md); the measured evidence is
 [`bench/RESULTS.md`](../bench/RESULTS.md).
 
@@ -10,13 +10,13 @@ faces of its memory, the three shapes a loop takes, how they nest, and — hones
 
 A long-running agent on one growing context window *rots*: the window fills with
 stale detail and the agent loses the thread. `loops` answers with **fresh context
-every turn** — each iteration starts clean, and the workspace (files + git) is the
+every turn**. Each iteration starts clean, and the workspace (files + git) is the
 state. But fresh context alone causes the opposite failure, *amnesia*: a clean
 iteration N re-derives what iterations 1..N−1 already worked out, and the loop
 spins instead of converging.
 
-The **Ledger** closes that gap. It is not a database — it is the git commit log,
-used as memory: each unit of work commits the *way* (a structured body: intent,
+The **Ledger** closes that gap. It is not a database; it is the git commit log,
+used as memory. Each unit of work commits the *way* (a structured body: intent,
 alternatives ruled out, constraints) welded to the *what* (the diff), and the next
 fresh context reads it back before working. Two reads, two writes:
 
@@ -44,14 +44,14 @@ measured:
   the Ledger carries the *why* across the boundary. (Graph contract task: +90pp vs
   no memory.)
 
-Both need *headroom* — a regime where one attempt, or the files alone, are not
+Both need *headroom*: a regime where one attempt, or the files alone, are not
 enough. On one-shot, single-node work the Ledger is pure overhead (+2% to +72%
-tokens, +0pp). It is a tax when the task is easy and a lever when it is not.
+tokens, +0pp). It is a cost when the task is easy and a lever when it is not.
 
 ## The three loop archetypes
 
 A loop is not one shape. Three recur, and they differ in what the Ledger does and
-in *what you can even measure* — a harness built for one is blind to the others.
+in *what you can even measure*: a harness built for one is blind to the others.
 
 | | **Converge** | **Sweep** | **Tend** |
 |---|---|---|---|
@@ -64,12 +64,12 @@ in *what you can even measure* — a harness built for one is blind to the other
 | memory stressed | grounding | handoff + conventions | retrieval + consolidation |
 | `loops` shape | `loop({ until: gate, max })` | `loop`/`dag` over a worklist | `loop({ until: dynamic, max: ∞ })` |
 
-**Converge** is the classic agent loop: keep going until an honest gate passes.
-The gate is the quality bar — pair `commandSucceeds` (tests really pass) with
-`agentCheck` so "done" is never a model's self-report.
+**Converge** is the classic agent loop: keep going until the gate passes. The gate
+is the quality bar. Pair `commandSucceeds` (tests really pass) with `agentCheck`
+so "done" is never a model's self-report.
 
 **Sweep** is a batch: each iteration is a fresh, independent task. Memory's job is
-not "avoid my dead ends" but *transfer* — do it the way the earlier items
+not "avoid my dead ends" but *transfer*: do it the way the earlier items
 established. The payoff is **consistency** across the batch, not a pass/fail gate.
 (Sweep, haiku: ON held a 6-doc catalog to one house format uniformly; the
 no-memory arm drifted erratically.)
@@ -90,7 +90,7 @@ bug → a Converge loop to a test gate; a research batch → a Sweep). OEM resea
 
 Because `loop()` and `dag()` both return a `Job`, and a `Job` is just
 `(ctx) => Promise<Outcome>`, **dynamic dispatch is a body that selects and invokes
-a sub-Job** — no special node type. When each dispatch needs its own isolated
+a sub-Job**, with no special node type. When each dispatch needs its own isolated
 worktree (parallel tickets must not collide), wrap the sub-Job in
 [`isolated()`](../README.md#composition--loops-and-dags): it forks a worktree,
 runs the Job, and lands its work back on pass.
@@ -104,12 +104,12 @@ the memory granularity *matches* the nesting level:
 | **milestone commit** | a converged unit | a sub-loop, merged back | a commit body |
 | **consolidated ledger** | the whole process | the Tend loop's state | a commit body (`consolidateJob`) |
 
-All three ultimately live in **git commit bodies** — a prompt (the why) welded to a
+All three ultimately live in **git commit bodies**: a prompt (the why) welded to a
 diff. The scratch files are only *write-ahead buffers* (working memory + handoff)
 that crystallise into the next commit body and reset; milestones are commit bodies;
 the ledger is a commit body (an empty-tree commit). Nothing durable is a side file.
 A commit body does not expire at the next turn: welded to its diff, it is a permanent
-record any later agent can look back to, as far back as it wants — recent-N surfaces
+record any later agent can look back to, as far back as it wants. Recent-N surfaces
 the nearby ones, retrieval selects the relevant ones however old. A Tend loop grounds
 on **milestones** (each = a sub-loop that converged and landed back — it sees
 outcomes, not raw sub-iterations); the sub-loop grounds on its own **scratch files**.
@@ -132,17 +132,17 @@ As the log grows, *reading* it has to scale, and there is a progression:
   consolidated ledger**: the current state, the open threads, and every accrued
   decision kept verbatim, committed as a **commit body** (an empty-tree commit), so
   grounding surfaces it like any milestone; the prior ledger is read back from the
-  last consolidation commit. The *coarse* tier, and the one retrieval cannot stand in
-  for: top-k retrieval — vector or model — fetches the *k most relevant* commits, not
-  *everything you have decided*, so when the work must honour many accrued decisions
-  retrieval hits a hard ceiling at k while consolidation folds them all into bounded
-  space (and degrades gracefully as the count grows, not off a cliff). A naive
-  progress *summary* fails the same way from the other side — it compresses the
-  specifics away; the consolidated ledger is tuned to preserve them. This is what a
-  Tend loop needs to stay coherent over an unbounded horizon — emergent across many
-  commits rather than held in any one. The Tend benchmark is where it is measured and
-  tuned: how often to consolidate, how tight the ledger, whether to retrieve over the
-  ledger or the raw commits.
+  last consolidation commit. This is the *coarse* tier, and the one retrieval cannot
+  stand in for: top-k retrieval — vector or model — fetches the *k most relevant*
+  commits, not *everything you have decided*, so when the work must honour many
+  accrued decisions retrieval hits a hard ceiling at k while consolidation folds them
+  all into bounded space (and degrades gracefully as the count grows, not off a
+  cliff). A naive progress *summary* fails the same way from the other side: it
+  compresses the specifics away; the consolidated ledger is tuned to preserve them.
+  This is what a Tend loop needs to stay coherent over an unbounded horizon, emergent
+  across many commits rather than held in any one. The Tend benchmark is where it is
+  measured and tuned: how often to consolidate, how tight the ledger, whether to
+  retrieve over the ledger or the raw commits.
 
 ## The hard case: decisions that change
 
@@ -150,55 +150,55 @@ A decision is rarely made once. It evolves — `X → X′ → X″` — as the 
 more, and the agent doing step 50 must act on the *current* value, not a stale one. This
 is where memory strategies diverge **by construction**:
 
-- **Keyword search / `git log` grep** returns *every* mention of the decision — `X`,
-  `X′`, and `X″` — and nothing in a match says which is current. On a history too long to
+- **Keyword search / `git log` grep** returns *every* mention of the decision (`X`,
+  `X′`, and `X″`) and nothing in a match says which is current. On a history too long to
   read end to end, reading more makes it worse, not better.
 - **Similarity retrieval (vector RAG)** ranks by *relevance*, not *recency*. A superseded
   `X` is as similar to the query as the current `X″`, so stale versions surface on equal
-  footing — and a larger `top-k` surfaces *more* of them.
+  footing, and a larger `top-k` surfaces *more* of them.
 - **Append-only fact stores** (a memory layer whose default write *accumulates* rather
-  than overwrites) keep `X`, `X′`, `X″` side by side — the same ambiguity, now in a
+  than overwrites) keep `X`, `X′`, `X″` side by side: the same ambiguity, now in a
   database.
 
 Consolidation is the tier the others structurally lack: it folds the history into a
 bounded ledger that carries the *current* state of each decision, where a later revision
 supersedes an earlier one. Retrieval *finds* commits; consolidation *resolves* them into
 where things actually stand. Keeping evolving decisions coherent over a long horizon is
-what agentic work needs — and the axis a recall-the-conversation memory benchmark never
+what agentic work needs, and the axis a recall-the-conversation memory benchmark never
 tests.
 
 ## Two halves: memory *and* enforcement
 
 Memory is one half of `loops`. The other is **enforcement of how the graph
-executes** — honest gates that loop until verified (`commandSucceeds` +
-`agentCheck`), k-of-n `quorum` judging, the dimensional gate that fails closed,
-retry/backoff, budget caps, deterministic DAG control flow, worktree isolation,
-and bounded cross-stage **feedback** — a later node sends work back to an earlier
-one (`kickback`), the dag re-runs that subgraph with the objection threaded in,
-capped so it provably terminates. A feedback cycle is a loop boundary, not a
-backward edge: the graph stays acyclic and the convergence is what ends it. See
+executes**: gates that loop until verified (`commandSucceeds` + `agentCheck`),
+k-of-n `quorum` judging, the dimensional gate that fails closed, retry/backoff,
+budget caps, deterministic DAG control flow, worktree isolation, and bounded
+cross-stage **feedback**. A later node sends work back to an earlier one
+(`kickback`), the dag re-runs that subgraph with the objection threaded in, capped
+so it provably terminates. A feedback cycle is a loop boundary, not a backward
+edge: the graph stays acyclic and the convergence is what ends it. See
 [patterns.md](patterns.md#feedback--a-later-stage-sends-work-back-to-an-earlier-one).
 
-This distinction matters competitively. Pasting the git log into a prompt
-replicates the *memory* half cheaply (on a small log it ties `loops`). It does not
-replicate the *enforcement* half: to match "classify → fork a worktree → run the
-right shape of honest-gated loop → land back → remember across an indefinite
+This distinction matters when comparing approaches. Pasting the git log into a
+prompt replicates the *memory* half cheaply (on a short log it ties `loops`). It
+does not replicate the *enforcement* half: to match "classify → fork a worktree →
+run the right shape of gated loop → land back → remember across an indefinite
 stream," you do not write a prompt, you rebuild `loops`. The memory is the
 commodity; the enforcement of convergence over a nested, long-horizon structure is
 the part that is hard to hand-roll.
 
-## Where it helps — the honest scorecard
+## Where it helps — the scorecard
 
 | regime | lift | note |
 |---|---|---|
-| one-shot / single-node | +0pp | the floor — memory is only a tax |
+| one-shot / single-node | +0pp | the floor — memory is only overhead |
 | Converge, multi-attempt | builds vs regresses | the grounded retry builds on prior attempts; the memoryless one regresses |
 | cross-node, contract | +90pp | carry an upstream decision (vs no memory) |
-| cross-node vs naive log-dump | ~tie | on a small log, memory is ergonomics, not capability |
+| cross-node vs naive log-dump | ~tie | on a short log, memory is ergonomics, not capability |
 | noisy log, retrieval vs recent-N | 83% vs 0% | the default is wrong for long horizons; retrieval fixes it |
 | Sweep, batch consistency | +83pp | hold a catalog to one house format |
 
-Small n, a weak model, and light hardware bound these — see
+A limited sample size, a weak model, and light hardware bound these results. See
 [`bench/RESULTS.md`](../bench/RESULTS.md) for the method, the caveats, and what is
 still unproven (notably: retrieval beating brute-force dump at a scale too big to
 paste, and the nested Tend ∘ Converge capstone).

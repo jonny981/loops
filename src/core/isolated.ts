@@ -1,23 +1,23 @@
 /**
- * `isolated(job)` — run any Job in its own git worktree on a fork branch, and land
+ * `isolated(job)` runs any Job in its own git worktree on a fork branch, and lands
  * its work back into the parent branch on pass. The concurrency boundary as a Job
- * WRAPPER, not a node type.
+ * wrapper, not a node type.
  *
  * dag nodes can already fork a worktree (`isolation: 'worktree'`), but that only
- * works for predeclared nodes. A Tend loop dispatches DYNAMICALLY — it discovers
- * each ticket at runtime and routes it to the right shape of sub-loop — and each
- * dispatch wants its own isolated worktree so parallel tickets never collide on
- * files or the index. `isolated()` makes that composable: wrap the dispatched Job.
+ * works for predeclared nodes. A Tend loop dispatches dynamically: it discovers each
+ * ticket at runtime and routes it to the right shape of sub-loop, and each dispatch
+ * wants its own isolated worktree so parallel tickets never collide on files or the
+ * index. `isolated()` makes that composable: wrap the dispatched Job.
  *
  * On pass: any uncommitted remainder is committed in the worktree, then the fork
  * branch merges back (`--no-ff`). Land-back merges are serialised across all
  * `isolated()` jobs in the process, so concurrent dispatch cannot race the parent
- * index/HEAD. A conflict fails honestly, or is synthesised when asked. The worktree
+ * index/HEAD. A conflict fails, or is synthesised when asked. The worktree
  * is always removed; a cleanly-merged fork branch is deleted. A non-repo workspace
  * degrades to running in place (a warning, no isolation).
  *
  * NOTE: dag's own runNodeJob holds parallel worktree/land-back logic (plus per-team
- * environments). The two should be unified — dag delegating to `isolated()` — once
+ * environments). The two should be unified (dag delegating to `isolated()`) once
  * `isolated()` grows environment support; until then the land-back logic lives in
  * both deliberately, to avoid destabilising the dag path.
  */

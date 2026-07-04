@@ -1,8 +1,8 @@
 /**
- * Early-exit wiring. Maps OS signals (Ctrl-C / SIGTERM) onto an
- * `AbortController` so a run unwinds cleanly: in-flight engine calls abort,
- * loops/dags return `aborted`, and the exit summary still prints. A second
- * Ctrl-C force-exits in case a backend ignores the abort.
+ * Maps OS signals (Ctrl-C / SIGTERM) onto an `AbortController` so a run unwinds
+ * cleanly: in-flight engine calls abort, loops/dags return `aborted`, and the
+ * exit summary still prints. A second Ctrl-C force-exits in case a backend
+ * ignores the abort.
  */
 
 export interface AbortHandle {

@@ -1,14 +1,14 @@
 /**
- * `sstEnvironment` — a per-branch sst stage as an Environment, a thin preset over
+ * `sstEnvironment` — a per-branch sst stage as an Environment, a preset over
  * `commandEnvironment`. `sst deploy --stage <slug(branch)>` on up,
  * `sst remove --stage …` on down. Each worktree-team gets its own stage named
- * after its branch — the personal-stack convention, generalised per-branch.
+ * after its branch.
  *
  * The exact sst flags vary by sst version, so deploy/outputs/destroy are all
- * overridable, and the CONSUMER supplies `map` (which output is the URL / how
+ * overridable, and the consumer supplies `map` (which output is the URL / how
  * outputs become env vars) since the output shape is app-specific. By default no
  * outputs are read (the deploy still runs); set `outputs` + `map` to surface a
- * URL. This adds no dependency — it shells out to the `sst` CLI on PATH.
+ * URL. Shells out to the `sst` CLI on PATH.
  */
 
 import type { Workspace } from '../core/types.ts';

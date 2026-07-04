@@ -1,8 +1,8 @@
 /**
- * A scripted, offline environment — the reference Environment "drop-in", mirror
- * of `MockEngine`. It simulates a deploy (hands back a URL + env vars, counts
- * up/down) with zero network, so the lifecycle binding and gate integration run
- * the exact same code paths in tests as a real sst/Vercel adapter would.
+ * A scripted, offline environment, mirroring `MockEngine`. It simulates a deploy
+ * (hands back a URL + env vars, counts up/down) with no network, so the
+ * lifecycle binding and gate integration run the same code paths in tests as a
+ * real sst/Vercel adapter would.
  */
 
 import type { Workspace } from '../core/types.ts';

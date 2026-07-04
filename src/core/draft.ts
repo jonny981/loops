@@ -1,30 +1,27 @@
 /**
- * The scratch files (`.loops/`) — two transient write-ahead buffers that carry a
- * unit of work's memory forward, split by AUDIENCE:
+ * The scratch files (`.loops/`): two transient buffers that carry a unit of
+ * work's memory forward, split by audience.
  *
- * - `ledger.md` is WORKING MEMORY, for the agent(s) doing the work NOW. Verbose and
- *   real-time: the running log of what is being tried, for the agent itself and for
- *   any concurrent peers fanned out on the same team. The harness appends to it
- *   automatically after each turn (auto-capture), so the why is recorded even when a
- *   single agent's context decays or no one holds all the reasoning at the end.
+ * - `ledger.md` is working memory, for the agent(s) working now. The running log
+ *   of what is being tried, for the agent itself and any concurrent peers on the
+ *   same team. The harness appends to it after each turn (auto-capture), so the
+ *   reasoning is recorded even when an agent's context decays.
  *
- * - `prompt.md` is the HANDOFF, for the NEXT agent(s). Distilled and curated: the
- *   why, what was ruled out, the constraints, what is left. Grounding injects it
- *   into the next context as the start of its prompt; `commitJob` crystallises it
- *   into the commit body (alongside a compacted ledger). Same artifact, two stages.
+ * - `prompt.md` is the handoff, for the next agent(s): the why, what was ruled
+ *   out, the constraints, what is left. Grounding injects it into the next
+ *   context as the start of its prompt; `commitJob` folds it into the commit body
+ *   (alongside a compacted ledger).
  *
- * The commit body is `prompt.md` + a compacted `ledger.md`, welded to its diff — and
- * it does not expire at the next turn. It is a permanent record in git history that
- * ANY later agent can look back to, as far back as it wants: recent-N grounding
- * surfaces the nearby ones, retrieval selects the relevant ones however old, and an
- * agent can always walk the log itself. Each one says "here is how to reason about
- * this snapshot of changes" — the why, what was ruled out, the constraints, and what
- * the implementer actually did. Both files reset once the commit lands (crystallise,
- * then reset); the record they became lives on in the history.
+ * The commit body is `prompt.md` plus a compacted `ledger.md`, committed with its
+ * diff. It does not expire at the next turn: it is a permanent record in git
+ * history that any later agent can read (recent-N grounding surfaces nearby
+ * commits, retrieval selects relevant ones however old, and an agent can walk the
+ * log itself). Both files reset once the commit lands; the record they became
+ * lives on in the history.
  *
  * The whole `.loops/` dir is kept out of git (self-managed `.gitignore`), so
- * `commitJob`'s `git add -A` never stages either file. The files are the draft; the
- * commit is the record.
+ * `commitJob`'s `git add -A` never stages either file. The files are the draft;
+ * the commit is the record.
  */
 
 import {
@@ -92,9 +89,9 @@ function reset(path: string): void {
 export interface PromptNote {
   /** Optional section heading (Why / Alternatives / Constraints / Next…). */
   heading?: string;
-  /** The reasoning to record — the "why". */
+  /** The reasoning to record. */
   body: string;
-  /** Who recorded it, so a fanned-out team's why stays attributable. */
+  /** Who recorded it, so a team's notes stay attributable. */
   author?: string;
 }
 
@@ -119,7 +116,7 @@ export function readPrompt(workspace: Workspace): string {
   return read(promptPath(workspace));
 }
 
-/** Clear the handoff at the commit boundary (the atomicity rule: then reset). */
+/** Clear the handoff at the commit boundary. */
 export function resetPrompt(workspace: Workspace): void {
   reset(promptPath(workspace));
 }

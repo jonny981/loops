@@ -1,8 +1,7 @@
 /**
  * A token-denominated budget for a whole run, threaded through the JobContext so
- * every engine call site can refuse to spend past the cap. The honest cost guard
- * for a loop that may fire a worker plus several judges per iteration: `max` and
- * depth bound the *count* of calls, this bounds their *cost*.
+ * every engine call site can refuse to spend past the cap. Where `max` and depth
+ * bound the count of calls, this bounds their cost.
  *
  * The runner feeds `add()` from each `engine:usage` event, so `spent()` is live.
  * `assertBudget(ctx)` runs before an engine call; once the cap is reached it

@@ -9,7 +9,7 @@ A `dag` of specialist agents is a team. The load-bearing rule that keeps it a te
 
 **The graph orchestrates; agents do not.** The `dag` is the manager (toposort + dispatch), `Condition`/`quorum` are the gates, `Outcome` is the result channel. An `AgentDef` is only the *contract*: who the agent is, what it may touch, how it works. It carries no scheduling authority. An agent produces an `Outcome`; the graph decides what runs next. Never build an agent whose job is to dispatch other agents; make the graph do it.
 
-**REQUIRED BACKGROUND:** you compose these agents into a loop/dag. Read `skills/author-loop/SKILL.md` for the loop mental model, the honest gate, and git-memory first.
+**REQUIRED BACKGROUND:** you compose these agents into a loop/dag. Read `skills/author-loop/SKILL.md` for the loop mental model, the gate, and git-memory first.
 
 ## Two builders: a skill is a method, an agent is a worker
 
@@ -96,7 +96,7 @@ A failing panel emits a `revisionRequest` carrying each failing reviewer's conce
 
 **Route feedback across a DAG** with a targeted revision. When `DagConfig.maxKickbacks > 0`, a `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) re-runs the target node and its transitive dependents, threading the reason in as their `lastReview`. Constrain valid targets with `DagNode.acceptsKickbackTo`. Because every cycle is a bounded re-run, not a graph edge, it always terminates.
 
-Give a worker just enough map to act on routed feedback without seeing the whole orchestration, with `graphContext: true`, which appends a small block naming this node, its direct dependencies, and its direct dependents.
+Give a worker just enough map to act on routed feedback without seeing the whole orchestration, with `graphContext: true`, which appends a compact block naming this node, its direct dependencies, and its direct dependents.
 
 ## Verify the contract before spending a turn
 

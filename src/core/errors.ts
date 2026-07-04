@@ -1,6 +1,6 @@
 /**
- * Structured, classified errors so the exit report can say *what* failed,
- * *where* in the loop tree, and *why* — instead of dumping a stack.
+ * Structured, classified errors so the exit report can say what failed, where in
+ * the loop tree, and why, instead of dumping a stack.
  */
 
 export type LoopErrorCode =

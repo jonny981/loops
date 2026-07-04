@@ -4,8 +4,8 @@
  *
  * Two flavours, same type:
  *   - deterministic (`predicate`, `bodyPassed`, `maxConfidence`)
- *   - agent-validated (`agentCheck`) — a small model returns a verdict +
- *     confidence, and the gate opens only above a threshold.
+ *   - agent-validated (`agentCheck`): a model returns a verdict + confidence,
+ *     and the gate opens only above a threshold.
  *
  * `gateJob` lifts any Condition into a `Job`, so a reviewer can be expressed
  * as a condition and still slot into `loop({ review })`.
@@ -116,9 +116,10 @@ export function minConfidence(threshold: number): Condition {
 
 /**
  * Deterministic gate that runs a shell command and is met on exit code 0. This
- * is the honest convergence signal for coding loops: pair it with an `agentCheck`
- * in an `until` array so the loop stops only when the tests ACTUALLY pass AND a
- * judge agrees the work matches intent — never on a model's self-report alone.
+ * is the deterministic convergence signal for coding loops: pair it with an
+ * `agentCheck` in an `until` array so the loop stops only when the tests ACTUALLY
+ * pass AND a judge agrees the work matches intent, never on a model's self-report
+ * alone.
  * Runs in `cwd` (default: the process working dir), inherits the run's abort
  * signal, and never throws (a spawn failure counts as "not met").
  * `opts.env` pins vars for this one gate command; it is the most specific
@@ -257,8 +258,8 @@ export function any(...inputs: ConditionInput[]): Condition {
 }
 
 /**
- * Met when at least `k` of the inputs hold. The honest hedge against a single
- * agent judge's self-reported confidence: ask N independent judges and require a
+ * Met when at least `k` of the inputs hold. A hedge against a single agent
+ * judge's self-reported confidence: ask N independent judges and require a
  * quorum (e.g. `quorum(2, j, j, j)`). All inputs run in parallel; a judge that
  * throws counts as a "no" vote rather than sinking the whole gate. Each input
  * may hit a model, so size N with cost in mind. Reported confidence is the mean
@@ -308,7 +309,7 @@ export interface AgentCheckConfig {
   question: string;
   /** Open the gate only at/above this confidence (0..1). Default 0.8. */
   threshold?: number;
-  /** Small/cheap model recommended. A bare string — provider-agnostic. */
+  /** Cheap model recommended. A bare string, provider-agnostic. */
   model?: string;
   /**
    * Give the judge a persona — an `AgentDef` whose resolved system (persona +
@@ -333,18 +334,17 @@ export interface AgentCheckConfig {
   timeoutMs?: number;
   /**
    * What the validator sees. By default: the last outcome's summary/data plus
-   * the shared state. Override to feed something bespoke — may be async, since a
+   * the shared state. Override to feed something bespoke; may be async, since a
    * judge often gathers evidence (read the artifact, ground on the history, run a
-   * probe) before ruling. A blind judge cannot honestly confirm correctness, so
-   * give it the thing it is meant to be reviewing.
+   * probe) before ruling. Give it the thing it is meant to be reviewing.
    */
   context?: (ctx: JobContext, last: Outcome | undefined) => string | Promise<string>;
   maxTokens?: number;
   /**
    * Score these named dimensions (0..1 each) instead of a single yes/no
    * confidence. The gate opens when the GEOMETRIC MEAN of the scores is
-   * >= `threshold`, so one weak dimension drags the whole verdict down. A more
-   * honest judge than a lone self-reported number, e.g.
+   * >= `threshold`, so one weak dimension drags the whole verdict down. Stricter
+   * than a lone self-reported number, e.g.
    * `['intent match', 'evidence quality', 'outcome coherence']`.
    */
   dimensions?: string[];
@@ -573,10 +573,10 @@ function parseScores(text: string, dimensions: string[]): ScoreVerdict {
 }
 
 /**
- * A Condition decided by a (preferably small) model. With a single yes/no
+ * A Condition decided by a (preferably cheap) model. With a single yes/no
  * question the gate opens when the verdict is "yes" AND confidence >= threshold.
  * With `dimensions`, the model scores each dimension 0..1 and the gate opens
- * when their geometric mean >= threshold — a more honest judge than one number.
+ * when their geometric mean >= threshold, stricter than a single number.
  */
 export function agentCheck(config: AgentCheckConfig): Condition {
   const threshold = config.threshold ?? 0.8;

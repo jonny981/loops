@@ -2,17 +2,17 @@
  * `commandEnvironment` — a generic, CLI-driven Environment. Every IaC tool
  * (sst, terraform, pulumi, cloudformation-via-aws-cli) has the same shape: a
  * command to deploy a stage, a command to read its outputs, a command to tear it
- * down. This factory captures that shape, so a concrete adapter is a thin preset
+ * down. This factory captures that shape, so a concrete adapter is a preset
  * (see ./sst.ts) rather than bespoke code.
  *
- * It drives the CLIs through `execa` — no SDK, no new dependency — so it stays in
- * the loops package as an OPT-IN subpath (`loops/env/command`) without coupling
+ * It drives the CLIs through `execa` (no SDK, no new dependency), so it stays in
+ * the loops package as an opt-in subpath (`loops/env/command`) without coupling
  * the core to any deploy tool. An SDK-bound adapter (e.g. @aws-sdk) adds a real
  * dependency and belongs in a separate package or the consumer instead.
  *
  * The consumer supplies the tool-specific bits: how a stage name is derived, the
- * argv for each phase, and `map` — which parsed output is the URL and how the
- * outputs become the env vars the gate reads. The factory stays tool-agnostic.
+ * argv for each phase, and `map` (which parsed output is the URL and how the
+ * outputs become the env vars the gate reads). The factory stays tool-agnostic.
  */
 
 import { execa } from 'execa';
@@ -40,10 +40,10 @@ export interface CommandEnvConfig {
   /** Argv to tear the stage down. */
   destroy: (stage: string, ws: Workspace) => Cmd;
   /**
-   * Turn the outputs into the handle's `url` + `env`. This is where the tool's
-   * specific shape is normalised: `outputs` is the best-effort JSON parse (for
-   * terraform/pulumi/sst), `raw` is the verbatim stdout (for tools whose output
-   * is not JSON, e.g. `docker compose port` → `0.0.0.0:49153`).
+   * Turn the outputs into the handle's `url` + `env`, normalising the tool's
+   * specific shape. `outputs` is the best-effort JSON parse (for
+   * terraform/pulumi/sst); `raw` is the verbatim stdout (for tools whose output
+   * is not JSON, e.g. `docker compose port` prints `0.0.0.0:49153`).
    */
   map?: (
     outputs: Record<string, unknown>,

@@ -1,16 +1,16 @@
 /**
- * Pull-request jobs — how a converged branch becomes a PR whose body stays a
- * faithful synthesis of the work, so the commit-log memory survives a squash merge.
+ * Pull-request jobs: how a converged branch becomes a PR whose body stays a synthesis
+ * of the work, so the commit-log memory survives a squash merge.
  *
- * The squash-merge problem: a branch carries N milestone commits, each with a rich
- * structured "way" (the Ledger). A squash merge collapses them into one commit whose
- * body GitHub defaults to a list of subject lines — the reasoning is lost from the
- * base branch's history. The fix is small because loops already folds many commit
- * bodies into one: `pullRequestJob` sets the PR body to `consolidate(since: base)` —
- * the same decision-preserving fold, scoped to this branch — and keeps it current.
- * `mergeJob` can then squash with that synthesis as the commit body directly.
+ * The squash-merge problem: a branch carries N milestone commits, each with a
+ * structured body (the Ledger). A squash merge collapses them into one commit whose
+ * body GitHub defaults to a list of subject lines, so the reasoning is lost from the
+ * base branch's history. loops already folds many commit bodies into one:
+ * `pullRequestJob` sets the PR body to `consolidate(since: base)`, the same
+ * decision-preserving fold scoped to this branch, and keeps it current. `mergeJob`
+ * can then squash with that synthesis as the commit body directly.
  *
- * Engine-agnostic and host-agnostic: the host is the injectable `Forge` seam
+ * Engine-agnostic and host-agnostic: the host is the injectable `Forge` interface
  * (default `GhForge`), so these jobs run offline against a `MockForge` in tests.
  */
 
@@ -56,7 +56,7 @@ export interface PushJobConfig {
   force?: boolean;
 }
 
-/** Push the work branch to its remote. Idempotent; a rejected push fails honestly. */
+/** Push the work branch to its remote. Idempotent; a rejected push fails. */
 export function pushJob(config: PushJobConfig = {}): Job {
   return async (ctx) => {
     const label = config.label ?? 'push';
@@ -104,8 +104,8 @@ export interface PullRequestJobConfig {
 /**
  * Raise the PR, or update it if it already exists, with a body synthesized from the
  * branch's commit bodies. Idempotent create-or-update: run it after each milestone
- * (or at convergence) and the PR description stays current — that is what keeps the
- * eventual squash body honest. Returns the `PrRef` in `outcome.data.pr`.
+ * (or at convergence) and the PR description stays current, which keeps the eventual
+ * squash body accurate. Returns the `PrRef` in `outcome.data.pr`.
  */
 export function pullRequestJob(config: PullRequestJobConfig = {}): Job {
   return async (ctx) => {
@@ -187,13 +187,13 @@ export function pullRequestJob(config: PullRequestJobConfig = {}): Job {
 
 export interface MergeJobConfig {
   label?: string;
-  /** Base branch — the `since` bound for re-synthesizing the squash body. Default `main`. */
+  /** Base branch: the `since` bound for re-synthesizing the squash body. Default `main`. */
   base?: string;
-  /** Squash merge (default true) — the whole reason this exists. */
+  /** Squash merge (default true). */
   squash?: boolean;
   /**
    * Hand the merge to GitHub auto-merge (`gh pr merge --auto`): it lands once the
-   * required checks pass. The recommended "merge when CI is green" path — non-blocking.
+   * required checks pass. The non-blocking "merge when CI is green" path.
    */
   auto?: boolean;
   /** Delete the head branch after merge. */
@@ -205,7 +205,7 @@ export interface MergeJobConfig {
   model?: string;
   max?: number;
   /**
-   * A gate that must hold before loops issues the merge — e.g. `forgeChecks()` for a
+   * A gate that must hold before loops issues the merge, e.g. `forgeChecks()` for a
    * synchronous "CI is green" check, or any `Condition`. Unmet → the job fails without
    * merging. (For the non-blocking path, prefer `auto: true` and let GitHub gate.)
    */
@@ -213,8 +213,8 @@ export interface MergeJobConfig {
 }
 
 /**
- * Squash-merge the branch's PR with a body synthesized from its commit bodies — so the
- * one commit that lands on the base branch carries the whole "way", not a list of
+ * Squash-merge the branch's PR with a body synthesized from its commit bodies, so the
+ * one commit that lands on the base branch carries the whole record, not a list of
  * subjects. Opt-in (loops performing an outward merge is high-stakes): gate it with
  * `auto: true` (GitHub merges when checks pass) and/or a `when` condition.
  */

@@ -1,5 +1,5 @@
 /**
- * A scripted, offline engine — the reference "drop-in". It implements the same
+ * A scripted, offline engine, the reference "drop-in". It implements the same
  * `Engine` interface as the real backends, so tests and examples run the exact
  * same loop/dag/condition code paths with zero network. Writing one of these is
  * all it takes to add a provider: implement `run`, register a name.

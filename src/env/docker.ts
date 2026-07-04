@@ -1,15 +1,15 @@
 /**
- * `dockerEnvironment` — a local environment via Docker Compose, a thin preset
- * over `commandEnvironment`. The compose project name is the stage (a slug of
- * the branch), so concurrent worktree-teams get isolated stacks that never
- * collide. `docker compose -p <stage> up -d` on up; the service's published host
- * port is discovered with `docker compose -p <stage> port` and turned into a
- * URL; `docker compose -p <stage> down -v` on down.
+ * `dockerEnvironment` — a local environment via Docker Compose, a preset over
+ * `commandEnvironment`. The compose project name is the stage (a slug of the
+ * branch), so concurrent worktree-teams get isolated stacks. `docker compose -p
+ * <stage> up -d` on up; the service's published host port is discovered with
+ * `docker compose -p <stage> port` and turned into a URL; `docker compose -p
+ * <stage> down -v` on down.
  *
- * Publish the service to an EPHEMERAL host port in the compose file (e.g.
- * `ports: ["3000"]`) so parallel branches do not fight over a fixed port — the
- * adapter discovers whichever port Docker assigned. No dependency: it shells out
- * to the `docker` CLI on PATH.
+ * Publish the service to an ephemeral host port in the compose file (e.g.
+ * `ports: ["3000"]`) so parallel branches do not fight over a fixed port; the
+ * adapter discovers whichever port Docker assigned. Shells out to the `docker`
+ * CLI on PATH.
  */
 
 import type { Workspace } from '../core/types.ts';
@@ -51,7 +51,7 @@ export function dockerEnvironment(config: DockerEnvConfig): Environment {
     deploy: (p) => argv(p, 'up', '-d'),
     outputs: (p) => argv(p, 'port', config.service, String(config.port)),
     destroy: (p) => argv(p, 'down', '-v'),
-    // `docker compose port` prints `0.0.0.0:49153` (not JSON), so read the raw
+    // `docker compose port` prints `0.0.0.0:49153` (not JSON), so read raw
     // stdout and normalise the bind address to localhost.
     map: (_outputs, _stage, raw) => {
       const hostPort = raw.trim().split('\n')[0]?.trim();

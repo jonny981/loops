@@ -1,15 +1,14 @@
 /**
- * Merge as synthesis (GCC's `MERGE`). A raw `git merge` either applies cleanly or
- * fails on conflict. `mergeSynthesis` does the thing a teammate does: when two
- * lines of work collide, an agent RESOLVES each conflicted file coherently
- * (preserving both intents), and the merge commit body is a SYNTHESIS of what the
- * two branches were each trying to do — not "merge branch X".
+ * Merge as synthesis. A raw `git merge` either applies cleanly or fails on conflict.
+ * `mergeSynthesis` instead has an agent resolve each conflicted file coherently
+ * (preserving both intents), and writes a merge commit body that synthesises what the
+ * two branches were each trying to do, not "merge branch X".
  *
- * It is text-in/text-out, so it works through any `Engine` (no tool-use needed):
- * the conflicted file content goes in, the resolved content comes back. Light: a
- * call per conflicted file plus one for the synthesis body, and nothing when the
- * merge is already clean. The merge is aborted if resolution throws, so the target
- * is never left half-merged.
+ * It is text-in/text-out, so it works through any `Engine` (no tool-use needed): the
+ * conflicted file content goes in, the resolved content comes back. One call per
+ * conflicted file plus one for the synthesis body, and nothing when the merge is
+ * already clean. The merge is aborted if resolution throws, so the target is never
+ * left half-merged.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -98,7 +97,7 @@ export async function mergeSynthesis(
   }
 }
 
-/** Compose the merge body from the merged branch's own "ways". */
+/** Compose the merge body from the merged branch's own commits. */
 async function synthesiseBody(
   ctx: JobContext,
   engine: ReturnType<JobContext['resolveEngine']>,

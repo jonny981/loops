@@ -1,9 +1,9 @@
 /**
- * The engine registry — the drop-in mechanism. Built-ins are registered by
- * name; anyone can `register(name, factory)` their own, or pass a ready-made
- * `Engine` instance anywhere an `EngineRef` is accepted. Factories run lazily
- * (on first `create`), so the Anthropic API engine never needs a key unless you
- * actually select it.
+ * The engine registry. Built-ins are registered by name; anyone can
+ * `register(name, factory)` their own, or pass a ready-made `Engine` instance
+ * anywhere an `EngineRef` is accepted. Factories run lazily (on first
+ * `create`), so the Anthropic API engine never needs a key unless you actually
+ * select it.
  */
 
 import type { Engine, EngineName, EngineOptions, EngineRef } from './engine.ts';

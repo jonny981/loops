@@ -1,8 +1,8 @@
 /**
  * Engine adapter: the raw Anthropic Messages API (`@anthropic-ai/sdk`). Lowest
- * level, token-level streaming, and the cheapest path for small validator
- * models. Transient 429/5xx/connection errors are retried with backoff via
- * `p-retry`; non-retryable errors abort immediately.
+ * level, token-level streaming, and the cheapest path for validator models.
+ * Transient 429/5xx/connection errors are retried with backoff via `p-retry`;
+ * non-retryable errors abort immediately.
  *
  * Needs `ANTHROPIC_API_KEY` (or `EngineOptions.apiKey`). Constructed lazily by
  * the registry, so other engines work without a key present.
@@ -25,7 +25,7 @@ import { retryAfterHeaderToMs } from '../core/limits.ts';
 
 /**
  * Transient backend errors that warrant p-retry's blind backoff: 5xx (incl.
- * 529 overloaded) and connection/timeout. A 429 is NOT here — a rate limit is
+ * 529 overloaded) and connection/timeout. A 429 is not here: a rate limit is
  * classified to a typed `RATE_LIMIT` and handed to the loop's `onLimit` policy,
  * which waits the provider's actual reset rather than a generic backoff.
  */
@@ -60,7 +60,7 @@ function headerValue(error: unknown, name: string): string | undefined {
  * (the body `error.type`, e.g. `rate_limit_error` / `billing_error`).
  *   - 429 → RATE_LIMIT, reading `retry-after` (seconds) into `retryAfterMs`.
  *   - a billing/quota error → QUOTA with no reset (not auto-waitable).
- * 529 / overloaded is deliberately NOT a limit — it is a transient ENGINE error
+ * 529 / overloaded is deliberately not a limit: it is a transient ENGINE error
  * and stays on p-retry's backoff path.
  */
 function classifyLimit(error: unknown): LoopError | undefined {
@@ -125,7 +125,7 @@ export class AnthropicApiEngine implements Engine {
         });
       }
       this.clientPromise = import('@anthropic-ai/sdk').then(
-        // One honest cast at the boundary to the structural shape we consume.
+        // One cast at the boundary to the structural shape we consume.
         (m) => new m.default({ apiKey }) as unknown as MessagesClientLike,
       );
     }
@@ -156,7 +156,7 @@ export class AnthropicApiEngine implements Engine {
         stream.on('text', (delta) => onEvent({ type: 'text', delta }));
         return await stream.finalMessage();
       } catch (e) {
-        // A provider limit is not for p-retry's blind backoff — stop retrying
+        // A provider limit is not for p-retry's blind backoff: stop retrying
         // and let the loop's onLimit policy wait the actual reset. Wrap the
         // typed LoopError as the AbortError cause so it survives to the catch.
         const limit = classifyLimit(e);
