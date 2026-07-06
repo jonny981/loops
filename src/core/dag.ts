@@ -41,6 +41,7 @@ import { mergeSynthesis } from './merge.ts';
 import type { EnvHandle } from '../env/environment.ts';
 import { LoopError } from './errors.ts';
 import { revisionFromOutcome } from './feedback.ts';
+import { DEFAULT_FANOUT_CONCURRENCY } from './concurrency.ts';
 
 /** Sanitise a name into a git-ref-safe slug. */
 function slug(s: string): string {
@@ -122,12 +123,16 @@ export function dag(config: DagConfig): Job {
   const limitN =
     config.concurrency && config.concurrency > 0
       ? config.concurrency
-      : names.length || 1;
+      : DEFAULT_FANOUT_CONCURRENCY;
 
   const job: Job = async (parent: JobContext): Promise<Outcome> => {
     const path = [...parent.path, config.name];
     const depth = parent.depth + 1;
     const ts = () => Date.now();
+    const checkpointKey = JSON.stringify(path);
+    const resumedDag = parent.checkpoint?.resumeDags?.[checkpointKey];
+    if (parent.checkpoint?.resumeDags)
+      delete parent.checkpoint.resumeDags[checkpointKey];
     parent.emit({ kind: 'dag:start', ts: ts(), path, depth, nodes: names });
 
     const limit = pLimit(limitN);
@@ -162,6 +167,8 @@ export function dag(config: DagConfig): Job {
           needs: nodes.get(name)!.needs ?? [],
           dependents: dependents.get(name) ?? [],
         },
+        timeoutMs: nodes.get(name)!.timeoutMs,
+        timeoutGraceMs: nodes.get(name)!.timeoutGraceMs,
       });
 
     // Land-back merges are serialised: concurrent nodes finishing at once must
@@ -275,8 +282,22 @@ export function dag(config: DagConfig): Job {
       name: string,
       outcome: Outcome,
       phase: 'done' | 'skip',
+      cached = false,
     ): Outcome => {
       results.set(name, outcome);
+      const checkpoint = parent.checkpoint;
+      if (checkpoint) {
+        const dagState = (checkpoint.dags[checkpointKey] ??= { nodes: {} });
+        if (!cached && phase === 'done' && outcome.status === 'pass') {
+          dagState.nodes[name] = {
+            phase,
+            outcome,
+            attempt: attempts.get(name),
+          };
+        } else if (!cached && outcome.status !== 'pass') {
+          delete dagState.nodes[name];
+        }
+      }
       parent.emit({
         kind: 'dag:node',
         ts: ts(),
@@ -285,6 +306,8 @@ export function dag(config: DagConfig): Job {
         phase,
         outcome,
         attempt: attempts.get(name),
+        cached,
+        timeoutMs: nodes.get(name)!.timeoutMs,
       });
       // A paused node is a deliberate halt (a human gate awaiting
       // acknowledgement), not a failure: stop scheduling not-yet-started nodes
@@ -341,6 +364,12 @@ export function dag(config: DagConfig): Job {
               'done',
             );
 
+          const cached = resumedDag?.nodes[name];
+          if (cached?.phase === 'done' && cached.outcome.status === 'pass') {
+            attempts.set(name, cached.attempt ?? attempts.get(name) ?? 1);
+            return record(name, cached.outcome, cached.phase, true);
+          }
+
           // `when` + the job both run inside the concurrency limit, so an
           // agentCheck gate counts against the cap (it's real backend load).
           const result = await limit(
@@ -375,6 +404,7 @@ export function dag(config: DagConfig): Job {
                 node: name,
                 phase: 'start',
                 attempt: attempts.get(name),
+                timeoutMs: node.timeoutMs,
               });
               return { outcome: await runNodeJob(name, node), phase: 'done' };
             },
@@ -433,10 +463,10 @@ export function dag(config: DagConfig): Job {
         });
       for (;;) {
         // A pause (a human gate awaiting acknowledgement) outranks a pending
-        // kickback: the halt is deliberate, so nothing may run past it — not
+        // kickback: the halt is deliberate, so nothing may run past it, not
         // even the gate itself, whose `human:gate` event must fire exactly
         // once per pause. Leave `stopped` set and the kickback unresolved;
-        // resume re-executes the whole graph, giving it a fresh pass then.
+        // resumed DAG nodes restore completed green work from checkpoint.
         if (names.some((n) => results.get(n)?.status === 'paused')) break;
         // Honour kickbacks in topological order, skipping any already rejected.
         const from = order.find(
@@ -491,6 +521,8 @@ export function dag(config: DagConfig): Job {
           memo.delete(d); // force re-run
           results.delete(d);
           rejected.delete(d); // a re-run earns a fresh verdict
+          delete parent.checkpoint?.dags[checkpointKey]?.nodes[d];
+          delete resumedDag?.nodes[d];
         }
         pendingKickback.set(to, {
           status: 'fail',
@@ -514,22 +546,25 @@ export function dag(config: DagConfig): Job {
     // whole dag. First in declaration order names the outcome.
     const pausedNode = names.find((n) => results.get(n)?.status === 'paused');
     const data = Object.fromEntries(results);
+    const late = [...results.values()].some((r) => r.late);
     let outcome: Outcome;
     if (parent.signal.aborted) {
       // a genuine user/signal cancellation
       outcome = {
         status: 'aborted',
+        ...(late ? { late: true } : {}),
         summary: `dag "${config.name}" aborted`,
         data,
       };
     } else if (pausedNode) {
-      // Paused takes precedence over fail: on resume the whole graph
-      // re-executes, so a coexisting failure gets retried anyway, and the
-      // paused status is what tells the caller the run is resumable. The
-      // paused node's dependents land blocked-aborted as usual; they must not
-      // flip this to fail.
+      // Paused takes precedence over fail: on resume, completed green nodes can
+      // be restored from checkpoint and unfinished or failed nodes get a fresh
+      // pass. The paused status is what tells the caller the run is resumable.
+      // The paused node's dependents land blocked-aborted as usual; they must
+      // not flip this to fail.
       outcome = {
         status: 'paused',
+        ...(late ? { late: true } : {}),
         summary: results.get(pausedNode)!.summary,
         data,
       };
@@ -538,12 +573,14 @@ export function dag(config: DagConfig): Job {
       // failure) is a fail (exit 1), distinct from a cancellation (exit 130).
       outcome = {
         status: 'fail',
+        ...(late ? { late: true } : {}),
         summary: `dag "${config.name}": ${requiredFailed.length + requiredAborted.length} required node(s) did not complete`,
         data,
       };
     } else {
       outcome = {
         status: 'pass',
+        ...(late ? { late: true } : {}),
         summary: `dag "${config.name}": all ${names.length} node(s) green`,
         data,
       };
@@ -563,6 +600,7 @@ export function dag(config: DagConfig): Job {
         needs: node?.needs ?? [],
         isolate: node?.isolate ?? false,
         optional: node?.optional === true,
+        ...(node?.timeoutMs ? { timeoutMs: node.timeoutMs } : {}),
         // Condition labels only — the meta must stay JSON-serializable
         // (`loops describe --json` prints it verbatim).
         ...(node?.when ? { when: describeConditions(node.when) } : {}),
@@ -581,7 +619,7 @@ export function sequence(name: string, ...jobs: Job[]): Job {
   return dag({ name, nodes, concurrency: 1, stopOnError: true });
 }
 
-/** Run jobs concurrently (optionally capped); all run regardless of failures. */
+/** Run jobs concurrently; default fan-out is capped at 4. */
 export function parallel(
   name: string,
   jobs: Record<string, Job> | Job[],

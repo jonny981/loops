@@ -23,7 +23,7 @@ import type {
 import { execa } from 'execa';
 
 import type { EngineRef } from '../engines/engine.ts';
-import { LoopError } from './errors.ts';
+import { isInfrastructureError, LoopError } from './errors.ts';
 import { resolveEnv } from './env-overlay.ts';
 import { setLabel, setMeta } from './describe.ts';
 import { assertBudget } from './budget.ts';
@@ -31,6 +31,7 @@ import { resolveSystem, type AgentDef } from './agent.ts';
 import { GhForge } from './forge.ts';
 import { truncate } from './text.ts';
 import { redactSecrets, redactEnvValues, scrubCapture } from './redact.ts';
+import { loopsRequestMeta } from './engine-meta.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -121,7 +122,9 @@ export function minConfidence(threshold: number): Condition {
  * pass AND a judge agrees the work matches intent, never on a model's self-report
  * alone.
  * Runs in `cwd` (default: the process working dir), inherits the run's abort
- * signal, and never throws (a spawn failure counts as "not met").
+ * signal, and never throws (a spawn failure counts as "not met"). A command's
+ * `timeoutMs` is explicit: node/agent turn timeouts do not become hard shell
+ * kills for deterministic gates.
  * `opts.env` pins vars for this one gate command; it is the most specific
  * layer, over any `withEnv` overlay and the running environment's vars.
  */
@@ -275,15 +278,36 @@ export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
   const conds = inputs.map((i) => toCondition(i));
   return setLabel(async (ctx, last) => {
     const settled = await Promise.allSettled(conds.map((c) => c(ctx, last)));
-    const results: ConditionResult[] = settled.map((s) =>
-      s.status === 'fulfilled'
-        ? s.value
-        : {
-            met: false,
-            reason: `judge errored: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`,
-          },
-    );
+    const engineErrors = settled
+      .filter(
+        (s): s is PromiseRejectedResult =>
+          s.status === 'rejected' && isInfrastructureError(s.reason),
+      )
+      .map((s) => s.reason);
+    const results: ConditionResult[] = settled.map((s) => {
+      if (s.status === 'fulfilled') return s.value;
+      return {
+        met: false,
+        reason: `judge errored: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`,
+      };
+    });
     const held = results.filter((r) => r.met);
+    const output = results.find((r) => !r.met && r.output !== undefined)?.output;
+    if (held.length < k && held.length + engineErrors.length >= k) {
+      const first = engineErrors[0]!;
+      if (!output) throw first;
+      throw new LoopError({
+        code: first.code,
+        message: first.message,
+        phase: first.phase,
+        path: first.path,
+        iteration: first.iteration,
+        retryable: first.retryable,
+        retryAfterMs: first.retryAfterMs,
+        resetAt: first.resetAt,
+        cause: { error: first, output },
+      });
+    }
     const confs = held
       .map((r) => r.confidence)
       .filter((c): c is number => typeof c === 'number');
@@ -295,9 +319,7 @@ export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
       met,
       confidence,
       reason: `quorum ${held.length}/${inputs.length} held (need ${k})`,
-      output: met
-        ? undefined
-        : results.find((r) => !r.met && r.output !== undefined)?.output,
+      output: met ? undefined : output,
     };
   }, `quorum ${k}/${inputs.length}`);
 }
@@ -619,8 +641,11 @@ export function agentCheck(config: AgentCheckConfig): Condition {
           // A report-then-rate reviewer needs room for findings before the tag.
           maxTokens: config.maxTokens ?? (confidenceTag ? 2048 : 512),
           cwd: config.cwd,
-          timeoutMs: config.timeoutMs,
+          timeoutMs: config.timeoutMs ?? ctx.timeoutMs,
+          timeoutGraceMs: ctx.timeoutGraceMs,
           env,
+          leaf: true,
+          loops: loopsRequestMeta(ctx, config.agent?.name ?? 'agent-check'),
         },
         (e) => {
           if (e.type === 'usage') {
@@ -728,7 +753,13 @@ export function agentCheck(config: AgentCheckConfig): Condition {
 export function gateJob(label: string, condition: ConditionInput): Job {
   const cond = toCondition(condition);
   return setMeta(async (ctx) => {
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path: [...ctx.path], label });
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path: [...ctx.path],
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
     const r = await cond(ctx, ctx.lastOutcome);
     const outcome: Outcome = {
       status: r.met ? 'pass' : 'fail',

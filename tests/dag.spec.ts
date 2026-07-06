@@ -1,8 +1,24 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, describe, it, expect } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { run, dag, sequence, parallel, fnJob } from '../src/api.ts';
+import {
+  run,
+  loop,
+  dag,
+  sequence,
+  parallel,
+  fnJob,
+  predicate,
+  commandSucceeds,
+  gateJob,
+} from '../src/api.ts';
 import type { Outcome, RunOptions } from '../src/api.ts';
 import { MockEngine } from '../src/api.ts';
+import { cleanupRepos, tmpRepo } from './git-helpers.ts';
+
+afterAll(cleanupRepos);
 
 const mockOpts: RunOptions = {
   engine: 'mock',
@@ -38,6 +54,22 @@ describe('dag', () => {
     );
     expect(ran.sort()).toEqual(['a', 'b']);
     expect(outcome.status).toBe('fail');
+  });
+
+  it('marks the dag late when a child outcome is late', async () => {
+    const { outcome } = await run(
+      dag({
+        name: 'late-dag',
+        nodes: {
+          a: fnJob('a', async () => ({ status: 'pass', late: true })),
+          b: { needs: ['a'], job: fnJob('b', async () => ({ status: 'pass' })) },
+        },
+      }),
+      mockOpts,
+    );
+
+    expect(outcome.status).toBe('pass');
+    expect(outcome.late).toBe(true);
   });
 
   it('blocks dependents of a failed required node', async () => {
@@ -233,5 +265,276 @@ describe('dag', () => {
       mockOpts,
     );
     expect(peak).toBeLessThanOrEqual(2);
+  });
+
+  it('does not apply node agent timeouts as command gate timeouts', async () => {
+    const { outcome } = await run(
+      dag({
+        name: 'command-timeout',
+        nodes: {
+          test: {
+            timeoutMs: 1,
+            job: gateJob(
+              'slow-command',
+              commandSucceeds(process.execPath, [
+                '-e',
+                'setTimeout(() => process.exit(0), 20)',
+              ]),
+            ),
+          },
+        },
+      }),
+      mockOpts,
+    );
+
+    expect(outcome.status).toBe('pass');
+  });
+
+  it('caps default fan-out at four nodes', async () => {
+    let active = 0;
+    let peak = 0;
+    const make = (name: string) =>
+      fnJob(name, async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((r) => setTimeout(r, 20));
+        active -= 1;
+        return { status: 'pass' } as Outcome;
+      });
+    await run(
+      parallel('p', {
+        a: make('a'),
+        b: make('b'),
+        c: make('c'),
+        d: make('d'),
+        e: make('e'),
+        f: make('f'),
+      }),
+      mockOpts,
+    );
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  it('resume skips checkpointed green upstream nodes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-resume-'));
+    const checkpoint = join(dir, 'ckpt.json');
+    let upstreamRuns = 0;
+    let gateRuns = 0;
+
+    const build = () =>
+      dag({
+        name: 'resume-dag',
+        nodes: {
+          upstream: fnJob('upstream', async () => {
+            upstreamRuns += 1;
+            return { status: 'pass' as const, summary: 'durable work done' };
+          }),
+          gate: {
+            needs: ['upstream'],
+            job: fnJob('gate', async (ctx) => {
+              gateRuns += 1;
+              return ctx.state.resume
+                ? { status: 'pass' as const, summary: 'resumed' }
+                : { status: 'paused' as const, summary: 'pause after upstream' };
+            }),
+          },
+        },
+      });
+
+    const first = await run(build(), { ...mockOpts, checkpoint });
+    expect(first.outcome.status).toBe('paused');
+    expect(upstreamRuns).toBe(1);
+    expect(gateRuns).toBe(1);
+
+    const second = await run(build(), {
+      ...mockOpts,
+      checkpoint,
+      resumeFrom: checkpoint,
+      state: { resume: true },
+    });
+    expect(second.outcome.status).toBe('pass');
+    expect(upstreamRuns).toBe(1);
+    expect(gateRuns).toBe(2);
+  });
+
+  it('does not reuse checkpointed DAG nodes across same-process loop iterations', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-loop-cache-'));
+    const checkpoint = join(dir, 'ckpt.json');
+    let runs = 0;
+
+    const { outcome } = await run(
+      loop({
+        name: 'outer',
+        body: dag({
+          name: 'body',
+          nodes: {
+            step: fnJob('step', async () => {
+              runs += 1;
+              return { status: 'pass' as const };
+            }),
+          },
+        }),
+        until: predicate(() => false, 'not done'),
+        max: 2,
+      }),
+      { ...mockOpts, checkpoint },
+    );
+
+    expect(outcome.status).toBe('exhausted');
+    expect(runs).toBe(2);
+  });
+
+  it('re-evaluates skipped when nodes on resume', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-skip-resume-'));
+    const checkpoint = join(dir, 'ckpt.json');
+    let deployRuns = 0;
+
+    const build = () =>
+      dag({
+        name: 'skip-resume',
+        nodes: {
+          deploy: {
+            when: predicate((ctx) => ctx.state.deploy === true, 'deploy enabled'),
+            job: fnJob('deploy', async () => {
+              deployRuns += 1;
+              return { status: 'pass' as const };
+            }),
+          },
+          gate: fnJob('gate', async (ctx) =>
+            ctx.state.resume
+              ? { status: 'pass' as const }
+              : { status: 'paused' as const, summary: 'pause after skip' },
+          ),
+        },
+      });
+
+    const first = await run(build(), { ...mockOpts, checkpoint });
+    expect(first.outcome.status).toBe('paused');
+    expect(deployRuns).toBe(0);
+
+    const second = await run(build(), {
+      ...mockOpts,
+      checkpoint,
+      resumeFrom: checkpoint,
+      state: { deploy: true, resume: true },
+    });
+    expect(second.outcome.status).toBe('pass');
+    expect(deployRuns).toBe(1);
+  });
+
+  it('does not skip checkpointed nodes when the workspace fingerprint changed', async () => {
+    const repo = await tmpRepo();
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-fingerprint-'));
+    const checkpoint = join(dir, 'ckpt.json');
+    let upstreamRuns = 0;
+
+    const build = () =>
+      dag({
+        name: 'fingerprint-resume',
+        nodes: {
+          upstream: fnJob('upstream', async () => {
+            upstreamRuns += 1;
+            writeFileSync(join(repo, 'artifact.txt'), `run=${upstreamRuns}\n`);
+            return { status: 'pass' as const };
+          }),
+          gate: {
+            needs: ['upstream'],
+            job: fnJob('gate', async (ctx) =>
+              ctx.state.resume
+                ? { status: 'pass' as const }
+                : { status: 'paused' as const, summary: 'pause after upstream' },
+            ),
+          },
+        },
+      });
+
+    const first = await run(build(), { ...mockOpts, cwd: repo, checkpoint });
+    expect(first.outcome.status).toBe('paused');
+    expect(upstreamRuns).toBe(1);
+
+    writeFileSync(join(repo, 'artifact.txt'), 'mutated outside checkpoint\n');
+    const second = await run(build(), {
+      ...mockOpts,
+      cwd: repo,
+      checkpoint,
+      resumeFrom: checkpoint,
+      state: { resume: true },
+    });
+    expect(second.outcome.status).toBe('pass');
+    expect(upstreamRuns).toBe(2);
+  });
+
+  it('does skip checkpointed nodes when the checkpoint file is inside the workspace', async () => {
+    const repo = await tmpRepo();
+    const checkpoint = join(repo, 'ckpt.json');
+    let upstreamRuns = 0;
+
+    const build = () =>
+      dag({
+        name: 'in-worktree-checkpoint',
+        nodes: {
+          upstream: fnJob('upstream', async () => {
+            upstreamRuns += 1;
+            writeFileSync(join(repo, 'artifact.txt'), `run=${upstreamRuns}\n`);
+            return { status: 'pass' as const };
+          }),
+          gate: {
+            needs: ['upstream'],
+            job: fnJob('gate', async (ctx) =>
+              ctx.state.resume
+                ? { status: 'pass' as const }
+                : { status: 'paused' as const, summary: 'pause after upstream' },
+            ),
+          },
+        },
+      });
+
+    const first = await run(build(), { ...mockOpts, cwd: repo, checkpoint });
+    expect(first.outcome.status).toBe('paused');
+    expect(upstreamRuns).toBe(1);
+
+    const second = await run(build(), {
+      ...mockOpts,
+      cwd: repo,
+      checkpoint,
+      resumeFrom: checkpoint,
+      state: { resume: true },
+    });
+    expect(second.outcome.status).toBe('pass');
+    expect(upstreamRuns).toBe(1);
+  });
+
+  it('writes checkpoints even when cached outcomes contain non-JSON data', async () => {
+    const repo = await tmpRepo();
+    const checkpoint = join(repo, 'non-json-ckpt.json');
+
+    const { outcome } = await run(
+      dag({
+        name: 'non-json-cache',
+        nodes: {
+          upstream: fnJob('upstream', async () => ({
+            status: 'pass' as const,
+            data: { id: BigInt(1) },
+          })),
+          gate: {
+            needs: ['upstream'],
+            job: fnJob('gate', async () => ({
+              status: 'paused' as const,
+              summary: 'pause',
+            })),
+          },
+        },
+      }),
+      { ...mockOpts, cwd: repo, checkpoint },
+    );
+
+    expect(outcome.status).toBe('paused');
+    expect(existsSync(checkpoint)).toBe(true);
+    const saved = JSON.parse(readFileSync(checkpoint, 'utf8')) as {
+      dags?: Record<string, { nodes?: Record<string, { outcome?: Outcome }> }>;
+    };
+    const node = saved.dags?.['["non-json-cache"]']?.nodes?.upstream;
+    expect(node?.outcome?.status).toBe('pass');
+    expect(node?.outcome?.data).toEqual({});
   });
 });

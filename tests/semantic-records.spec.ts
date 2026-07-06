@@ -36,7 +36,11 @@ describe('semantic run records', () => {
 
   it('writes dispatch and completion records beside supervised raw events', async () => {
     const result = await run(
-      fnJob('compile', async () => ({ status: 'pass', summary: 'compiled' })),
+      fnJob('compile', async () => ({
+        status: 'pass',
+        summary: 'compiled',
+        late: true,
+      })),
       { supervise: true },
     );
     const runId = result.runId!;
@@ -55,7 +59,11 @@ describe('semantic run records', () => {
         kind: 'completion',
         unit: 'job',
         label: 'compile',
-        outcome: expect.objectContaining({ status: 'pass', summary: 'compiled' }),
+        outcome: expect.objectContaining({
+          status: 'pass',
+          summary: 'compiled',
+          late: true,
+        }),
       }),
     );
   });

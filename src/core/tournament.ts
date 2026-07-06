@@ -68,6 +68,7 @@ export function tournament(config: TournamentConfig): Job {
       ts: Date.now(),
       path,
       label: config.name,
+      timeoutMs: parent.timeoutMs,
     });
 
     if (!(await isRepo({ cwd: base.dir, signal: parent.signal }))) {
@@ -126,9 +127,8 @@ export function tournament(config: TournamentConfig): Job {
     // A paused candidate (a human gate inside a candidate) is a deliberate halt,
     // not a loss: mirror dag's precedence and propagate the pause to the root
     // instead of flattening it into "no candidate passed", and never land a winner
-    // past an unacknowledged gate. The worktrees are still torn down below: resume
-    // re-executes the tournament from the top (the documented resume model), so
-    // nothing durable is lost.
+    // past an unacknowledged gate. The worktrees are still torn down below; any
+    // durable candidate work must already have landed in the parent workspace.
     const paused = attempts.find((a) => a.outcome.status === 'paused');
 
     // Winner: highest score among passing candidates; ties to the earliest.

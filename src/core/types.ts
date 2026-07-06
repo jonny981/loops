@@ -42,6 +42,12 @@ export interface Outcome {
   status: OutcomeStatus;
   /** 0..1 confidence, when the outcome was decided by an agent validator. */
   confidence?: number;
+  /**
+   * True when an engine finished after its soft timeout but before the hard
+   * timeout/grace boundary. The result is usable, but supervisors can still
+   * surface that it landed late.
+   */
+  late?: boolean;
   /** One-line human summary, surfaced in the TUI and exit report. */
   summary?: string;
   /** Arbitrary payload threaded to the next step / surfaced to the caller. */
@@ -105,6 +111,12 @@ export interface FeedbackFinding {
   reviewer?: string;
   severity?: FeedbackSeverity;
   decision?: FeedbackDecision;
+  /**
+   * The ownership surface this finding belongs to. A review/fix loop may be
+   * scoped to a smaller surface and escalate findings outside it instead of
+   * counting them against convergence.
+   */
+  scope?: string;
   evidence: string;
   recommendation?: string;
 }
@@ -128,6 +140,27 @@ export interface GraphPosition {
   dependents: readonly string[];
 }
 
+export interface CheckpointDagNode {
+  phase: 'skip' | 'done';
+  outcome: Outcome;
+  attempt?: number;
+}
+
+export interface CheckpointDag {
+  nodes: Record<string, CheckpointDagNode>;
+}
+
+export interface CheckpointControl {
+  /**
+   * DAG outcomes restored from a prior process. Read-only for scheduling and
+   * consumed by a DAG invocation so ordinary same-process iterations cannot
+   * accidentally replay cached work.
+   */
+  resumeDags?: Record<string, CheckpointDag>;
+  /** DAG outcomes written by this process for the next resume. */
+  dags: Record<string, CheckpointDag>;
+}
+
 /**
  * Threaded into every `Job`. Carries the engine, the abort signal, the event
  * sink, a mutable scratchpad shared across the run, the workspace the work
@@ -142,6 +175,10 @@ export interface JobContext {
    */
   resolveEngine(ref?: EngineRef): Engine;
   readonly signal: AbortSignal;
+  /** Stable id for this run when one was assigned by the runner. */
+  readonly runId?: string;
+  /** Internal checkpoint metadata. Recipe-owned scratch state lives in `state`. */
+  readonly checkpoint?: CheckpointControl;
   emit(event: LoopEvent): void;
   /** Shared mutable state for the whole run (e.g. accumulating notes). */
   readonly state: Record<string, unknown>;
@@ -165,6 +202,13 @@ export interface JobContext {
   readonly path: readonly string[];
   /** The current DAG node position, when this job is running inside a dag node. */
   readonly graph?: GraphPosition;
+  /**
+   * Timeout inherited by jobs in this scope. A node can set it once and agent
+   * leaves beneath it receive the same cap unless they override it directly.
+   */
+  readonly timeoutMs?: number;
+  /** Extra hard-timeout window after `timeoutMs` for accepting a completed turn. */
+  readonly timeoutGraceMs?: number;
   /** The previous body outcome in the enclosing loop (used by `review`/gates). */
   readonly lastOutcome?: Outcome;
   /** The most recent failed-review outcome, so a restart can act on it. */
@@ -337,6 +381,13 @@ export interface DagNode {
    */
   isolate?: boolean;
   /**
+   * Timeout inherited by this node's subtree. Agent leaves and agent judges use
+   * it unless they set their own timeout.
+   */
+  timeoutMs?: number;
+  /** Extra hard-timeout window after `timeoutMs` for completed-but-late leaves. */
+  timeoutGraceMs?: number;
+  /**
    * Restrict which upstream nodes this node may kick work back to. When set, a
    * `kickback` whose `to` is not in this list is rejected (logged, not run); when
    * unset, any ancestor is a valid target. A kickback to a non-ancestor is always
@@ -349,7 +400,7 @@ export interface DagConfig {
   name: string;
   /** Node name → a `DagNode`, or a bare `Job` (shorthand for no deps/gates). */
   nodes: Record<string, DagNode | Job>;
-  /** Max nodes running at once. Default: unbounded. */
+  /** Max nodes running at once. Default: 4. */
   concurrency?: number;
   /** When a required node fails, abort the rest. Default: true. */
   stopOnError?: boolean;
@@ -384,6 +435,32 @@ export interface DagConfig {
 
 /** Per-node disposition within a DAG run. */
 export type NodePhase = 'start' | 'skip' | 'done';
+
+export type ProofKind = 'html' | 'image' | 'markdown' | 'table' | 'json';
+
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export interface ProofArtifact {
+  kind: ProofKind;
+  title?: string;
+  description?: string;
+  mediaType?: string;
+  meta?: Record<string, string | number | boolean | null>;
+  path?: string;
+  data?: JsonValue;
+}
+
+export interface ProofRecord {
+  name: string;
+  path: string[];
+  artifact: ProofArtifact;
+}
 
 // ── Events ──────────────────────────────────────────────────────────────────
 // One discriminated union drives streaming, the TUI, the stats collector, and
@@ -485,6 +562,10 @@ export type LoopEvent =
       node: string;
       phase: NodePhase;
       outcome?: Outcome;
+      /** True when a resumed run reused this node's checkpointed outcome. */
+      cached?: boolean;
+      /** Soft timeout in force for this node, when one is configured. */
+      timeoutMs?: number;
       /**
        * Which run of this node this is: 1 on the first pass, incremented each time
        * a kickback re-runs it. Lets a records consumer tell a re-run's completion
@@ -506,7 +587,21 @@ export type LoopEvent =
       accepted: boolean;
       note?: string;
     }
-  | { kind: 'job:start'; ts: number; path: string[]; label: string }
+  | {
+      kind: 'job:start';
+      ts: number;
+      path: string[];
+      label: string;
+      /** Soft timeout in force for this job, when one is configured. */
+      timeoutMs?: number;
+    }
+  | {
+      kind: 'proof';
+      ts: number;
+      path: string[];
+      name: string;
+      artifact: ProofArtifact;
+    }
   | {
       kind: 'job:end';
       ts: number;

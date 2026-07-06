@@ -11,7 +11,7 @@
  * so attribute to the nested loop node, not its parent.
  */
 
-import type { LoopEvent, Outcome } from '../core/types.ts';
+import type { LoopEvent, Outcome, ProofRecord } from '../core/types.ts';
 
 export type IterationStatus =
   | 'running'
@@ -58,6 +58,8 @@ export interface ViewModel {
   tokensIn: number;
   tokensOut: number;
   calls: number;
+  proofCount: number;
+  latestProof?: ProofRecord;
   errors: string[];
   /** A pause banner: the run is deliberately held (a human gate awaiting its
    *  acknowledgement, a limit pause). Without this the TUI would show a node
@@ -78,6 +80,7 @@ export function emptyVM(): ViewModel {
     tokensIn: 0,
     tokensOut: 0,
     calls: 0,
+    proofCount: 0,
     errors: [],
     startedAt: Date.now(),
   };
@@ -222,6 +225,14 @@ export function reduce(vm: ViewModel, e: LoopEvent): void {
       break;
     case 'limit:pause':
       vm.notice = `⏸ paused (${e.code}): ${e.reason}`;
+      break;
+    case 'proof':
+      vm.proofCount += 1;
+      vm.latestProof = {
+        name: e.name,
+        path: e.path,
+        artifact: e.artifact,
+      };
       break;
     case 'error':
       vm.errors.push(`[${e.code}] ${e.message}`);

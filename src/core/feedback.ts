@@ -18,7 +18,11 @@ import type {
 } from './types.ts';
 import { toCondition } from './condition.ts';
 import { setMeta } from './describe.ts';
-import { LoopError } from './errors.ts';
+import { isInfrastructureError, LoopError } from './errors.ts';
+import {
+  DEFAULT_FANOUT_CONCURRENCY,
+  mapWithConcurrency,
+} from './concurrency.ts';
 import { oneLine, truncate } from './text.ts';
 import { readLedger, readPrompt } from './draft.ts';
 import { groundingText } from './ground.ts';
@@ -158,24 +162,70 @@ export function graphPositionBlock(graph: GraphPosition): string {
 }
 
 type ReviewTarget =
-  | { name?: string; review: ConditionInput }
-  | { name?: string; job: Job };
+  | { name?: string; scope?: string; review: ConditionInput }
+  | { name?: string; scope?: string; job: Job };
 
 export interface ReviewPanelConfig {
   label?: string;
   reviewers: ReviewTarget[];
+  /** Max reviewers running at once. Default 4. */
+  concurrency?: number;
   /** Default `all`: every reviewer must pass. A number means k-of-n over all reviewers. */
   pass?: 'all' | number;
+  /**
+   * When set, findings scoped outside these surfaces are escalated and do not
+   * count against this panel's pass/fail decision. Unscoped findings stay
+   * actionable for source compatibility.
+   */
+  actionableScopes?: string[];
   /** When set, a failing panel emits a targeted revision request for dag routing. */
   target?: string;
   rerun?: RevisionRerun;
 }
 
-interface ReviewResult {
+interface ReviewVerdict {
+  kind: 'verdict';
   name: string;
   met: boolean;
   confidence?: number;
   reason: string;
+  scope?: string;
+  findings?: FeedbackFinding[];
+}
+
+interface ReviewEngineError {
+  kind: 'engine-error';
+  name: string;
+  reason: string;
+  error?: LoopError;
+  scope?: string;
+  findings?: FeedbackFinding[];
+}
+
+type ReviewResult = ReviewVerdict | ReviewEngineError;
+
+const REVIEW_PANEL_DEFAULT_CONCURRENCY = DEFAULT_FANOUT_CONCURRENCY;
+function isReviewInfrastructureError(
+  error: LoopError | undefined,
+): error is LoopError {
+  return isInfrastructureError(error);
+}
+
+function findingFromOutput(
+  reviewer: string,
+  scope: string | undefined,
+  output: string | undefined,
+): FeedbackFinding[] | undefined {
+  const evidence = output?.trim();
+  if (!evidence) return undefined;
+  return [{ reviewer, severity: 'block', scope, evidence }];
+}
+
+function outputFromInfrastructureError(error: LoopError): string | undefined {
+  const cause = (error as Error & { cause?: unknown }).cause;
+  if (typeof cause !== 'object' || cause === null) return undefined;
+  const output = (cause as { output?: unknown }).output;
+  return typeof output === 'string' ? output : undefined;
 }
 
 async function runReviewer(
@@ -187,11 +237,24 @@ async function runReviewer(
   try {
     if ('job' in reviewer) {
       const outcome = await reviewer.job(ctx);
+      const outcomeError = outcome.error;
+      if (isReviewInfrastructureError(outcomeError)) {
+        return {
+          kind: 'engine-error',
+          name,
+          scope: reviewer.scope,
+          reason: outcome.summary ?? outcomeError.message,
+          error: outcomeError,
+        };
+      }
       return {
+        kind: 'verdict',
         name,
         met: outcome.status === 'pass',
         confidence: outcome.confidence,
         reason: outcome.summary ?? outcome.status,
+        scope: reviewer.scope,
+        findings: revisionFromOutcome(outcome)?.findings,
       };
     }
     const result: ConditionResult = await toCondition(reviewer.review)(
@@ -199,33 +262,73 @@ async function runReviewer(
       ctx.lastOutcome,
     );
     return {
+      kind: 'verdict',
       name,
       met: result.met,
       confidence: result.confidence,
       reason: result.reason,
+      scope: reviewer.scope,
+      findings: result.met
+        ? undefined
+        : findingFromOutput(name, reviewer.scope, result.output),
     };
   } catch (e) {
     // A genuine abort stops the whole run — let it propagate.
     if (ctx.signal.aborted) throw e;
-    // Otherwise, one reviewer erroring (a transient engine/network failure) must
-    // not reject the whole panel and turn a recoverable retry into a hard loop
-    // failure. Count it as an unmet finding so sibling verdicts still stand — the
-    // same reason quorum runs its jurors under allSettled.
+    const error = e instanceof LoopError ? e : undefined;
+    if (error && isReviewInfrastructureError(error)) {
+      return {
+        kind: 'engine-error',
+        name,
+        scope: reviewer.scope,
+        reason: error.message,
+        error,
+        findings: findingFromOutput(
+          name,
+          reviewer.scope,
+          outputFromInfrastructureError(error),
+        ),
+      };
+    }
     return {
+      kind: 'verdict',
       name,
       met: false,
+      scope: reviewer.scope,
       reason: `reviewer errored: ${e instanceof Error ? e.message : String(e)}`,
     };
   }
 }
 
-function reviewFinding(result: ReviewResult): FeedbackFinding {
-  // Every panel reviewer is a gate, so a failing one is a blocking finding.
-  return {
-    reviewer: result.name,
-    severity: 'block',
-    evidence: result.reason,
-  };
+function reviewFindings(result: ReviewVerdict): FeedbackFinding[] {
+  const findings = result.findings?.length
+    ? result.findings
+    : [
+        {
+          reviewer: result.name,
+          severity: 'block' as const,
+          scope: result.scope,
+          evidence: result.reason,
+        },
+      ];
+  return findings.map((finding) => ({
+    ...finding,
+    reviewer: finding.reviewer ?? result.name,
+    severity: finding.severity ?? 'block',
+    scope: finding.scope ?? result.scope,
+  }));
+}
+
+function isActionableFinding(
+  finding: FeedbackFinding,
+  actionableScopes: readonly string[] | undefined,
+): boolean {
+  if (!actionableScopes?.length) return true;
+  return !finding.scope || actionableScopes.includes(finding.scope);
+}
+
+function escalatedFinding(finding: FeedbackFinding): FeedbackFinding {
+  return { ...finding, decision: 'escalated' };
 }
 
 function findingSeverityCounts(
@@ -248,27 +351,78 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
       code: 'CONFIG',
       message: `reviewPanel "${label}": at least one reviewer is required`,
     });
+  if (
+    typeof config.pass === 'number' &&
+    (!Number.isInteger(config.pass) ||
+      config.pass < 1 ||
+      config.pass > config.reviewers.length)
+  )
+    throw new LoopError({
+      code: 'CONFIG',
+      message:
+        `reviewPanel "${label}": pass must be an integer from 1 to ` +
+        `${config.reviewers.length} (got ${config.pass})`,
+    });
+  const concurrency = config.concurrency ?? REVIEW_PANEL_DEFAULT_CONCURRENCY;
+  if (!Number.isInteger(concurrency) || concurrency <= 0)
+    throw new LoopError({
+      code: 'CONFIG',
+      message: `reviewPanel "${label}": concurrency must be a positive integer`,
+    });
   const job: Job = async (ctx) => {
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path: [...ctx.path], label });
-    const results = await Promise.all(
-      config.reviewers.map((reviewer, i) => runReviewer(reviewer, i, ctx)),
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path: [...ctx.path],
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
+    const results = await mapWithConcurrency(
+      config.reviewers,
+      concurrency,
+      (reviewer, i) => runReviewer(reviewer, i, ctx),
     );
-    const passedCount = results.filter((r) => r.met).length;
+    const verdicts = results.filter(
+      (r): r is ReviewVerdict => r.kind === 'verdict',
+    );
+    const errors = results.filter(
+      (r): r is ReviewEngineError => r.kind === 'engine-error',
+    );
+    const passedCount = verdicts.filter((r) => r.met).length;
     const required =
       config.pass === undefined || config.pass === 'all'
         ? results.length
         : config.pass;
-    const findings = results.filter((r) => !r.met).map(reviewFinding);
-    const passed = passedCount >= required;
+    const rawFindings = [
+      ...verdicts.filter((r) => !r.met).flatMap(reviewFindings),
+      ...errors.flatMap((r) => r.findings ?? []),
+    ];
+    const findings = rawFindings.filter((f) =>
+      isActionableFinding(f, config.actionableScopes),
+    );
+    const escalatedFindings = rawFindings
+      .filter((f) => !isActionableFinding(f, config.actionableScopes))
+      .map(escalatedFinding);
+    const passed = verdicts.length > 0 && passedCount >= required;
     const summaryHead = `Review panel: ${passedCount}/${results.length} reviewer(s) cleared`;
-    const summary = findings.length
-      ? `${summaryHead}.\n${findings.map(findingLine).join('\n')}`
-      : `${summaryHead}.`;
+    const summaryParts = [`${summaryHead}.`];
+    if (findings.length) summaryParts.push(findings.map(findingLine).join('\n'));
+    if (escalatedFindings.length)
+      summaryParts.push(
+        `Escalated:\n${escalatedFindings.map(findingLine).join('\n')}`,
+      );
+    if (errors.length)
+      summaryParts.push(
+        `Engine errors:\n${errors
+          .map((e) => `- ${e.name}: ${oneLine(e.reason)}`)
+          .join('\n')}`,
+      );
+    const summary = summaryParts.join('\n');
     // Average only the confidences reviewers actually reported. Coercing a
     // missing confidence to 0 conflates "no signal" with "zero confidence" and
     // can drag a cleanly-passing panel's confidence to 0, stalling an enclosing
     // loop's minConfidence gate (quorum likewise averages only the votes it has).
-    const scored = results
+    const scored = verdicts
       .map((r) => r.confidence)
       .filter((c): c is number => c != null);
     const confidence = scored.length
@@ -276,14 +430,40 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
       : undefined;
     const data = {
       findings,
+      escalatedFindings,
+      errors,
       results,
       passed: passedCount,
       required,
       severityCounts: findingSeverityCounts(findings),
     };
-    const outcome: Outcome = passed
-      ? { status: 'pass', summary, confidence, data }
-      : revisionRequest(
+    const blockedByInfrastructure =
+      errors.length > 0 &&
+      (config.pass === undefined || config.pass === 'all'
+        ? true
+        : passedCount < required && passedCount + errors.length >= required);
+    let outcome: Outcome;
+    if (passed) {
+      outcome = { status: 'pass', summary, confidence, data };
+    } else if (blockedByInfrastructure || (!findings.length && errors.length)) {
+      const first = errors[0]!;
+      outcome = {
+        status: 'paused',
+        summary,
+        confidence,
+        data,
+        error:
+          first.error ??
+          new LoopError({
+            code: 'ENGINE',
+            phase: 'review',
+            message: first.reason,
+          }),
+      };
+    } else if (!findings.length && escalatedFindings.length) {
+      outcome = { status: 'pass', summary, confidence, data };
+    } else {
+      outcome = revisionRequest(
           {
             target: config.target,
             // A clean one-line reason. The findings ride the `findings` array, so
@@ -296,10 +476,16 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
           },
           { summary, confidence, data },
         );
+    }
     ctx.emit({ kind: 'job:end', ts: Date.now(), path: [...ctx.path], label, outcome });
     return outcome;
   };
-  return setMeta(job, { kind: 'reviewPanel', name: label });
+  return setMeta(job, {
+    kind: 'reviewPanel',
+    name: label,
+    concurrency,
+    actionableScopes: config.actionableScopes,
+  });
 }
 
 export interface ReviewContextConfig {

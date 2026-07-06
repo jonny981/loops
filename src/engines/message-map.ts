@@ -16,6 +16,8 @@ export interface Accumulator {
   stopReason?: string;
   /** Set once we have seen token deltas, so we don't double-emit full blocks. */
   sawDelta: boolean;
+  /** Set only when the backend emits a terminal result message. */
+  terminal: boolean;
 }
 
 export function newAccumulator(model: string): Accumulator {
@@ -24,6 +26,7 @@ export function newAccumulator(model: string): Accumulator {
     usage: { inputTokens: 0, outputTokens: 0 },
     model,
     sawDelta: false,
+    terminal: false,
   };
 }
 
@@ -100,6 +103,7 @@ export function mapMessage(
       break;
     }
     case 'result': {
+      acc.terminal = true;
       // `subtype` is the result *classification* (success / error_max_turns …),
       // not the model stop reason; that is the sibling `stop_reason` field.
       if (typeof msg.stop_reason === 'string') acc.stopReason = msg.stop_reason;

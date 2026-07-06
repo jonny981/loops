@@ -16,6 +16,7 @@ import { log, type CommitRecord } from './git.ts';
 import type { JobContext, Workspace } from './types.ts';
 import type { EngineRef } from '../engines/engine.ts';
 import { truncate } from './text.ts';
+import { loopsRequestMeta } from './engine-meta.ts';
 
 export interface GroundOptions {
   /**
@@ -140,6 +141,8 @@ export async function retrieveLedger(
       system: SELECT_SYSTEM,
       model: opts.model,
       maxTokens: 200,
+      leaf: true,
+      loops: loopsRequestMeta(ctx, 'retrieve-ledger'),
     },
     () => {},
     ctx.signal,

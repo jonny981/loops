@@ -122,7 +122,7 @@ To pin env vars over a subtree (gate commands, judges, and agent subprocesses al
 
 ## Human gates
 
-A step no model may approve (deploy to prod, spend real money) is a `humanGate({ name })` node: unacknowledged, it pauses the whole run (`paused`, exit code 75) and the CLI prints the resume command with `--ack <name>` appended; acknowledged, it passes. Run with `--checkpoint <path>` so the pause is resumable, then `loops run <file> --resume <path> --ack <name>`. Resume re-executes from the top (the workspace is the state), so guard expensive pre-gate steps with `when` conditions or state markers. An `AgentDef`'s `humanGates` entries construct directly: `humanGate(def.humanGates[0])`.
+A step no model may approve (deploy to prod, spend real money) is a `humanGate({ name })` node: unacknowledged, it pauses the whole run (`paused`, exit code 75) and the CLI prints the resume command with `--ack <name>` appended; acknowledged, it passes. Run with `--checkpoint <path>` so the pause is resumable, then `loops run <file> --resume <path> --ack <name>`. With `--checkpoint`, completed green DAG nodes are restored from checkpoint on resume; non-DAG jobs rerun as ordinary jobs. An `AgentDef`'s `humanGates` entries construct directly: `humanGate(def.humanGates[0])`.
 
 ## Agents and feedback
 
@@ -150,6 +150,14 @@ In a composer's test suite, pin the shape with `assertGraph(job, shape)`: a part
 `loops run` works from any repo, including one that uses `loops` as a submodule or dependency. The recipe's folder must be an ES module scope (a `package.json` with `{"type":"module"}`); repos that consume `loops` already have this. If a load fails with an ES-module error, that scope is what is missing.
 
 Add `--supervise` to make a run observable from another process: it registers under `~/.loops/runs/`. From an agent, the primary read API is `loops records <runId>`, the semantic decision stream (dispatch / completion / surfacing / revision), filterable with `--kind`, `--path`, `--last`, `--json`, rather than the raw `run --json` firehose. `loops tail <runId>` streams live events, `loops status <runId>` reports terminal state, and `loops list` enumerates runs. Watching a long run or supervising several at once is its own skill: see `skills/supervise-loop-run/SKILL.md`.
+
+For a reusable feature-development skeleton, start with `examples/feature-dev.ts`.
+It is a Commander wrapper around `examples/feature-dev.loop.ts`, so feature name,
+actionable scopes, proof directory, checkpoint gate, main engine, and
+adversarial reviewer engine/model are ordinary CLI flags. With live agents
+enabled, the ordinary reviewers follow the main engine and the adversarial
+reviewer defaults to the opposite engine family; override it with
+`--adversarial-engine` and `--adversarial-model`.
 
 ## Gotchas
 

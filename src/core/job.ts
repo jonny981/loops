@@ -5,11 +5,19 @@
  * an HTTP API, or any framework — swap the engine and the same job runs.
  */
 
-import type { Outcome, Job, JobContext } from './types.ts';
+import { existsSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
+
+import type {
+  Outcome,
+  Job,
+  JobContext,
+  ProofArtifact,
+} from './types.ts';
 import { setMeta } from './describe.ts';
-import type { EngineRef } from '../engines/engine.ts';
+import type { AgentResult, EngineRef } from '../engines/engine.ts';
 import { resolveEnv } from './env-overlay.ts';
-import { LoopError } from './errors.ts';
+import { LoopError, type LoopErrorCode } from './errors.ts';
 import { scrubCapture } from './redact.ts';
 import { assertBudget } from './budget.ts';
 import { isRepo, stageAll, commit } from './git.ts';
@@ -31,6 +39,7 @@ import {
   kickback,
   revisionRequest,
 } from './feedback.ts';
+import { loopsRequestMeta } from './engine-meta.ts';
 
 export interface AgentJobConfig {
   /** Job label (for events). Defaults to the agent's name, then `'agent'`. */
@@ -75,6 +84,12 @@ export interface AgentJobConfig {
    */
   env?: Record<string, string>;
   timeoutMs?: number;
+  /** Extra hard-timeout window after `timeoutMs` for completed final results. */
+  timeoutGraceMs?: number;
+  /** Fallback route(s) used when the primary engine hits a configured error. */
+  fallback?: AgentRoute | AgentRoute[];
+  /** Error codes that may spill to `fallback`. Default: RATE_LIMIT and QUOTA. */
+  fallbackOn?: LoopErrorCode[];
   /**
    * Ground the turn in memory before it works: prepend the branch-local commit log
    * (recent committed milestones), the live working memory (`ledger.md`) and handoff
@@ -101,6 +116,19 @@ export interface AgentJobConfig {
   ) => Outcome | Promise<Outcome>;
 }
 
+export interface AgentRoute {
+  engine?: EngineRef;
+  model?: string;
+  ground?: boolean | GroundConfig;
+  timeoutMs?: number;
+  timeoutGraceMs?: number;
+}
+
+export type ProofDescriptor = ProofArtifact;
+export type ProofProducer = (
+  ctx: JobContext,
+) => ProofDescriptor | Promise<ProofDescriptor>;
+
 /** A grounded turn's reply split at the handoff marker — see `parseHandoff`. */
 export interface HandoffParts {
   /** The reply with the handoff block stripped — the working log. */
@@ -123,7 +151,7 @@ export interface GroundConfig {
    * Far less noisy when the branch log carries unrelated work (a shared repo).
    * `true` uses defaults; an object tunes the candidate window / selection model.
    */
-  retrieve?: boolean | { candidates?: number; model?: string };
+  retrieve?: boolean | { candidates?: number; engine?: EngineRef; model?: string };
 }
 
 /** The marker the agent closes its reply with; the harness parses everything after it
@@ -183,19 +211,22 @@ async function withGrounding(
   ctx: JobContext,
   userPrompt: string,
   ground: boolean | GroundConfig,
+  routeEngine?: EngineRef,
+  routeModel?: string,
 ): Promise<string> {
   const opts: GroundConfig = typeof ground === 'object' ? ground : {};
   const parts: string[] = [];
+  const retrieveConfig =
+    typeof opts.retrieve === 'object' ? opts.retrieve : undefined;
 
   const committed = opts.retrieve
     ? await retrieveLedger(ctx, {
         intent: userPrompt,
         max: opts.max,
         bodyChars: opts.bodyChars,
-        candidates:
-          typeof opts.retrieve === 'object' ? opts.retrieve.candidates : undefined,
-        model:
-          typeof opts.retrieve === 'object' ? opts.retrieve.model : undefined,
+        candidates: retrieveConfig?.candidates,
+        engine: retrieveConfig?.engine ?? routeEngine,
+        model: retrieveConfig?.model ?? routeModel,
       })
     : await groundingText(ctx.workspace, {
         max: opts.max,
@@ -261,17 +292,21 @@ export function agentJob(config: AgentJobConfig): Job {
     // on the config alone cannot tell `false` from `undefined`.
     const ground =
       config.ground !== undefined ? config.ground : ctx.groundDefault;
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
+    const defaultTimeoutMs = config.timeoutMs ?? ctx.timeoutMs;
+    const defaultTimeoutGraceMs = config.timeoutGraceMs ?? ctx.timeoutGraceMs;
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label,
+      timeoutMs: defaultTimeoutMs,
+    });
 
-    const engine = ctx.resolveEngine(config.engine);
     const userPrompt =
       typeof config.prompt === 'function'
         ? await config.prompt(ctx)
         : config.prompt;
     const contextualPrompt = withOperationalContext(ctx, userPrompt, config);
-    const prompt = ground
-      ? await withGrounding(ctx, contextualPrompt, ground)
-      : contextualPrompt;
     // System precedence: an explicit `system` overrides the agent's (persona + skills).
     const system =
       config.system !== undefined
@@ -285,83 +320,140 @@ export function agentJob(config: AgentJobConfig): Job {
     // Hoisted so the reply scrub below can strike the same injected values the
     // engine subprocess was handed.
     const env = resolveEnv(ctx, config.env);
-    let result;
     const toolUses = new Map<string, number>();
-    try {
-      assertBudget(ctx); // refuse to spend past the run's token budget
-      result = await engine.run(
-        {
-          prompt,
-          system,
-          model: config.model ?? config.agent?.model,
-          maxTokens: config.maxTokens,
-          allowedTools: config.allowedTools ?? config.agent?.tools,
-          leaf: config.leaf ?? config.agent?.leaf,
-          cwd: config.cwd ?? ctx.workspace.dir,
-          timeoutMs: config.timeoutMs,
-          env,
-        },
-        (e) => {
-          const ts = Date.now();
-          switch (e.type) {
-            case 'text':
-              ctx.emit({ kind: 'engine:text', ts, path, delta: e.delta });
-              break;
-            case 'thinking':
-              ctx.emit({ kind: 'engine:thinking', ts, path, delta: e.delta });
-              break;
-            case 'tool':
-              if (e.phase === 'use')
-                toolUses.set(e.name, (toolUses.get(e.name) ?? 0) + 1);
-              ctx.emit({
-                kind: 'engine:tool',
-                ts,
-                path,
-                name: e.name,
-                phase: e.phase,
-              });
-              break;
-            case 'usage':
-              ctx.emit({
-                kind: 'engine:usage',
-                ts,
-                path,
-                model: e.model,
-                usage: e.usage,
-              });
-              break;
-          }
-        },
-        ctx.signal,
-      );
-    } catch (e) {
-      const error = LoopError.from(e, {
-        code: ctx.signal.aborted ? 'ABORTED' : 'ENGINE',
-        phase: 'body',
-        path: ctx.path,
-        iteration: ctx.iteration,
-      });
-      ctx.emit({
-        kind: 'error',
-        ts: Date.now(),
-        path,
-        message: error.message,
-        code: error.code,
-      });
-      const outcome: Outcome = {
-        status: ctx.signal.aborted ? 'aborted' : 'fail',
-        summary: error.message,
-        error,
-      };
-      ctx.emit({
-        kind: 'job:end',
-        ts: Date.now(),
-        path,
-        label,
-        outcome,
-      });
-      return outcome;
+    const fallbacks = config.fallback
+      ? Array.isArray(config.fallback)
+        ? config.fallback
+        : [config.fallback]
+      : [];
+    const routes: AgentRoute[] = [
+      {
+        engine: config.engine,
+        model: config.model ?? config.agent?.model,
+        ground,
+        timeoutMs: defaultTimeoutMs,
+        timeoutGraceMs: defaultTimeoutGraceMs,
+      },
+      ...fallbacks,
+    ];
+    const fallbackOn = new Set<LoopErrorCode>(
+      config.fallbackOn ?? ['RATE_LIMIT', 'QUOTA'],
+    );
+    let result: AgentResult | undefined;
+    let successfulGround = ground;
+    for (let i = 0; i < routes.length; i += 1) {
+      const route = routes[i]!;
+      const routeGround = route.ground !== undefined ? route.ground : ground;
+      const routeModel = route.model;
+      const timeoutMs = route.timeoutMs ?? defaultTimeoutMs;
+      const timeoutGraceMs = route.timeoutGraceMs ?? defaultTimeoutGraceMs;
+      try {
+        assertBudget(ctx); // refuse to spend past the run's token budget
+        const prompt = routeGround
+          ? await withGrounding(
+              ctx,
+              contextualPrompt,
+              routeGround,
+              route.engine ?? config.engine,
+              routeModel,
+            )
+          : contextualPrompt;
+        const engine = ctx.resolveEngine(route.engine ?? config.engine);
+        result = await engine.run(
+          {
+            prompt,
+            system,
+            model: routeModel,
+            maxTokens: config.maxTokens,
+            allowedTools: config.allowedTools ?? config.agent?.tools,
+            leaf: config.leaf ?? config.agent?.leaf,
+            cwd: config.cwd ?? ctx.workspace.dir,
+            timeoutMs,
+            timeoutGraceMs,
+            env,
+            loops: loopsRequestMeta(ctx, label),
+          },
+          (e) => {
+            const ts = Date.now();
+            switch (e.type) {
+              case 'text':
+                ctx.emit({ kind: 'engine:text', ts, path, delta: e.delta });
+                break;
+              case 'thinking':
+                ctx.emit({ kind: 'engine:thinking', ts, path, delta: e.delta });
+                break;
+              case 'tool':
+                if (e.phase === 'use')
+                  toolUses.set(e.name, (toolUses.get(e.name) ?? 0) + 1);
+                ctx.emit({
+                  kind: 'engine:tool',
+                  ts,
+                  path,
+                  name: e.name,
+                  phase: e.phase,
+                });
+                break;
+              case 'usage':
+                ctx.emit({
+                  kind: 'engine:usage',
+                  ts,
+                  path,
+                  model: e.model,
+                  usage: e.usage,
+                });
+                break;
+            }
+          },
+          ctx.signal,
+        );
+        successfulGround = routeGround;
+        break;
+      } catch (e) {
+        const error = LoopError.from(e, {
+          code: ctx.signal.aborted ? 'ABORTED' : 'ENGINE',
+          phase: 'body',
+          path: ctx.path,
+          iteration: ctx.iteration,
+        });
+        if (
+          i < routes.length - 1 &&
+          !ctx.signal.aborted &&
+          fallbackOn.has(error.code)
+        ) {
+          ctx.log(
+            `${label} primary route hit ${error.code}; trying fallback route ${i + 2}`,
+            'warn',
+          );
+          continue;
+        }
+        ctx.emit({
+          kind: 'error',
+          ts: Date.now(),
+          path,
+          message: error.message,
+          code: error.code,
+        });
+        const outcome: Outcome = {
+          status: ctx.signal.aborted ? 'aborted' : 'fail',
+          summary: error.message,
+          error,
+        };
+        ctx.emit({
+          kind: 'job:end',
+          ts: Date.now(),
+          path,
+          label,
+          outcome,
+        });
+        return outcome;
+      }
     }
+    if (!result)
+      throw new LoopError({
+        code: 'ENGINE',
+        phase: 'body',
+        message: `${label} produced no engine result`,
+      });
 
     // The reply is the largest capture sink in the library: it becomes the
     // emitted outcome (summary + full data) and from there every persisted
@@ -378,7 +470,7 @@ export function agentJob(config: AgentJobConfig): Job {
     // own reply, without relying on it writing a side file. The reply is split at the
     // handoff marker: the working log (before) goes to `ledger.md`, the structured
     // handoff (after) to `prompt.md`. With no marker, the whole reply is working log.
-    if (ground) {
+    if (successfulGround) {
       appendLedger(ctx.workspace, {
         label,
         iteration: ctx.iteration,
@@ -391,14 +483,17 @@ export function agentJob(config: AgentJobConfig): Job {
     const outcome = config.outcome
       ? await config.outcome(text, ctx, parts)
       : TERMINAL(text);
+    const finalOutcome = result.late && outcome.late !== true
+      ? { ...outcome, late: true }
+      : outcome;
     ctx.emit({
       kind: 'job:end',
       ts: Date.now(),
       path,
       label,
-      outcome,
+      outcome: finalOutcome,
     });
-    return outcome;
+    return finalOutcome;
   };
 
   return setMeta(job, {
@@ -472,7 +567,13 @@ export function commitJob(config: CommitJobConfig): Job {
     const label = config.label ?? 'commit';
     const path = [...ctx.path];
     const cwd = ctx.workspace.dir;
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
     try {
       if (!(await isRepo({ cwd, signal: ctx.signal }))) {
         throw new LoopError({
@@ -548,7 +649,13 @@ export function fnJob(
 ): Job {
   const job: Job = async (ctx) => {
     const path = [...ctx.path];
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
     let outcome: Outcome;
     try {
       outcome = await fn(ctx);
@@ -573,4 +680,113 @@ export function fnJob(
   };
 
   return setMeta(job, { kind: 'fn', name: label });
+}
+
+function validateProofArtifact(name: string, artifact: ProofArtifact): void {
+  if (!artifact || typeof artifact !== 'object') {
+    throw new LoopError({
+      code: 'VALIDATION',
+      message: `prove "${name}" returned no artifact descriptor`,
+    });
+  }
+  if (!['html', 'image', 'markdown', 'table', 'json'].includes(artifact.kind)) {
+    throw new LoopError({
+      code: 'VALIDATION',
+      message: `prove "${name}" returned unsupported kind "${String(artifact.kind)}"`,
+    });
+  }
+  const hasPath = typeof artifact.path === 'string' && artifact.path.trim() !== '';
+  const hasData = artifact.data !== undefined;
+  if (hasPath === hasData) {
+    throw new LoopError({
+      code: 'VALIDATION',
+      message: `prove "${name}" must return exactly one of path or data`,
+    });
+  }
+  if (artifact.data !== undefined && !isJsonValue(artifact.data)) {
+    throw new LoopError({
+      code: 'VALIDATION',
+      message: `prove "${name}" data must be JSON-serializable`,
+    });
+  }
+  if (artifact.meta !== undefined && !isJsonValue(artifact.meta)) {
+    throw new LoopError({
+      code: 'VALIDATION',
+      message: `prove "${name}" meta must be JSON-serializable`,
+    });
+  }
+}
+
+function isJsonValue(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (value === null) return true;
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return true;
+    case 'number':
+      return Number.isFinite(value);
+    case 'object':
+      if (seen.has(value)) return false;
+      seen.add(value);
+      if (Array.isArray(value))
+        return value.every((item) => isJsonValue(item, seen));
+      if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+      return Object.values(value).every((item) => isJsonValue(item, seen));
+    default:
+      return false;
+  }
+}
+
+export function prove(name: string, producer: ProofProducer): Job {
+  const job: Job = async (ctx) => {
+    const path = [...ctx.path];
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label: name,
+      timeoutMs: ctx.timeoutMs,
+    });
+    let outcome: Outcome;
+    try {
+      const artifact = await producer(ctx);
+      validateProofArtifact(name, artifact);
+      if (artifact.path) {
+        const artifactPath = isAbsolute(artifact.path)
+          ? artifact.path
+          : resolve(ctx.workspace.dir, artifact.path);
+        if (!existsSync(artifactPath)) {
+          throw new LoopError({
+            code: 'VALIDATION',
+            message: `prove "${name}" path does not exist: ${artifact.path}`,
+          });
+        }
+      }
+      ctx.emit({ kind: 'proof', ts: Date.now(), path, name, artifact });
+      outcome = {
+        status: 'pass',
+        summary: `proof registered: ${artifact.title ?? name}`,
+        data: { proof: artifact },
+      };
+    } catch (e) {
+      const error = LoopError.from(e, {
+        code: 'VALIDATION',
+        phase: 'body',
+        path,
+        iteration: ctx.iteration,
+      });
+      outcome = { status: 'fail', summary: error.message, error };
+      ctx.emit({
+        kind: 'error',
+        ts: Date.now(),
+        path,
+        message: error.message,
+        code: error.code,
+      });
+    }
+    ctx.emit({ kind: 'job:end', ts: Date.now(), path, label: name, outcome });
+    return outcome;
+  };
+
+  return setMeta(job, { kind: 'prove', name });
 }

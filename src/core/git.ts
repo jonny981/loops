@@ -13,7 +13,7 @@ import { execa } from 'execa';
 import { createHash } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 /** One commit as the ledger sees it: sha plus body. */
 export interface CommitRecord {
@@ -29,6 +29,7 @@ export interface CommitRecord {
 interface GitOpts {
   cwd: string;
   signal?: AbortSignal;
+  excludePaths?: string[];
 }
 
 // Record-delimited log format: sha, ISO date, subject, body, then a record
@@ -111,6 +112,12 @@ export async function workspaceFingerprint(
 ): Promise<string | undefined> {
   try {
     if (!(await isRepo(opts))) return undefined;
+    const excluded = (opts.excludePaths ?? [])
+      .map((p) => relative(opts.cwd, resolve(opts.cwd, p)).replace(/\\/g, '/'))
+      .filter((p) => p && !p.startsWith('..') && p !== '.');
+    const pathspec = excluded.length
+      ? ['--', '.', ...excluded.map((p) => `:(exclude)${p}`)]
+      : [];
     const hash = createHash('sha256');
     const feed = (label: string, value: string) => {
       hash.update(label);
@@ -121,14 +128,17 @@ export async function workspaceFingerprint(
     feed('head', (await headSha(opts)) ?? '');
     // `status --porcelain` captures names/stages even where a diff cannot run
     // (e.g. an unborn HEAD); the two diffs capture tracked content.
-    feed('status', (await git(['status', '--porcelain'], opts)).stdout);
-    feed('unstaged', (await git(['diff'], opts)).stdout);
-    feed('staged', (await git(['diff', '--cached'], opts)).stdout);
+    feed(
+      'status',
+      (await git(['status', '--porcelain', ...pathspec], opts)).stdout,
+    );
+    feed('unstaged', (await git(['diff', ...pathspec], opts)).stdout);
+    feed('staged', (await git(['diff', '--cached', ...pathspec], opts)).stdout);
     // Untracked content, hashed by git (streams; no JS-side file reads). A file
     // vanishing between the list and the hash fails the chunk; its paths still
     // feed the fingerprint, so the disappearance itself reads as a new state.
     const untracked = (
-      await git(['ls-files', '--others', '--exclude-standard'], opts)
+      await git(['ls-files', '--others', '--exclude-standard', ...pathspec], opts)
     ).stdout
       .split('\n')
       .filter(Boolean);

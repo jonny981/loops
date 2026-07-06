@@ -7,12 +7,10 @@
  * `AgentDef.humanGates` — an `AgentHumanGate` is structurally a
  * `HumanGateConfig`, so `humanGate(def.humanGates[0])` works.
  *
- * The acknowledgement lives in `ctx.state` — the ONLY thing a checkpoint
- * persists (`persist.ts` snapshots `{ts, state}`). Resume re-executes the whole
- * job from the top ("the workspace is the state"), so the gate is idempotent:
- * on the resumed pass the seeded ack makes it return `pass`. Everything before
- * the gate re-runs unless the recipe guards it (`when` conditions / state
- * markers); that is the library's documented resume model, not a gap.
+ * The acknowledgement lives in `ctx.state`. With `--checkpoint`, completed
+ * green DAG nodes before the pause are restored from checkpoint on resume;
+ * non-DAG jobs rerun as ordinary jobs. The workspace remains the state, so any
+ * restored node must already have made its durable effects visible there.
  */
 
 import type { Job, JobContext, Outcome } from './types.ts';

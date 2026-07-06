@@ -15,6 +15,7 @@ import type {
   FeedbackFinding,
   LoopEvent,
   Outcome,
+  ProofArtifact,
   RevisionRequest,
 } from '../core/types.ts';
 
@@ -68,12 +69,20 @@ export type SemanticRunRecord =
       sourceEvent: 'loop:review' | 'dag:kickback';
       decision: SemanticDecision;
       revision: RevisionRequest;
+    }
+  | {
+      kind: 'proof';
+      ts: number;
+      path: string[];
+      name: string;
+      artifact: ProofArtifact;
     };
 
 export interface SemanticOutcome {
   status: Outcome['status'];
   summary?: string;
   confidence?: number;
+  late?: true;
 }
 
 function ensureDir(path: string): void {
@@ -86,6 +95,7 @@ function outcomeSummary(outcome: Outcome): SemanticOutcome {
     status: outcome.status,
     summary: outcome.summary,
     confidence: outcome.confidence,
+    ...(outcome.late ? { late: true } : {}),
   };
 }
 
@@ -261,6 +271,16 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
           path: event.path,
           unit: 'dag',
           outcome: outcomeSummary(event.outcome),
+        },
+      ];
+    case 'proof':
+      return [
+        {
+          kind: 'proof',
+          ts: event.ts,
+          path: event.path,
+          name: event.name,
+          artifact: event.artifact,
         },
       ];
     default:

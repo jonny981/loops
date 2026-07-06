@@ -28,6 +28,10 @@ export interface ContextOverride {
   envOverlay?: Record<string, string>;
   /** Override the DAG graph position for a node. */
   graph?: GraphPosition;
+  /** Override the inherited timeout for jobs in this scope. */
+  timeoutMs?: number;
+  /** Override the inherited timeout grace for jobs in this scope. */
+  timeoutGraceMs?: number;
 }
 
 export function childContext(
@@ -38,6 +42,8 @@ export function childContext(
     engine: parent.engine,
     resolveEngine: parent.resolveEngine,
     signal: parent.signal,
+    runId: parent.runId,
+    checkpoint: parent.checkpoint,
     emit: parent.emit,
     state: parent.state,
     // A child inherits the parent's workspace by default; a concurrency
@@ -58,6 +64,8 @@ export function childContext(
     depth: over.depth,
     path: over.path,
     graph: over.graph ?? parent.graph,
+    timeoutMs: over.timeoutMs ?? parent.timeoutMs,
+    timeoutGraceMs: over.timeoutGraceMs ?? parent.timeoutGraceMs,
     // Inherit the enclosing iteration by default. A `loop` always passes one
     // explicitly; a `dag`/`sequence` does not, so without this a node nested in a
     // loop would reset to 0, the "Attempt 0" confound where a retry body could not

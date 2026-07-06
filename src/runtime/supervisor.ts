@@ -26,10 +26,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve as resolvePath } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-import type { JobMeta, LoopEvent, Outcome } from '../core/types.ts';
+import type {
+  JobMeta,
+  LoopEvent,
+  Outcome,
+  ProofRecord,
+} from '../core/types.ts';
 import { makeSemanticRecorder } from './semantic.ts';
 
 /** High-frequency transcript deltas: kept out of the record, as in `recordTo`. */
@@ -59,16 +64,28 @@ export function newRunId(title: string): string {
   return `${slug(title)}-${randomBytes(3).toString('hex')}`;
 }
 
+export interface CurrentWork {
+  kind: 'job' | 'dag-node';
+  path: string[];
+  label?: string;
+  node?: string;
+  startedAt: number;
+  timeoutMs?: number;
+  deadlineAt?: number;
+}
+
 export interface RunLive {
   path: string[];
   iteration: number;
+  current?: CurrentWork;
+  active?: Record<string, CurrentWork>;
   lastGate?: {
     which: string;
     met: boolean;
     confidence?: number;
     reason: string;
   };
-  lastOutcome?: { status: string; summary?: string };
+  lastOutcome?: { status: string; summary?: string; late?: boolean };
   usage: { inputTokens: number; outputTokens: number; calls: number };
 }
 
@@ -86,6 +103,11 @@ export interface RunStatus {
   alive?: boolean;
   shape?: JobMeta;
   live: RunLive;
+  evidence?: {
+    count: number;
+    indexPath?: string;
+    latest?: ProofRecord;
+  };
 }
 
 export interface Supervisor {
@@ -109,6 +131,7 @@ export function startSupervisor(input: {
   const eventsPath = join(dir, 'events.jsonl');
   const semanticPath = join(dir, 'semantic.jsonl');
   const statusPath = join(dir, 'status.json');
+  const evidencePath = join(dir, 'evidence.html');
   try {
     writeFileSync(eventsPath, '');
   } catch {
@@ -130,6 +153,26 @@ export function startSupervisor(input: {
       iteration: 0,
       usage: { inputTokens: 0, outputTokens: 0, calls: 0 },
     },
+  };
+  const proofs: ProofRecord[] = [];
+  const active = new Map<string, CurrentWork>();
+
+  const activeKey = (kind: CurrentWork['kind'], path: readonly string[]) =>
+    `${kind}:${path.join('\u0000')}`;
+  const refreshCurrent = () => {
+    status.live.active = active.size
+      ? Object.fromEntries(active.entries())
+      : undefined;
+    status.live.current = [...active.values()].sort((a, b) => {
+      if (a.path.join('\u0000') === b.path.join('\u0000') && a.kind !== b.kind)
+        return a.kind === 'job' ? -1 : 1;
+      const aDeadline = a.deadlineAt ?? Number.POSITIVE_INFINITY;
+      const bDeadline = b.deadlineAt ?? Number.POSITIVE_INFINITY;
+      const byDeadline = aDeadline - bDeadline;
+      if (byDeadline !== 0) return byDeadline;
+      if (a.kind !== b.kind) return a.kind === 'job' ? -1 : 1;
+      return b.startedAt - a.startedAt;
+    })[0];
   };
 
   const writeStatus = () => {
@@ -166,21 +209,68 @@ export function startSupervisor(input: {
         break;
       case 'dag:node':
         status.live.path = [...event.path, event.node];
+        if (event.phase === 'start') {
+          const work: CurrentWork = {
+            kind: 'dag-node',
+            path: [...event.path, event.node],
+            node: event.node,
+            startedAt: event.ts,
+            timeoutMs: event.timeoutMs,
+            deadlineAt: event.timeoutMs ? event.ts + event.timeoutMs : undefined,
+          };
+          active.set(activeKey('dag-node', work.path), work);
+          refreshCurrent();
+        } else {
+          active.delete(activeKey('dag-node', [...event.path, event.node]));
+          refreshCurrent();
+        }
         break;
+      case 'job:start': {
+        const work: CurrentWork = {
+          kind: 'job',
+          path: event.path,
+          label: event.label,
+          startedAt: event.ts,
+          timeoutMs: event.timeoutMs,
+          deadlineAt: event.timeoutMs ? event.ts + event.timeoutMs : undefined,
+        };
+        active.set(activeKey('job', [...event.path, event.label]), work);
+        refreshCurrent();
+        break;
+      }
       case 'loop:end':
       case 'dag:end':
       case 'job:end':
         status.live.lastOutcome = {
           status: event.outcome.status,
           summary: event.outcome.summary,
+          late: event.outcome.late,
         };
         status.live.path = event.path;
+        if (event.kind === 'job:end') {
+          active.delete(activeKey('job', [...event.path, event.label]));
+          refreshCurrent();
+        }
         break;
       case 'engine:usage':
         status.live.usage.inputTokens += event.usage.inputTokens;
         status.live.usage.outputTokens += event.usage.outputTokens;
         status.live.usage.calls += 1;
         break;
+      case 'proof': {
+        const proof = {
+          name: event.name,
+          path: event.path,
+          artifact: event.artifact,
+        };
+        proofs.push(proof);
+        status.evidence = {
+          count: proofs.length,
+          indexPath: evidencePath,
+          latest: proof,
+        };
+        break;
+      }
     }
     if (!NOISE.has(event.kind)) writeStatus();
   };
@@ -188,10 +278,14 @@ export function startSupervisor(input: {
   const finish = (outcome: Outcome) => {
     status.status = outcome.status;
     status.endedAt = Date.now();
+    status.live.current = undefined;
     status.live.lastOutcome = {
       status: outcome.status,
       summary: outcome.summary,
+      late: outcome.late,
     };
+    if (proofs.length)
+      writeEvidenceIndex(evidencePath, input.title, input.cwd, proofs);
     writeStatus();
   };
 
@@ -244,6 +338,10 @@ export function runEventsPath(runId: string): string {
   return join(runsHome(), runId, 'events.jsonl');
 }
 
+export function runEvidenceIndexPath(runId: string): string {
+  return join(runsHome(), runId, 'evidence.html');
+}
+
 /**
  * A one-read rollup of where a run is and what (if anything) is holding it:
  * `readRunStatus` plus a digest of the event-stream tail. `blocker` is a
@@ -261,6 +359,11 @@ export interface RunProgress {
   lastGate?: RunLive['lastGate'];
   lastOutcome?: RunLive['lastOutcome'];
   usage: RunLive['usage'];
+  current?: RunLive['current'] & {
+    elapsedMs: number;
+    remainingMs?: number;
+  };
+  evidence?: RunStatus['evidence'];
   startedAt: number;
   updatedAt: number;
   blocker?: {
@@ -357,6 +460,16 @@ export function readRunProgress(
   const status = readRunStatus(runId);
   if (!status) return undefined;
   const tail = readEventTail(runId);
+  const now = Date.now();
+  const current = status.live.current
+    ? {
+        ...status.live.current,
+        elapsedMs: Math.max(0, now - status.live.current.startedAt),
+        remainingMs: status.live.current.deadlineAt
+          ? Math.max(0, status.live.current.deadlineAt - now)
+          : undefined,
+      }
+    : undefined;
   return {
     runId: status.runId,
     status: status.status,
@@ -367,6 +480,8 @@ export function readRunProgress(
     lastGate: status.live.lastGate,
     lastOutcome: status.live.lastOutcome,
     usage: status.live.usage,
+    current,
+    evidence: status.evidence,
     startedAt: status.startedAt,
     updatedAt: status.updatedAt,
     blocker: deriveBlocker(status.status, tail, status.live),
@@ -407,19 +522,21 @@ function renderEvent(event: LoopEvent): string {
     case 'loop:condition':
       return `${at}· ${event.which} ${event.result.met ? 'met' : 'not met'}: ${event.result.reason}`;
     case 'loop:review':
-      return `${at}· review: ${event.outcome.status}`;
+      return `${at}· review: ${event.outcome.status}${event.outcome.late ? ' late' : ''}`;
     case 'loop:end':
-      return `${at}◂ ${event.outcome.status} (${event.iterations} iter)`;
+      return `${at}◂ ${event.outcome.status}${event.outcome.late ? ' late' : ''} (${event.iterations} iter)`;
     case 'dag:node':
-      return `${at}· node ${event.node}: ${event.phase}${event.outcome ? ` (${event.outcome.status})` : ''}`;
+      return `${at}· node ${event.node}: ${event.phase}${event.outcome ? ` (${event.outcome.status}${event.outcome.late ? ' late' : ''})` : ''}`;
     case 'dag:kickback':
       return `${at}↩ kickback ${event.accepted ? 'accepted' : 'rejected'} ${event.from} -> ${event.to}: ${event.reason}${event.note ? ` (${event.note})` : ''}`;
     case 'dag:end':
-      return `${at}◂ dag ${event.outcome.status}`;
+      return `${at}◂ dag ${event.outcome.status}${event.outcome.late ? ' late' : ''}`;
     case 'job:start':
       return `${at}• ${event.label}`;
+    case 'proof':
+      return `${at}◈ proof ${event.name}: ${event.artifact.title ?? event.artifact.path ?? event.artifact.kind}`;
     case 'job:end':
-      return `${at}• ${event.label}: ${event.outcome.status}`;
+      return `${at}• ${event.label}: ${event.outcome.status}${event.outcome.late ? ' late' : ''}`;
     case 'engine:tool':
       return `${at}  tool ${event.name} ${event.phase}`;
     case 'engine:usage':
@@ -438,5 +555,91 @@ function renderEvent(event: LoopEvent): string {
       return `${at}✗ ${event.code}: ${event.message}`;
     default:
       return `${at}${event.kind}`;
+  }
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function previewData(data: unknown): string {
+  let text: string;
+  try {
+    text =
+      typeof data === 'string'
+        ? data
+        : JSON.stringify(data, null, 2) ?? String(data);
+  } catch {
+    text = String(data);
+  }
+  return text.length > 1200 ? `${text.slice(0, 1200)}...` : text;
+}
+
+function writeEvidenceIndex(
+  path: string,
+  title: string,
+  cwd: string,
+  proofs: ProofRecord[],
+): void {
+  const items = proofs
+    .map((proof) => {
+      const artifact = proof.artifact;
+      const heading = artifact.title ?? proof.name;
+      const location = proof.path.length ? proof.path.join(' / ') : '(root)';
+      const artifactPath =
+        artifact.path && isAbsolute(artifact.path)
+          ? artifact.path
+          : artifact.path
+            ? resolvePath(cwd, artifact.path)
+            : undefined;
+      const link = artifact.path
+        ? `<p><a href="${escapeHtml(artifactPath)}">${escapeHtml(artifact.path)}</a></p>`
+        : '';
+      const description = artifact.description
+        ? `<p>${escapeHtml(artifact.description)}</p>`
+        : '';
+      const preview =
+        artifact.data !== undefined
+          ? `<pre>${escapeHtml(previewData(artifact.data))}</pre>`
+          : artifact.kind === 'image' && artifactPath
+            ? `<img src="${escapeHtml(artifactPath)}" alt="${escapeHtml(heading)}" loading="lazy" />`
+            : '';
+      return `<article>
+  <h2>${escapeHtml(heading)}</h2>
+  <p><strong>${escapeHtml(proof.name)}</strong> | ${escapeHtml(artifact.kind)} | ${escapeHtml(location)}</p>
+  ${description}
+  ${link}
+  ${preview}
+</article>`;
+    })
+    .join('\n');
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(title)} evidence</title>
+  <style>
+    body { font: 14px/1.45 system-ui, sans-serif; margin: 32px; max-width: 960px; }
+    article { border-top: 1px solid #ddd; padding: 18px 0; }
+    h1, h2 { line-height: 1.15; }
+    pre { background: #f6f6f6; overflow: auto; padding: 12px; }
+    img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(title)} evidence</h1>
+  ${items}
+</body>
+</html>
+`;
+  try {
+    writeFileSync(path, html);
+  } catch {
+    /* best-effort */
   }
 }

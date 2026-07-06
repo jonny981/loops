@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 
 import { run, agentJob, stageAll, commit, MockEngine } from '../src/api.ts';
 import type { RunOptions, AgentRequest } from '../src/api.ts';
+import { requestEnv } from '../src/engines/engine.ts';
 import { tmpRepo, write, cleanupRepos } from './git-helpers.ts';
 
 afterAll(cleanupRepos);
@@ -17,10 +18,16 @@ async function makeCommit(dir: string, file: string, subject: string, body: stri
  * candidates whose subject says "relevant") and the work call (it records the
  * grounded prompt it was handed).
  */
-function dualMock(): { engine: MockEngine; workPrompt: () => string } {
+function dualMock(): {
+  engine: MockEngine;
+  workPrompt: () => string;
+  selectReq: () => AgentRequest | undefined;
+} {
   let seen = '';
+  let select: AgentRequest | undefined;
   const engine = new MockEngine((req: AgentRequest) => {
     if (/Return the shas relevant/i.test(req.prompt)) {
+      select = req;
       const shas = [...req.prompt.matchAll(/^([0-9a-f]{7,}): (.+)$/gm)]
         .filter((m) => /relevant/i.test(m[2]!))
         .map((m) => m[1]!);
@@ -29,7 +36,7 @@ function dualMock(): { engine: MockEngine; workPrompt: () => string } {
     seen = req.prompt;
     return 'done';
   });
-  return { engine, workPrompt: () => seen };
+  return { engine, workPrompt: () => seen, selectReq: () => select };
 }
 
 describe('retrieval grounding', () => {
@@ -61,6 +68,12 @@ describe('retrieval grounding', () => {
     expect(prompt).not.toContain('bumped deps');
     // the caller's prompt is still last
     expect(prompt).toContain('Continue the auth feature.');
+    expect(m.selectReq()?.leaf).toBe(true);
+    expect(requestEnv(m.selectReq()!)).toMatchObject({
+      LOOPS_LEAF: '1',
+      LOOPS_LEAF_ID: 'retrieve-ledger/0',
+      LOOPS_LEAF_LABEL: 'retrieve-ledger',
+    });
   });
 
   it('falls back to nothing when the search finds no relevant commits', async () => {

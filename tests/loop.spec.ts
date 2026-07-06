@@ -39,6 +39,20 @@ describe('loop primitive', () => {
     expect(stats.loops[0]?.iterations).toBe(3);
   });
 
+  it('marks the loop late when the converged body outcome is late', async () => {
+    const { outcome } = await run(
+      loop({
+        name: 'late-body',
+        body: fnJob('b', async () => ({ status: 'pass', late: true })),
+        max: 1,
+      }),
+      mockOpts,
+    );
+
+    expect(outcome.status).toBe('pass');
+    expect(outcome.late).toBe(true);
+  });
+
   it('exhausts at max when nothing converges', async () => {
     const { outcome } = await run(
       loop({

@@ -23,7 +23,7 @@ import {
   retryAfterHeaderToMs,
   isLimitError,
 } from '../src/core/limits.ts';
-import { classifyCliLimit } from '../src/engines/claude-cli.ts';
+import { classifyCliLimit, parseResetAt } from '../src/engines/claude-cli.ts';
 
 /**
  * An engine that throws a given LoopError on its first `n` calls, then succeeds.
@@ -385,6 +385,12 @@ describe('claude-cli limit classification', () => {
 
   it('returns undefined for an unrelated failure', () => {
     expect(classifyCliLimit('command not found')).toBeUndefined();
+  });
+
+  it('parses claude wall-clock reset text with an IANA timezone', () => {
+    const now = Date.parse('2026-07-05T15:30:00+01:00');
+    const reset = parseResetAt('Usage limit reached, resets 4:50pm (Europe/London)', now);
+    expect(reset).toBe(Date.parse('2026-07-05T16:50:00+01:00'));
   });
 });
 

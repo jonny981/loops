@@ -32,11 +32,15 @@ export type {
   LoopEvent,
   LogLevel,
   Workspace,
+  ProofKind,
+  ProofArtifact,
+  ProofRecord,
 } from './core/types.ts';
 
 // Primitives
 export { loop } from './core/loop.ts';
 export { dag, sequence, parallel } from './core/dag.ts';
+export { mapWithConcurrency } from './core/concurrency.ts';
 export {
   pipeline,
   renderPipelineTable,
@@ -46,6 +50,7 @@ export { tournament, type TournamentConfig } from './core/tournament.ts';
 export {
   agentJob,
   fnJob,
+  prove,
   commitJob,
   kickback,
   revisionRequest,
@@ -56,6 +61,9 @@ export {
   HANDOFF_MARK,
   type HandoffParts,
   type AgentJobConfig,
+  type AgentRoute,
+  type ProofDescriptor,
+  type ProofProducer,
   type CommitJobConfig,
   type GroundConfig,
 } from './core/job.ts';
@@ -289,6 +297,7 @@ export {
   readRunStatus,
   readRunProgress,
   runEventsPath,
+  runEvidenceIndexPath,
   runSemanticRecordsPath,
   runsHome,
   formatEvent,

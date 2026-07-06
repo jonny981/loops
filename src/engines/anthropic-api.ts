@@ -12,6 +12,7 @@
  */
 
 import pRetry, { AbortError } from 'p-retry';
+import pTimeout, { TimeoutError } from 'p-timeout';
 
 import type {
   AgentRequest,
@@ -20,6 +21,7 @@ import type {
   EngineEventSink,
   EngineOptions,
 } from './engine.ts';
+import { modelFor } from './engine.ts';
 import { LoopError } from '../core/errors.ts';
 import { retryAfterHeaderToMs } from '../core/limits.ts';
 
@@ -139,8 +141,14 @@ export class AnthropicApiEngine implements Engine {
   ): Promise<AgentResult> {
     const client = await this.client();
     const model =
-      req.model ?? this.opts.defaultModel ?? 'claude-haiku-4-5-20251001';
+      modelFor(req, this.opts, 'anthropic-api') ??
+      'claude-haiku-4-5-20251001';
     const maxTokens = req.maxTokens ?? 1024;
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onAbort, { once: true });
 
     const attempt = async (): Promise<FinalMessage> => {
       try {
@@ -151,7 +159,7 @@ export class AnthropicApiEngine implements Engine {
             system: req.system,
             messages: [{ role: 'user', content: req.prompt }],
           },
-          { signal },
+          { signal: controller.signal },
         );
         stream.on('text', (delta) => onEvent({ type: 'text', delta }));
         return await stream.finalMessage();
@@ -169,12 +177,26 @@ export class AnthropicApiEngine implements Engine {
     };
 
     let message;
+    const hardTimeout =
+      req.timeoutMs && req.timeoutGraceMs
+        ? req.timeoutMs + req.timeoutGraceMs
+        : req.timeoutMs;
+    let timedOut = false;
     try {
-      message = await pRetry(attempt, {
+      const pending = pRetry(attempt, {
         retries: 2,
         minTimeout: 500,
         factor: 2,
       });
+      message = await (hardTimeout
+        ? pTimeout(pending, { milliseconds: hardTimeout }).catch((e) => {
+            if (e instanceof TimeoutError) {
+              timedOut = true;
+              controller.abort();
+            }
+            throw e;
+          })
+        : pending);
     } catch (e) {
       if (signal.aborted)
         throw new LoopError({
@@ -182,9 +204,18 @@ export class AnthropicApiEngine implements Engine {
           phase: 'engine',
           message: 'anthropic-api run aborted',
         });
+      if (timedOut)
+        throw new LoopError({
+          code: 'TIMEOUT',
+          phase: 'engine',
+          message: 'anthropic-api run timed out',
+          cause: e,
+        });
       // p-retry unwraps AbortError to its cause; surface a typed limit as-is.
       if (e instanceof LoopError) throw e;
       throw LoopError.from(e, { code: 'ENGINE', phase: 'engine' });
+    } finally {
+      signal.removeEventListener('abort', onAbort);
     }
 
     const text = message.content
@@ -201,6 +232,8 @@ export class AnthropicApiEngine implements Engine {
       usage,
       model,
       stopReason: message.stop_reason ?? undefined,
+      late:
+        typeof req.timeoutMs === 'number' && Date.now() - startedAt > req.timeoutMs,
       raw: message,
     };
   }

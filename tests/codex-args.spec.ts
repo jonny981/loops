@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
+import { modelFor } from '../src/engines/engine.ts';
 import { buildCodexArgs } from '../src/engines/codex.ts';
 
 describe('buildCodexArgs', () => {
@@ -32,5 +33,45 @@ describe('buildCodexArgs', () => {
     expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.1-codex');
     expect(args).toContain('--ignore-rules');
     expect(args.at(-1)).toBe('be careful\n\n---\n\ngo');
+  });
+
+  it('does not inherit another engine default model', () => {
+    const leaf = buildCodexArgs(
+      { prompt: 'review with codex' },
+      { defaultEngine: 'agent-sdk', defaultModel: 'claude-sonnet-4-5' },
+      '/tmp/out.txt',
+    );
+    expect(leaf).not.toContain('-m');
+
+    const root = buildCodexArgs(
+      { prompt: 'review with codex' },
+      { defaultEngine: 'codex', defaultModel: 'gpt-5.4' },
+      '/tmp/out.txt',
+    );
+    expect(root[root.indexOf('-m') + 1]).toBe('gpt-5.4');
+  });
+
+  it('shares default models across Claude engines but not into Codex', () => {
+    expect(
+      modelFor(
+        { prompt: 'judge' },
+        { defaultEngine: 'agent-sdk', defaultModel: 'claude-opus-4-5' },
+        'anthropic-api',
+      ),
+    ).toBe('claude-opus-4-5');
+    expect(
+      modelFor(
+        { prompt: 'judge' },
+        { defaultEngine: 'agent-sdk', defaultModel: 'claude-opus-4-5' },
+        'codex',
+      ),
+    ).toBeUndefined();
+    expect(
+      modelFor(
+        { prompt: 'judge' },
+        { defaultEngine: 'codex', defaultModel: 'gpt-5.4' },
+        'anthropic-api',
+      ),
+    ).toBeUndefined();
   });
 });

@@ -44,6 +44,20 @@ export interface AgentRequest {
   env?: Record<string, string>;
   timeoutMs?: number;
   /**
+   * Extra hard-timeout window after `timeoutMs`. Engines may accept a completed
+   * final result that arrived before this boundary and mark it `late`.
+   */
+  timeoutGraceMs?: number;
+  /** Loops-owned subprocess metadata, converted to env by CLI-backed engines. */
+  loops?: {
+    leaf: true;
+    runId?: string;
+    leafId: string;
+    path: string[];
+    label: string;
+    iteration: number;
+  };
+  /**
    * Forbid this agent from spawning sub-agents (fanning out). A leaf agent is told to
    * disallow the sub-agent tool (`SUBAGENT_TOOLS`), so a branch of the graph bottoms out
    * here instead of expanding further. Authoritative over `allowedTools` (a disallow
@@ -58,6 +72,8 @@ export interface AgentResult {
   usage: Usage;
   model: string;
   stopReason?: string;
+  /** True when the turn completed after its soft timeout but inside grace. */
+  late?: boolean;
   /** Backend-native final payload, for escape-hatch inspection. */
   raw?: unknown;
 }
@@ -100,6 +116,21 @@ export function isEngine(ref: EngineRef | undefined): ref is Engine {
   );
 }
 
+export function requestEnv(req: AgentRequest): Record<string, string> | undefined {
+  if (!req.env && !req.loops) return undefined;
+  const loops = req.loops
+    ? {
+        LOOPS_LEAF: '1',
+        LOOPS_LEAF_ID: req.loops.leafId,
+        LOOPS_LEAF_LABEL: req.loops.label,
+        LOOPS_LEAF_PATH: req.loops.path.join('/'),
+        LOOPS_LEAF_ITERATION: String(req.loops.iteration),
+        ...(req.loops.runId ? { LOOPS_RUN_ID: req.loops.runId } : {}),
+      }
+    : {};
+  return { ...req.env, ...loops };
+}
+
 /**
  * How a tool-using engine treats permission prompts. Mirrors the Claude Code
  * values. `bypassPermissions` lets a headless worker read/write/run without
@@ -118,6 +149,10 @@ export type PermissionMode =
 export interface EngineOptions {
   /** Default model when a request/step does not name one. */
   defaultModel?: string;
+  /** Per-engine defaults, used when mixed-engine jobs share one run. */
+  defaultModels?: Partial<Record<EngineName, string>>;
+  /** Internal: the run's default engine, used to scope `defaultModel`. */
+  defaultEngine?: EngineName;
   apiKey?: string;
   /** For CLI-backed engines: path to the binary. */
   cliBinary?: string;
@@ -138,6 +173,32 @@ export interface EngineOptions {
    * outside the SDK.
    */
   minToolIntervalMs?: number;
+}
+
+export function modelFor(
+  req: AgentRequest,
+  opts: EngineOptions,
+  engine: EngineName,
+): string | undefined {
+  return (
+    req.model ??
+    opts.defaultModels?.[engine] ??
+    (opts.defaultEngine == null ||
+    opts.defaultEngine === engine ||
+    sameModelFamily(opts.defaultEngine, engine)
+      ? opts.defaultModel
+      : undefined)
+  );
+}
+
+const CLAUDE_MODEL_ENGINES = new Set<EngineName>([
+  'agent-sdk',
+  'claude-cli',
+  'anthropic-api',
+]);
+
+function sameModelFamily(a: EngineName | undefined, b: EngineName): boolean {
+  return !!a && CLAUDE_MODEL_ENGINES.has(a) && CLAUDE_MODEL_ENGINES.has(b);
 }
 
 /**

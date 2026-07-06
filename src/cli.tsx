@@ -230,7 +230,8 @@ async function execute(
       ? 'plain'
       : 'tui';
 
-  const resumeCommand = buildResumeCommand(file, flags);
+  const resumeCommand =
+    process.env.LOOPS_RESUME_COMMAND ?? buildResumeCommand(file, flags);
 
   const hub = createHub();
   const signals = installSignalHandlers();
@@ -276,7 +277,7 @@ async function execute(
   }
 
   if (result.outcome.status === 'paused')
-    printResumeGuidance(file, flags, result.outcome);
+    printResumeGuidance(file, flags, result.outcome, resumeCommand);
 
   signals.dispose();
   process.exitCode = exitCodeFor(result.outcome);
@@ -288,7 +289,7 @@ async function execute(
  * Returns `undefined` when no checkpoint is configured: such a run can still pause
  * cleanly, but it has no state to resume.
  */
-function buildResumeCommand(
+export function buildResumeCommand(
   file: string | undefined,
   flags: RunFlags,
 ): string | undefined {
@@ -296,23 +297,53 @@ function buildResumeCommand(
   const parts = ['loops', 'run'];
   if (file) parts.push(quoteArg(file));
   parts.push('--resume', quoteArg(flags.checkpoint));
-  // Carry the flags that shape the run so the resume is the same job.
-  if (flags.engine) parts.push('--engine', flags.engine);
-  if (flags.budget) parts.push('--budget', flags.budget);
+  const opt = (name: string, value: string | undefined) => {
+    if (value !== undefined) parts.push(name, quoteArg(value));
+  };
+  const repeat = (name: string, values: string[] | undefined) => {
+    for (const value of values ?? []) parts.push(name, quoteArg(value));
+  };
+  // Carry the flags that shape the run so the resume is the same job. `--state`
+  // and prior `--ack` values deliberately stay out: the checkpoint is the
+  // restored state, and `printResumeGuidance` appends the gate ack being lifted.
+  opt('--engine', flags.engine);
+  opt('--default-model', flags.defaultModel);
+  opt('--worker-model', flags.workerModel);
+  opt('--validator-model', flags.validatorModel);
+  opt('--reviewer-model', flags.reviewerModel);
+  opt('--cli-binary', flags.cliBinary);
+  opt('--permission-mode', flags.permissionMode);
+  repeat('--engine-arg', flags.engineArg);
+  if (!file) {
+    opt('--prompt-file', flags.promptFile);
+    if (!flags.promptFile) opt('--prompt', flags.prompt);
+    opt('--max', flags.max);
+    opt('--until', flags.until);
+    opt('--threshold', flags.threshold);
+    opt('--start', flags.start);
+    opt('--review', flags.review);
+    opt('--review-threshold', flags.reviewThreshold);
+    opt('--interval', flags.interval);
+    opt('--max-tokens', flags.maxTokens);
+    opt('--stall-after', flags.stallAfter);
+  }
+  opt('--budget', flags.budget);
   // A resumed run silently losing grounding would change agent behaviour mid-run.
   if (flags.ground) parts.push('--ground');
-  if (flags.onLimit) parts.push('--on-limit', flags.onLimit);
-  if (flags.maxWait) parts.push('--max-wait', flags.maxWait);
-  if (flags.record) parts.push('--record', quoteArg(flags.record));
-  if (flags.checkpoint) parts.push('--checkpoint', quoteArg(flags.checkpoint));
+  opt('--on-limit', flags.onLimit);
+  opt('--max-wait', flags.maxWait);
+  opt('--record', flags.record);
+  opt('--checkpoint', flags.checkpoint);
   if (flags.tui === false) parts.push('--no-tui');
   if (flags.json) parts.push('--json');
   return parts.join(' ');
 }
 
-/** Shell-quote an argument only when it contains whitespace or quotes. */
+/** Shell-quote an argument unless it is a plain shell token. */
 function quoteArg(value: string): string {
-  return /[\s'"]/.test(value) ? `'${value.replace(/'/g, `'\\''`)}'` : value;
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Print resume guidance to stderr on a paused run (a TUI-safe channel).
@@ -321,11 +352,12 @@ export function printResumeGuidance(
   file: string | undefined,
   flags: RunFlags,
   outcome: Outcome,
+  resumeCommand = process.env.LOOPS_RESUME_COMMAND ?? buildResumeCommand(file, flags),
 ): void {
   // A human-gate pause needs `--ack <name>` on the resume; a limit pause does not.
   const gate = pausedHumanGate(outcome);
   const at = gate ? `at human gate "${gate}"` : 'at a limit';
-  const cmd = buildResumeCommand(file, flags);
+  const cmd = resumeCommand;
   if (cmd) {
     const resume = gate ? `${cmd} --ack ${quoteArg(gate)}` : cmd;
     process.stderr.write(`\nPaused ${at}. Resume with:\n  ${resume}\n`);
@@ -412,6 +444,8 @@ function formatSemanticRecord(record: SemanticRunRecord): string {
       return `${at}revision emitted ${record.sourceEvent}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
     case 'revision-routed':
       return `${at}revision routed ${record.sourceEvent} ${record.decision}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
+    case 'proof':
+      return `${at}proof ${record.name}: ${record.artifact.title ?? record.artifact.path ?? record.artifact.kind}`;
   }
 }
 
@@ -636,7 +670,15 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         g
           ? `  gate:    ${g.which} ${g.met ? 'met' : 'not met'}${g.confidence != null ? ` @ ${g.confidence.toFixed(2)}` : ''}: ${toLine(g.reason)}`
           : '',
-        o ? `  last:    ${o.status}${o.summary ? `: ${toLine(o.summary)}` : ''}` : '',
+        o
+          ? `  last:    ${o.status}${o.late ? ' late' : ''}${o.summary ? `: ${toLine(o.summary)}` : ''}`
+          : '',
+        progress?.current
+          ? `  current: ${progress.current.label ?? progress.current.node ?? progress.current.kind} (${Math.round(progress.current.elapsedMs / 1000)}s elapsed${progress.current.remainingMs != null ? `, ${Math.round(progress.current.remainingMs / 1000)}s remaining` : ''})`
+          : '',
+        progress?.evidence?.count
+          ? `  evidence: ${progress.evidence.count}${progress.evidence.indexPath ? ` at ${progress.evidence.indexPath}` : ''}`
+          : '',
         `  tokens:  ${r.live.usage.inputTokens} in / ${r.live.usage.outputTokens} out (${r.live.usage.calls} calls)`,
         progress?.blocker
           ? `  blocker: ${progress.blocker.kind}: ${toLine(progress.blocker.detail)}`
@@ -712,7 +754,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("show a supervised run's semantic records")
     .option(
       '--kind <kind>',
-      'filter by record kind: dispatch | completion | surfacing | revision-emitted | revision-routed | revision',
+      'filter by record kind: dispatch | completion | surfacing | revision-emitted | revision-routed | revision | proof',
     )
     .option('--path <path>', 'filter by slash-separated record path prefix')
     .option('--since <time>', 'show records at or after an epoch ms or ISO timestamp')
@@ -732,6 +774,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         'revision-emitted',
         'revision-routed',
         'revision',
+        'proof',
       ];
       if (flags.kind && !validKinds.includes(flags.kind)) {
         process.stderr.write(

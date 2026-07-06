@@ -17,12 +17,12 @@ import { Budget, type BudgetConfig } from '../core/budget.ts';
 import {
   makeRecorder,
   makeCheckpointer,
-  loadCheckpoint,
+  loadCheckpointEnvelope,
   flushCheckpoint,
 } from './persist.ts';
 import { startSupervisor, newRunId, type Supervisor } from './supervisor.ts';
 import { jobMeta } from '../core/describe.ts';
-import { currentBranch } from '../core/git.ts';
+import { currentBranch, workspaceFingerprint } from '../core/git.ts';
 import type { GroundConfig } from '../core/job.ts';
 import type { Environment, EnvHandle } from '../env/environment.ts';
 import type { Forge } from '../core/forge.ts';
@@ -33,6 +33,7 @@ import type {
   LoopEvent,
   Outcome,
   Workspace,
+  CheckpointControl,
 } from '../core/types.ts';
 
 /** Default ceiling on an interruptible limit-wait: 5 minutes. */
@@ -122,11 +123,15 @@ export async function run(
   job: Job,
   options: RunOptions = {},
 ): Promise<RunResult> {
-  const registry = new EngineRegistry(options.engineOptions ?? {});
+  const defaultEngine = options.engine ?? 'agent-sdk';
+  const engineOptions: EngineOptions = {
+    ...(options.engineOptions ?? {}),
+    defaultEngine,
+  };
+  const registry = new EngineRegistry(engineOptions);
   for (const [name, value] of Object.entries(options.engines ?? {})) {
     registry.register(name, typeof value === 'function' ? value : () => value);
   }
-  const defaultEngine = options.engine ?? 'agent-sdk';
 
   const stats = new Stats();
   const controller = new AbortController();
@@ -146,13 +151,30 @@ export async function run(
             : options.budget,
         )
       : undefined;
+  const dir = options.cwd ?? process.cwd();
 
   // Resume restores the shared scratchpad a prior checkpoint wrote; an explicit
   // `state` seed wins over the restored values.
   let initialState: Record<string, unknown> = options.state ?? {};
+  let checkpointControl: CheckpointControl | undefined =
+    options.checkpoint || options.resumeFrom ? { dags: {} } : undefined;
   if (options.resumeFrom) {
     try {
-      initialState = { ...loadCheckpoint(options.resumeFrom), ...initialState };
+      const checkpoint = loadCheckpointEnvelope(options.resumeFrom);
+      initialState = { ...checkpoint.state, ...initialState };
+      checkpointControl = checkpoint.control;
+      const currentFingerprint = await workspaceFingerprint({
+        cwd: dir,
+        signal: controller.signal,
+        excludePaths: [options.resumeFrom],
+      });
+      if (
+        currentFingerprint !== undefined &&
+        checkpoint.workspaceFingerprint !== currentFingerprint
+      ) {
+        checkpointControl.resumeDags = undefined;
+        checkpointControl.dags = {};
+      }
     } catch (e) {
       throw new LoopError({
         code: 'CONFIG',
@@ -164,20 +186,23 @@ export async function run(
   // Persistence sinks observe the same event stream as reporters. The
   // checkpointer closes over `initialState`, which is `rootCtx.state`, so it
   // always snapshots the live, mutated scratchpad.
-  const dir = options.cwd ?? process.cwd();
   const sinks: Array<(event: LoopEvent) => void> = [];
   if (options.recordTo) sinks.push(makeRecorder(options.recordTo));
   if (options.checkpoint)
-    sinks.push(makeCheckpointer(options.checkpoint, initialState));
+    sinks.push(
+      makeCheckpointer(options.checkpoint, initialState, checkpointControl),
+    );
 
   // A supervised run registers itself in the global registry (~/.loops/runs) and
   // writes its live state there, so another process can list/status/tail it.
   let supervisor: Supervisor | undefined;
+  let runId: string | undefined;
   if (options.supervise) {
     const shape = jobMeta(job);
     const title = shape?.name ?? 'run';
+    runId = newRunId(title);
     supervisor = startSupervisor({
-      runId: newRunId(title),
+      runId,
       cwd: dir,
       title,
       shape,
@@ -242,6 +267,8 @@ export async function run(
     engine: resolveEngine(defaultEngine),
     resolveEngine,
     signal: controller.signal,
+    runId,
+    checkpoint: checkpointControl,
     emit,
     state: initialState,
     workspace,
@@ -280,7 +307,16 @@ export async function run(
   // A paused run is meant to be resumed; guarantee the latest shared state is on
   // disk even if no boundary event flushed it (the checkpointer is best-effort).
   if (outcome.status === 'paused' && options.checkpoint)
-    flushCheckpoint(options.checkpoint, initialState);
+    flushCheckpoint(
+      options.checkpoint,
+      initialState,
+      checkpointControl,
+      await workspaceFingerprint({
+        cwd: dir,
+        signal: controller.signal,
+        excludePaths: [options.checkpoint],
+      }),
+    );
 
   supervisor?.finish(outcome);
 

@@ -61,7 +61,13 @@ export function pushJob(config: PushJobConfig = {}): Job {
   return async (ctx) => {
     const label = config.label ?? 'push';
     const path = [...ctx.path];
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
     const branch = config.branch ?? ctx.workspace.branch;
     const res = await push({
       cwd: ctx.workspace.dir,
@@ -111,7 +117,13 @@ export function pullRequestJob(config: PullRequestJobConfig = {}): Job {
   return async (ctx) => {
     const label = config.label ?? 'pull-request';
     const path = [...ctx.path];
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
     try {
       const branch = ctx.workspace.branch;
       if (!branch)
@@ -222,7 +234,13 @@ export function mergeJob(config: MergeJobConfig = {}): Job {
   return async (ctx) => {
     const label = config.label ?? 'merge';
     const path = [...ctx.path];
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
     try {
       const branch = ctx.workspace.branch;
       if (!branch)

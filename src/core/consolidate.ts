@@ -206,7 +206,13 @@ export function consolidateJob(config: ConsolidateJobConfig = {}): Job {
     const label = config.label ?? 'consolidate';
     const subject = config.subject ?? 'consolidate: ledger';
     const path = [...ctx.path];
-    ctx.emit({ kind: 'job:start', ts: Date.now(), path, label });
+    ctx.emit({
+      kind: 'job:start',
+      ts: Date.now(),
+      path,
+      label,
+      timeoutMs: ctx.timeoutMs,
+    });
     try {
       // The prior ledger is the body of the most recent consolidation commit; the
       // consolidated ledger lives in commit bodies, not a tracked file.

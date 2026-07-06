@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { printResumeGuidance } from '../src/cli.tsx';
+import { buildResumeCommand, printResumeGuidance } from '../src/cli.tsx';
 
 import {
   run,
@@ -440,6 +440,90 @@ describe('the printed resume hint', () => {
     expect(text).toContain('--ack approve');
     expect(text).toContain('--resume ckpt.json');
   });
+
+  it('preserves flags-mode job definition in the resume command', () => {
+    const command = buildResumeCommand(undefined, {
+      checkpoint: 'ckpt.json',
+      prompt: 'write the patch',
+      until: 'tests pass',
+      max: '7',
+      threshold: '0.9',
+      review: 'strict review',
+      reviewThreshold: '0.95',
+      interval: '5s',
+      maxTokens: '1000',
+      stallAfter: '3',
+      engine: 'codex',
+      defaultModel: 'gpt-5.4-mini',
+      workerModel: 'gpt-5.4',
+      validatorModel: 'gpt-5.4-mini',
+      reviewerModel: 'gpt-5.4',
+      permissionMode: 'plan',
+      engineArg: ['--foo', 'bar baz'],
+      ground: true,
+      record: 'run.jsonl',
+      state: '{"old":true}',
+      ack: ['prior-gate'],
+      tui: false,
+    });
+
+    expect(command).toContain('--prompt');
+    expect(command).toContain('write the patch');
+    expect(command).toContain('--until');
+    expect(command).toContain('tests pass');
+    expect(command).toContain('--max 7');
+    expect(command).toContain('--review');
+    expect(command).toContain('strict review');
+    expect(command).toContain('--engine codex');
+    expect(command).toContain('--default-model gpt-5.4-mini');
+    expect(command).toContain("--engine-arg 'bar baz'");
+    expect(command).toContain('--ground');
+    expect(command).toContain('--checkpoint ckpt.json');
+    expect(command).toContain('--resume ckpt.json');
+    expect(command).not.toContain('--state');
+    expect(command).not.toContain('--ack');
+  });
+
+  it('quotes shell metacharacters in resume command arguments', () => {
+    const fileCommand = buildResumeCommand('plans/deploy;prod.loop.ts', {
+      checkpoint: 'ckpt;prod.json',
+    });
+    const flagsCommand = buildResumeCommand(undefined, {
+      checkpoint: 'ckpt;prod.json',
+      prompt: 'ship $(whoami)',
+    });
+
+    expect(fileCommand).toContain("'plans/deploy;prod.loop.ts'");
+    expect(fileCommand).toContain("--resume 'ckpt;prod.json'");
+    expect(flagsCommand).toContain("--resume 'ckpt;prod.json'");
+    expect(flagsCommand).toContain("--prompt 'ship $(whoami)'");
+  });
+
+  it('uses a caller-provided resume command before appending the gate ack', () => {
+    const chunks: string[] = [];
+    const write = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk) => {
+        chunks.push(String(chunk));
+        return true;
+      });
+    try {
+      printResumeGuidance(
+        'deploy.loop.ts',
+        { checkpoint: 'ckpt.json' },
+        { status: 'paused', data: { humanGate: 'approve' } },
+        'npx tsx examples/feature-dev.ts --resume ckpt.json',
+      );
+    } finally {
+      write.mockRestore();
+    }
+
+    const text = chunks.join('');
+    expect(text).toContain(
+      'npx tsx examples/feature-dev.ts --resume ckpt.json --ack approve',
+    );
+    expect(text).not.toContain('loops run deploy.loop.ts');
+  });
 });
 
 describe('paused propagation: nesting', () => {
@@ -478,7 +562,7 @@ describe('paused propagation: nesting', () => {
 });
 
 describe('resume round-trip', () => {
-  it('pause writes a checkpoint; an acked resume re-executes from the top', async () => {
+  it('pause writes a checkpoint; an acked resume skips completed DAG nodes', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'loops-human-gate-'));
     const checkpoint = join(dir, 'ckpt.json');
     const counters: number[] = [];
@@ -509,9 +593,9 @@ describe('resume round-trip', () => {
       state: { [humanGateKey('approve')]: true },
     });
     expect(second.outcome.status).toBe('pass');
-    // Resume re-executes the whole job from the top ("the workspace is the
-    // state"): the pre-gate step ran again against the restored state.
-    expect(counters).toEqual([1, 2]);
+    // The sequence is a DAG. Its green pre-gate node was checkpointed, so the
+    // acked resume starts at the gate instead of replaying durable work.
+    expect(counters).toEqual([1]);
   });
 });
 

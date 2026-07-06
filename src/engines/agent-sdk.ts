@@ -4,7 +4,7 @@
  * Uses the host's Claude Code auth, so it needs no API key.
  */
 
-import pTimeout from 'p-timeout';
+import pTimeout, { TimeoutError } from 'p-timeout';
 
 // Type-only, so the SDK import stays lazy at runtime. Pinning the hooks value
 // to the SDK's own `Options['hooks']` makes an SDK shape drift fail typecheck
@@ -13,6 +13,8 @@ import type { Options as SdkOptions } from '@anthropic-ai/claude-agent-sdk';
 
 import {
   SUBAGENT_TOOLS,
+  modelFor,
+  requestEnv,
   toolPacer,
   type AgentRequest,
   type AgentResult,
@@ -104,9 +106,9 @@ export class AgentSdkEngine implements Engine {
     // Lazy import so installs/runs that never touch this engine don't pay for it.
     const { query } = await import('@anthropic-ai/claude-agent-sdk');
 
-    const acc = newAccumulator(
-      req.model ?? this.opts.defaultModel ?? 'unknown',
-    );
+    const model = modelFor(req, this.opts, 'agent-sdk');
+    const acc = newAccumulator(model ?? 'unknown');
+    const env = requestEnv(req);
     const abort = new AbortController();
     const onAbort = () => abort.abort();
     if (signal.aborted) abort.abort();
@@ -134,7 +136,7 @@ export class AgentSdkEngine implements Engine {
 
     // The SDK option surface drifts across versions; cast at this boundary.
     const options = {
-      model: req.model ?? this.opts.defaultModel,
+      model,
       systemPrompt: req.system,
       cwd: req.cwd,
       allowedTools: req.allowedTools,
@@ -143,13 +145,15 @@ export class AgentSdkEngine implements Engine {
       // The SDK's `env` REPLACES the subprocess environment entirely, the
       // opposite of execa's merge semantics, so spread `process.env` under the
       // request's vars to keep merge-over-parent parity with the CLI engines.
-      env: req.env ? { ...process.env, ...req.env } : undefined,
+      env: env ? { ...process.env, ...env } : undefined,
       permissionMode: this.opts.permissionMode,
       ...(hooks ? { hooks } : {}),
       includePartialMessages: true,
       abortController: abort,
     } as Record<string, unknown>;
 
+    const startedAt = Date.now();
+    let timedOut = false;
     try {
       const response = query({
         prompt: req.prompt,
@@ -158,8 +162,18 @@ export class AgentSdkEngine implements Engine {
       const consume = (async () => {
         for await (const message of response) mapMessage(message, acc, onEvent);
       })();
-      await (req.timeoutMs
-        ? pTimeout(consume, { milliseconds: req.timeoutMs })
+      const hardTimeout =
+        req.timeoutMs && req.timeoutGraceMs
+          ? req.timeoutMs + req.timeoutGraceMs
+          : req.timeoutMs;
+      await (hardTimeout
+        ? pTimeout(consume, { milliseconds: hardTimeout }).catch((e) => {
+            if (e instanceof TimeoutError) {
+              timedOut = true;
+              abort.abort();
+            }
+            throw e;
+          })
         : consume);
     } catch (e) {
       if (signal.aborted)
@@ -168,15 +182,32 @@ export class AgentSdkEngine implements Engine {
           phase: 'engine',
           message: 'agent-sdk run aborted',
         });
-      const limit = classifySdkLimit(e, req.env);
+      if (timedOut && req.timeoutGraceMs && acc.terminal && acc.text) {
+        onEvent({ type: 'usage', usage: acc.usage, model: acc.model });
+        return {
+          text: acc.text,
+          usage: acc.usage,
+          model: acc.model,
+          stopReason: acc.stopReason,
+          late: true,
+        };
+      }
+      const limit = classifySdkLimit(e, env);
       if (limit) throw limit;
       if (e instanceof LoopError) throw e;
+      if (timedOut)
+        throw new LoopError({
+          code: 'TIMEOUT',
+          phase: 'engine',
+          message: 'agent-sdk run timed out',
+          cause: e,
+        });
       throw new LoopError({
         code: 'ENGINE',
         phase: 'engine',
         message: scrubCapture(
           e instanceof Error ? e.message : String(e),
-          req.env,
+          env,
         ),
         cause: e,
       });
@@ -190,6 +221,8 @@ export class AgentSdkEngine implements Engine {
       usage: acc.usage,
       model: acc.model,
       stopReason: acc.stopReason,
+      late:
+        typeof req.timeoutMs === 'number' && Date.now() - startedAt > req.timeoutMs,
     };
   }
 }

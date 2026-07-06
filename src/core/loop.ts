@@ -224,6 +224,7 @@ export function loop(config: LoopConfig): Job {
               summary:
                 last?.summary ?? `reached max iterations (${config.max})`,
               confidence: last?.confidence,
+              ...(last?.late ? { late: true } : {}),
               data: last?.data,
             },
             iteration,
@@ -424,6 +425,7 @@ export function loop(config: LoopConfig): Job {
               {
                 status: 'pass',
                 confidence: conv.confidence ?? last.confidence,
+                ...(last.late ? { late: true } : {}),
                 summary: last.summary,
                 data: last.data,
               },
@@ -475,6 +477,7 @@ export function loop(config: LoopConfig): Job {
               {
                 status: 'pass',
                 confidence: reviewOutcome.confidence ?? conv.confidence,
+                ...(last.late || reviewOutcome.late ? { late: true } : {}),
                 summary: reviewOutcome.summary ?? last.summary,
                 data: last.data,
               },
@@ -496,6 +499,7 @@ export function loop(config: LoopConfig): Job {
               {
                 status: 'exhausted',
                 summary: `review rejected ${consecutiveReviewFails}× (maxReviewRestarts)`,
+                ...(last.late || reviewOutcome.late ? { late: true } : {}),
                 data: last.data,
               },
               iteration,
@@ -571,6 +575,7 @@ export function loop(config: LoopConfig): Job {
                   `stalled after ${report.iterations.length} iterations with ` +
                   `no observable progress: ${report.reason}`,
                 confidence: last.confidence,
+                ...(last.late ? { late: true } : {}),
                 data: last.data,
                 stall: report,
               },

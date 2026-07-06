@@ -88,6 +88,26 @@ export class LoopError extends Error {
   }
 }
 
+const INFRASTRUCTURE_ERROR_CODES = new Set<LoopErrorCode>([
+  'ENGINE',
+  'TIMEOUT',
+  'RATE_LIMIT',
+  'QUOTA',
+  'BUDGET',
+]);
+
+export function isInfrastructureError(
+  error: unknown,
+): error is LoopError {
+  return error instanceof LoopError && INFRASTRUCTURE_ERROR_CODES.has(error.code);
+}
+
+export function isEngineExecutionError(
+  error: unknown,
+): error is LoopError {
+  return isInfrastructureError(error);
+}
+
 /**
  * Default `retryable` by code. ENGINE/TIMEOUT and RATE_LIMIT always refresh on
  * their own, so they retry. QUOTA retries only when a reset is known (a reset

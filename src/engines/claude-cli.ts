@@ -7,6 +7,8 @@
 import { execa } from 'execa';
 import {
   SUBAGENT_TOOLS,
+  modelFor,
+  requestEnv,
   type AgentRequest,
   type AgentResult,
   type Engine,
@@ -58,18 +60,138 @@ export function classifyCliLimit(text: string): LoopError | undefined {
 }
 
 /**
- * Pull a reset time (epoch ms) out of CLI limit text. The CLI states a reset as
- * an epoch-seconds value (e.g. `resets at 1700000000`); convert to ms. Returns
+ * Pull a reset time (epoch ms) out of CLI limit text. The CLI may state a reset
+ * as an epoch seconds/ms value (`resets at 1700000000`) or as a wall-clock time
+ * with an optional IANA zone (`resets 4:50pm (Europe/London)`). Returns
  * `undefined` when no reset is stated — a quota with no parseable reset is not
  * auto-waitable.
  */
-function parseResetAt(text: string): number | undefined {
+export function parseResetAt(
+  text: string,
+  now: number = Date.now(),
+): number | undefined {
   const m = /(?:reset|resets|retry|available)\D{0,20}(\d{10,13})/i.exec(text);
-  if (!m) return undefined;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n)) return undefined;
-  // 10-digit values are epoch seconds; 13-digit are already ms.
-  return m[1]!.length <= 10 ? n * 1000 : n;
+  if (m) {
+    const n = Number(m[1]);
+    if (!Number.isFinite(n)) return undefined;
+    // 10-digit values are epoch seconds; 13-digit are already ms.
+    return m[1]!.length <= 10 ? n * 1000 : n;
+  }
+
+  const clock =
+    /(?:reset|resets|retry|available)[^\n\d]*(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b(?:\s*\(([^)]+)\))?/i.exec(
+      text,
+    );
+  if (!clock) return undefined;
+  let hour = Number(clock[1]);
+  const minute = clock[2] ? Number(clock[2]) : 0;
+  const meridiem = clock[3]!.toLowerCase();
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return undefined;
+  if (meridiem === 'pm' && hour !== 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+
+  const zone = clock[4]?.trim();
+  let candidate = zone
+    ? zonedWallClockMs(now, hour, minute, zone)
+    : localWallClockMs(now, hour, minute);
+  if (candidate <= now) {
+    const nextDay = now + 24 * 60 * 60 * 1000;
+    candidate = zone
+      ? zonedWallClockMs(nextDay, hour, minute, zone)
+      : localWallClockMs(nextDay, hour, minute);
+  }
+  return candidate;
+}
+
+function localWallClockMs(now: number, hour: number, minute: number): number {
+  const d = new Date(now);
+  d.setHours(hour, minute, 0, 0);
+  return d.getTime();
+}
+
+function zonedWallClockMs(
+  now: number,
+  hour: number,
+  minute: number,
+  zone: string,
+): number {
+  const parts = zonedParts(now, zone);
+  if (!parts) return localWallClockMs(now, hour, minute);
+  return wallClockToUtc(
+    parts.year,
+    parts.month,
+    parts.day,
+    hour,
+    minute,
+    zone,
+  );
+}
+
+function wallClockToUtc(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  zone: string,
+): number {
+  const wall = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
+  let utc = wall - zoneOffsetMs(zone, wall);
+  utc = wall - zoneOffsetMs(zone, utc);
+  return utc;
+}
+
+function zoneOffsetMs(zone: string, utcMs: number): number {
+  const parts = zonedParts(utcMs, zone);
+  if (!parts) return new Date(utcMs).getTimezoneOffset() * -60_000;
+  const asUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  return asUtc - utcMs;
+}
+
+function zonedParts(
+  ms: number,
+  zone: string,
+):
+  | {
+      year: number;
+      month: number;
+      day: number;
+      hour: number;
+      minute: number;
+      second: number;
+    }
+  | undefined {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(ms));
+    const value = (type: string) =>
+      Number(parts.find((p) => p.type === type)?.value);
+    return {
+      year: value('year'),
+      month: value('month'),
+      day: value('day'),
+      hour: value('hour'),
+      minute: value('minute'),
+      second: value('second'),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -81,7 +203,7 @@ export function buildClaudeArgs(
   req: AgentRequest,
   opts: EngineOptions,
 ): string[] {
-  const model = req.model ?? opts.defaultModel;
+  const model = modelFor(req, opts, 'claude-cli');
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (model) args.push('--model', model);
   if (req.system) args.push('--append-system-prompt', req.system);
@@ -107,8 +229,14 @@ export class ClaudeCliEngine implements Engine {
     signal: AbortSignal,
   ): Promise<AgentResult> {
     const bin = this.opts.cliBinary ?? 'claude';
-    const model = req.model ?? this.opts.defaultModel;
+    const model = modelFor(req, this.opts, 'claude-cli');
     const args = buildClaudeArgs(req, this.opts);
+    const env = requestEnv(req);
+    const hardTimeout =
+      req.timeoutMs && req.timeoutGraceMs
+        ? req.timeoutMs + req.timeoutGraceMs
+        : req.timeoutMs;
+    const startedAt = Date.now();
 
     const acc = newAccumulator(model ?? 'claude-cli');
     // Buffered (default) so `stderr` is a string for error messages; we still
@@ -117,7 +245,7 @@ export class ClaudeCliEngine implements Engine {
       cwd: req.cwd,
       // execa merges this over `process.env` (`extendEnv` default); undefined
       // is inert, so a request with no env changes nothing.
-      env: req.env,
+      env,
       cancelSignal: signal,
       // The prompt is passed as an argument, not piped, so don't let `claude -p`
       // stall waiting on stdin.
@@ -126,7 +254,7 @@ export class ClaudeCliEngine implements Engine {
       // SIGKILL so a wedged subprocess can't make Ctrl-C hang.
       forceKillAfterDelay: 5000,
       reject: false,
-      timeout: req.timeoutMs,
+      timeout: hardTimeout,
       stripFinalNewline: false,
     });
 
@@ -159,21 +287,33 @@ export class ClaudeCliEngine implements Engine {
         phase: 'engine',
         message: 'claude-cli run aborted',
       });
+    const late =
+      typeof req.timeoutMs === 'number' && Date.now() - startedAt > req.timeoutMs;
     if (result.failed) {
+      if (result.timedOut && req.timeoutGraceMs && acc.terminal && acc.text) {
+        onEvent({ type: 'usage', usage: acc.usage, model: acc.model });
+        return {
+          text: acc.text,
+          usage: acc.usage,
+          model: acc.model,
+          stopReason: acc.stopReason,
+          late: true,
+        };
+      }
       // The child's stderr is outside our control and may echo credentials on
       // an auth failure. `scrubCapture` redacts (env values verbatim, then
       // shape patterns, both on the FULL stream, before the cut) so nothing
       // secret lands in events/logs/the summary.
       const stderr =
         typeof result.stderr === 'string'
-          ? scrubCapture(result.stderr, req.env, 400)
+          ? scrubCapture(result.stderr, env, 400)
           : '';
       // A rate/usage limit can land on either stream; check both (redacted)
       // before falling through to the generic exit-code error.
       if (!result.timedOut) {
         const stdout =
           typeof result.stdout === 'string'
-            ? scrubCapture(result.stdout, req.env, 400)
+            ? scrubCapture(result.stdout, env, 400)
             : '';
         const limit = classifyCliLimit(`${stderr}\n${stdout}`);
         if (limit) throw limit;
@@ -191,6 +331,7 @@ export class ClaudeCliEngine implements Engine {
       usage: acc.usage,
       model: acc.model,
       stopReason: acc.stopReason,
+      late,
     };
   }
 }

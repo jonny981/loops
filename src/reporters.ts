@@ -183,6 +183,12 @@ export function plainReporter(): Listener {
         endStream();
         console.log(`${indent(event.path)}  ${pc.gray('•')} ${event.label}`);
         return;
+      case 'proof':
+        endStream();
+        console.log(
+          `${indent(event.path)}  ${pc.cyan('proof')} ${event.name}: ${pc.dim(event.artifact.title ?? event.artifact.path ?? event.artifact.kind)}`,
+        );
+        return;
       case 'engine:tool':
         endStream();
         console.log(
@@ -237,7 +243,7 @@ export function printSummary(result: RunResult, resumeCommand?: string): void {
   const line = pc.dim('─'.repeat(56));
   console.log(`\n${line}`);
   console.log(
-    `${pc.bold('Result')}  ${statusColor(outcome.status, outcome.status.toUpperCase())}${outcome.confidence != null ? pc.gray(`  confidence ${outcome.confidence.toFixed(2)}`) : ''}`,
+    `${pc.bold('Result')}  ${statusColor(outcome.status, outcome.status.toUpperCase())}${outcome.late ? pc.yellow('  late') : ''}${outcome.confidence != null ? pc.gray(`  confidence ${outcome.confidence.toFixed(2)}`) : ''}`,
   );
   if (outcome.summary) console.log(`${pc.dim('Summary')} ${outcome.summary}`);
   // A paused run is resumable; surface the exact command to continue it.

@@ -20,6 +20,7 @@ import type {
   EngineEventSink,
   EngineOptions,
 } from './engine.ts';
+import { modelFor, requestEnv } from './engine.ts';
 import { LoopError } from '../core/errors.ts';
 import { scrubCapture } from '../core/redact.ts';
 
@@ -28,7 +29,7 @@ export function buildCodexArgs(
   opts: EngineOptions,
   outFile: string,
 ): string[] {
-  const model = req.model ?? opts.defaultModel;
+  const model = modelFor(req, opts, 'codex');
   const prompt = req.system ? `${req.system}\n\n---\n\n${req.prompt}` : req.prompt;
   const args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never'];
 
@@ -54,21 +55,27 @@ export class CodexEngine implements Engine {
     onEvent: EngineEventSink,
     signal: AbortSignal,
   ): Promise<AgentResult> {
-    const model = req.model ?? this.opts.defaultModel;
+    const model = modelFor(req, this.opts, 'codex');
     const dir = mkdtempSync(join(tmpdir(), 'loops-codex-'));
     const outFile = join(dir, 'last.txt');
     const args = buildCodexArgs(req, this.opts, outFile);
+    const env = requestEnv(req);
+    const hardTimeout =
+      req.timeoutMs && req.timeoutGraceMs
+        ? req.timeoutMs + req.timeoutGraceMs
+        : req.timeoutMs;
+    const startedAt = Date.now();
 
     try {
       const sub = await execa(this.opts.cliBinary ?? 'codex', args, {
         stdin: 'ignore', // codex exec stalls on an open stdin
         // execa merges this over `process.env` (`extendEnv` default); undefined
         // is inert, so a request with no env changes nothing.
-        env: req.env,
+        env,
         cancelSignal: signal,
         forceKillAfterDelay: 5000,
         reject: false,
-        timeout: req.timeoutMs,
+        timeout: hardTimeout,
       });
       if (signal.aborted)
         throw new LoopError({ code: 'ABORTED', phase: 'engine', message: 'codex run aborted' });
@@ -79,7 +86,7 @@ export class CodexEngine implements Engine {
       } catch {
         /* no final message written */
       }
-      if (!text && sub.failed)
+      if (sub.failed)
         throw new LoopError({
           code: sub.timedOut ? 'TIMEOUT' : 'ENGINE',
           phase: 'engine',
@@ -88,7 +95,7 @@ export class CodexEngine implements Engine {
           // slice boundary cannot survive.
           message: `codex exited ${sub.exitCode ?? '?'}${
             typeof sub.stderr === 'string'
-              ? `: ${scrubCapture(sub.stderr, req.env, 300)}`
+              ? `: ${scrubCapture(sub.stderr, env, 300)}`
               : ''
           }`,
         });
@@ -98,7 +105,15 @@ export class CodexEngine implements Engine {
       const usage = { inputTokens: 0, outputTokens: 0 };
       if (text) onEvent({ type: 'text', delta: text });
       onEvent({ type: 'usage', usage, model: model ?? 'codex' });
-      return { text, usage, model: model ?? 'codex', stopReason: 'end_turn' };
+      return {
+        text,
+        usage,
+        model: model ?? 'codex',
+        stopReason: 'end_turn',
+        late:
+          (typeof req.timeoutMs === 'number' &&
+            Date.now() - startedAt > req.timeoutMs),
+      };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

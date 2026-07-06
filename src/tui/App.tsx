@@ -226,6 +226,7 @@ export function App({ hub, title, onAbort }: AppProps): React.ReactElement {
       <Box marginTop={1} justifyContent="space-between">
         <Text color="gray">
           {m.calls} call(s) · {m.tokensIn} in / {m.tokensOut} out tok
+          {m.proofCount ? ` · ${m.proofCount} proof(s)` : ''}
         </Text>
         {m.errors.length > 0 ? (
           <Text color="red">{m.errors.length} error(s)</Text>

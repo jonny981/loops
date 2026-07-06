@@ -116,6 +116,28 @@ loops records <runId> --kind revision --path ship/implementation --json  # the s
 
 Two supervision skills go deeper: [`skills/supervise-loop-run/SKILL.md`](skills/supervise-loop-run/SKILL.md) (monitor a run) and [`skills/design-agent-team/SKILL.md`](skills/design-agent-team/SKILL.md) (compose a specialist team).
 
+**Feature-development example**: [`examples/feature-dev.ts`](examples/feature-dev.ts)
+wraps a reusable feature loop with Commander flags, so recipe inputs are normal
+CLI arguments rather than environment setup.
+
+```bash
+npx tsx examples/feature-dev.ts --validate --feature checkout-redesign
+npx tsx examples/feature-dev.ts --describe-json --feature checkout-redesign
+npx tsx examples/feature-dev.ts \
+  --feature checkout-redesign \
+  --engine codex \
+  --adversarial-model opus \
+  --live-agents \
+  --supervise \
+  --no-tui
+```
+
+The example is offline by default. With `--live-agents`, implementation and the
+ordinary reviewers use `--engine` / `--main-model`; the adversarial reviewer uses
+the opposite engine family by default (`codex` main => `claude-cli` adversarial,
+Claude-family main => `codex` adversarial). Override that lane with
+`--adversarial-engine` and `--adversarial-model`.
+
 **Offline demo** (no network, no key; uses the mock engine):
 
 ```bash
@@ -188,7 +210,7 @@ With no `until`, a `pass` body ends the loop. Terminal status is one of `pass ·
 
 `loops` is a **fresh-context loop primitive**, not a durable workflow engine. The design bet is that **the workspace is the state**: progress _and its reasoning_ live in git (the Ledger), so each iteration can start clean and still know what came before. If the process dies mid-run, you re-run against the same workspace (the worktree holds the files, the scratch files hold the why, the log holds the milestones) and continue. You lose the bookkeeping, not the work.
 
-It deliberately does **not** do durable mid-run replay (re-running a half-finished graph and skipping completed steps). That's an orchestration concern; for it, embed a `loops` job as a step inside [Temporal](https://temporal.io), [LangGraph](https://github.com/langchain-ai/langgraphjs), or [Mastra](https://mastra.ai). What it _does_ offer (run records, a thin state checkpoint, a token budget) is the lightweight version that fits the workspace-is-state model.
+It deliberately does **not** try to become a durable workflow engine. For long-lived replay, embed a `loops` job as a step inside [Temporal](https://temporal.io), [LangGraph](https://github.com/langchain-ai/langgraphjs), or [Mastra](https://mastra.ai). What it _does_ offer is the lightweight version that fits the workspace-is-state model: run records, state checkpoints, and checkpointed DAG resume for completed green nodes whose durable effects already live in the workspace.
 
 | You want…                                          | Reach for…                          |
 | -------------------------------------------------- | ----------------------------------- |
@@ -458,7 +480,7 @@ dag({
 });
 ```
 
-`needs` = dependencies; a non-`pass` required dependency blocks its dependents; a failed `optional` producer neither fails the DAG nor blocks its dependents, which run and must tolerate its artifacts being absent; an unmet `when` skips a node (counts green); cycles are detected before any work runs. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
+`needs` = dependencies; a non-`pass` required dependency blocks its dependents; a failed `optional` producer neither fails the DAG nor blocks its dependents, which run and must tolerate its artifacts being absent; an unmet `when` skips a node (counts green); cycles are detected before any work runs. DAG fan-out defaults to 4 concurrent nodes. `sequence(name, ...jobs)` and `parallel(name, jobs, concurrency?)` are sugar over `dag`.
 
 ### `pipeline`: ordered stages
 
@@ -570,8 +592,8 @@ Four opt-in `RunOptions` (with matching CLI flags). All default off.
 | ------------ | -------------------- | ------------------------------------------------------------------------------------- |
 | `budget`     | `--budget <n>`       | Cap total tokens for the run. Engine calls refuse once the cap is hit.                |
 | `recordTo`   | `--record <path>`    | Append every structured event as JSONL: a readable, queryable run record.            |
-| `checkpoint` | `--checkpoint <p>`   | Snapshot the shared `ctx.state` at each loop/dag/job boundary (latest-wins).          |
-| `resumeFrom` | `--resume <path>`    | Restore the `ctx.state` a prior `--checkpoint` wrote, so a re-run continues warm.     |
+| `checkpoint` | `--checkpoint <p>`   | Snapshot shared `ctx.state` and completed green DAG nodes at loop/dag/job boundaries. |
+| `resumeFrom` | `--resume <path>`    | Restore checkpoint state and skip restored green DAG nodes once, then continue warm.  |
 
 ```ts
 await run(job, { budget: 2_000_000, recordTo: '.loops/run.jsonl', checkpoint: '.loops/state.json' });
@@ -618,7 +640,7 @@ loops run deploy.loop.ts --checkpoint .loops/state.json
 #     loops run deploy.loop.ts --resume .loops/state.json --checkpoint .loops/state.json --ack prod-approval
 ```
 
-The acknowledgement lives in `ctx.state` under `humanGateKey(name)` — seeded by CLI `--ack <name>` (repeatable), a `--state` JSON seed, or an earlier job writing the key — and a pause's checkpoint carries it across the process boundary. Resume re-executes the job from the top (the workspace is the state), and the seeded ack makes the gate pass on the second run; guard expensive pre-gate steps with `when` conditions or state markers. A custom `ack` function (e.g. a marker file exists) replaces the state lookup and owns its own durability.
+The acknowledgement lives in `ctx.state` under `humanGateKey(name)`, seeded by CLI `--ack <name>` (repeatable), a `--state` JSON seed, or an earlier job writing the key, and a pause's checkpoint carries it across the process boundary. With `--checkpoint`, completed green DAG nodes are restored from checkpoint on resume; non-DAG jobs rerun as ordinary jobs. A custom `ack` function (e.g. a marker file exists) replaces the state lookup and owns its own durability.
 
 An `AgentDef`'s `humanGates` entries are structurally `HumanGateConfig`s, so the gate an agent declares (`humanGates: [{ name: 'prod-approval', … }]`) drops into the graph unchanged: `humanGate(def.humanGates[0])`. `pausedHumanGate(outcome)` reads the gate name back out of any nested paused outcome — it is how the CLI knows which `--ack` to print.
 

@@ -166,6 +166,126 @@ describe('out-of-process supervision', () => {
       // A traversal-shaped id is rejected outright, never joined into a path.
       expect(readRunProgress('../../outside/registry')).toBeUndefined();
     });
+
+    it('reports active DAG node elapsed and remaining timeout', async () => {
+      let release!: () => void;
+      const blocker = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const running = run(
+        dag({
+          name: 'timed-dag',
+          nodes: {
+            slow: {
+              timeoutMs: 5_000,
+              job: fnJob('slow', async () => {
+                await blocker;
+                return { status: 'pass' as const };
+              }),
+            },
+          },
+        }),
+        { supervise: true },
+      );
+
+      let progress;
+      for (let i = 0; i < 20; i += 1) {
+        const runId = listRuns().find((run) => run.title === 'timed-dag')?.runId;
+        progress = runId ? readRunProgress(runId) : undefined;
+        if (progress?.current?.label === 'slow') break;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(progress?.current).toMatchObject({
+        kind: 'job',
+        label: 'slow',
+        timeoutMs: 5_000,
+      });
+      expect(progress!.current!.elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(progress!.current!.remainingMs).toBeGreaterThan(0);
+
+      release();
+      await running;
+    });
+
+    it('reports active bare DAG nodes before any nested job event', async () => {
+      let release!: () => void;
+      const blocker = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const running = run(
+        dag({
+          name: 'bare-dag',
+          nodes: {
+            bare: {
+              timeoutMs: 5_000,
+              job: async () => {
+                await blocker;
+                return { status: 'pass' as const };
+              },
+            },
+          },
+        }),
+        { supervise: true },
+      );
+
+      let progress;
+      for (let i = 0; i < 20; i += 1) {
+        const runId = listRuns().find((run) => run.title === 'bare-dag')?.runId;
+        progress = runId ? readRunProgress(runId) : undefined;
+        if (progress?.current?.node === 'bare') break;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(progress?.current).toMatchObject({
+        kind: 'dag-node',
+        node: 'bare',
+        timeoutMs: 5_000,
+      });
+
+      release();
+      await running;
+    });
+
+    it('keeps showing a slow active sibling after a fast sibling finishes', async () => {
+      let releaseSlow!: () => void;
+      const slowBlocker = new Promise<void>((resolve) => {
+        releaseSlow = resolve;
+      });
+      const running = run(
+        dag({
+          name: 'sibling-dag',
+          nodes: {
+            slow: {
+              timeoutMs: 5_000,
+              job: fnJob('slow', async () => {
+                await slowBlocker;
+                return { status: 'pass' as const };
+              }),
+            },
+            fast: {
+              timeoutMs: 5_000,
+              job: fnJob('fast', async () => ({ status: 'pass' as const })),
+            },
+          },
+        }),
+        { supervise: true },
+      );
+
+      let progress;
+      for (let i = 0; i < 30; i += 1) {
+        const runId = listRuns().find((run) => run.title === 'sibling-dag')?.runId;
+        progress = runId ? readRunProgress(runId) : undefined;
+        if (progress?.current?.label === 'slow') break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(progress?.current).toMatchObject({
+        kind: 'job',
+        label: 'slow',
+        timeoutMs: 5_000,
+      });
+
+      releaseSlow();
+      await running;
+    });
   });
 
   describe('formatEvent (the terminal seam)', () => {
@@ -183,6 +303,18 @@ describe('out-of-process supervision', () => {
       expect(line).not.toMatch(/[\u0000-\u001f\u007f]/);
       expect(line).toContain('bad');
       expect(line).toContain('fake \u2713 line');
+    });
+
+    it('surfaces late outcomes in formatted events', () => {
+      const line = formatEvent({
+        kind: 'job:end',
+        ts: 0,
+        path: ['build'],
+        label: 'worker',
+        outcome: { status: 'pass', late: true },
+      });
+
+      expect(line).toContain('pass late');
     });
   });
 });
