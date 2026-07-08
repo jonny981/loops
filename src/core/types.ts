@@ -19,6 +19,7 @@ import type { Engine, EngineRef, Usage } from '../engines/engine.ts';
 import type { LoopError } from './errors.ts';
 import type { Budget } from './budget.ts';
 import type { CommitJobConfig, GroundConfig } from './job.ts';
+import type { RunParams } from './params.ts';
 import type { NoProgressInput, StallReport } from './progress.ts';
 import type { EnvHandle, Environment } from '../env/environment.ts';
 import type { Forge } from './forge.ts';
@@ -182,6 +183,8 @@ export interface JobContext {
   emit(event: LoopEvent): void;
   /** Shared mutable state for the whole run (e.g. accumulating notes). */
   readonly state: Record<string, unknown>;
+  /** Values parsed from a recipe's declared run parameters. */
+  readonly params: RunParams;
   /** Where this job's code lives — the working dir and branch (the substrate). */
   readonly workspace: Workspace;
   /** The running environment for this workspace, when one is up (gate target). */
@@ -470,6 +473,21 @@ export interface ProofRecord {
 export type ConditionKind = 'start' | 'until' | 'stopOn';
 
 export type LoopEvent =
+  | {
+      kind: 'runtime:restore';
+      ts: number;
+      path: string[];
+      checkpoint: string;
+      decision: 'restored' | 'skipped';
+      restoredNodes: number;
+      totalNodes?: number;
+      reason: string;
+      fingerprint:
+        | 'matched'
+        | 'changed'
+        | 'checkpoint-missing'
+        | 'workspace-unavailable';
+    }
   | {
       kind: 'loop:start';
       ts: number;

@@ -24,6 +24,15 @@ import { loop } from './core/loop.ts';
 import { humanGateKey, pausedHumanGate } from './core/human.ts';
 import { jobMeta, renderPlan } from './core/describe.ts';
 import {
+  validateParamDefinitions,
+  toKebabCase,
+  type ParamDefinitions,
+  type ParamSpec,
+  type RunParams,
+} from './core/params.ts';
+import type { LoopsConfig, LoopsRunConfig } from './core/config-file.ts';
+import { gitRoot } from './core/git.ts';
+import {
   listRuns,
   readRunStatus,
   readRunProgress,
@@ -62,7 +71,7 @@ interface RunFlags {
   state?: string;
   budget?: string;
   ground?: boolean;
-  record?: string;
+  record?: string | false;
   checkpoint?: string;
   resume?: string;
   supervise?: boolean;
@@ -70,10 +79,18 @@ interface RunFlags {
   maxWait?: string;
   json?: boolean;
   tui?: boolean; // commander sets false for --no-tui
+  config?: string;
+  profile?: string;
+  paramArg?: string[];
 }
 
 const ON_LIMIT_VALUES = ['auto', 'wait', 'exit-resume', 'fail'] as const;
 type OnLimitValue = (typeof ON_LIMIT_VALUES)[number];
+
+interface CoreOptionMetadata {
+  flags: ReadonlySet<string>;
+  valueFlags: ReadonlySet<string>;
+}
 
 /** The worker prompt comes from --prompt OR --prompt-file (not both). */
 function resolvePrompt(flags: RunFlags): string {
@@ -89,7 +106,13 @@ function resolvePrompt(flags: RunFlags): string {
   return flags.prompt ?? '';
 }
 
-async function loadJob(file: string): Promise<{ job: Job; title: string }> {
+interface LoadedRecipe {
+  job: Job;
+  title: string;
+  params?: ParamDefinitions;
+}
+
+async function loadJob(file: string): Promise<LoadedRecipe> {
   const resolved = path.resolve(file);
   if (!fs.existsSync(resolved)) {
     throw new Error(
@@ -117,13 +140,493 @@ async function loadJob(file: string): Promise<{ job: Job; title: string }> {
     );
   }
   const def = mod.default ?? mod.job ?? mod.loop;
+  const params = readRecipeParams(mod, file);
   const title = path.basename(file).replace(/\.(loop\.)?(t|j)sx?$/, '');
-  if (typeof def === 'function') return { job: def as Job, title };
+  if (typeof def === 'function') return { job: def as Job, title, params };
   if (def && typeof def === 'object' && 'body' in def)
-    return { job: loop(def as LoopConfig), title };
+    return { job: loop(def as LoopConfig), title, params };
   throw new Error(
     `${file}: default export must be a Job (from loop()/dag()/agentJob()) or a LoopConfig`,
   );
+}
+
+function readRecipeParams(
+  mod: Record<string, unknown>,
+  file: string,
+): ParamDefinitions | undefined {
+  if (mod.params === undefined) return undefined;
+  if (!mod.params || typeof mod.params !== 'object' || Array.isArray(mod.params)) {
+    throw new Error(`${file}: exported params must come from defineParams({...})`);
+  }
+  const params = mod.params as ParamDefinitions;
+  validateParamDefinitions(params);
+  return params;
+}
+
+const RUN_CONFIG_KEYS = new Set([
+  'engine',
+  'defaultModel',
+  'workerModel',
+  'validatorModel',
+  'reviewerModel',
+  'apiKey',
+  'cliBinary',
+  'permissionMode',
+  'engineArg',
+  'budget',
+  'ground',
+  'record',
+  'checkpoint',
+  'supervise',
+  'onLimit',
+  'maxWait',
+  'json',
+  'tui',
+]);
+
+function optionAttribute(flag: string): string {
+  return flag.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+
+function isRecipePath(value: string): boolean {
+  return /\.(loop\.)?[cm]?[tj]sx?$/.test(value) && fs.existsSync(path.resolve(value));
+}
+
+function optionMetadata(command: Command): CoreOptionMetadata {
+  const flags = new Set<string>();
+  const valueFlags = new Set<string>();
+  for (const option of command.options) {
+    for (const flag of [option.long, option.short].filter(
+      (flag): flag is string => Boolean(flag),
+    )) {
+      flags.add(flag);
+      if (option.required || option.optional || option.variadic) {
+        valueFlags.add(flag);
+      }
+    }
+    if (option.negate) flags.add(`--${option.attributeName()}`);
+  }
+  return { flags, valueFlags };
+}
+
+function inferRunFile(
+  args: string[],
+  coreOptions: CoreOptionMetadata,
+): string | undefined {
+  const tokens = args[0] === 'run' ? args.slice(1) : args;
+  if (tokens[0] && !tokens[0].startsWith('-') && !isRecipePath(tokens[0]))
+    return undefined;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (token === '--') break;
+    if (token.startsWith('--') && token.includes('=')) {
+      const [name] = token.split('=', 1);
+      if (name && coreOptions.flags.has(name)) continue;
+    }
+    if (coreOptions.valueFlags.has(token)) {
+      i += 1;
+      continue;
+    }
+    if (!token.startsWith('-') && isRecipePath(token)) return token;
+  }
+  return undefined;
+}
+
+function assertNoCoreParamCollisions(
+  params: ParamDefinitions,
+  coreOptions: CoreOptionMetadata,
+): void {
+  for (const [key, spec] of Object.entries(params)) {
+    const flag = spec.flag ?? toKebabCase(key);
+    if (
+      coreOptions.flags.has(`--${flag}`) ||
+      coreOptions.flags.has(`--no-${flag}`)
+    ) {
+      throw new Error(`recipe param "${key}" collides with loops flag "--${flag}"`);
+    }
+  }
+}
+
+function addRecipeParamOptions(
+  command: Command,
+  params: ParamDefinitions,
+  coreOptions: CoreOptionMetadata,
+): void {
+  assertNoCoreParamCollisions(params, coreOptions);
+  for (const [key, spec] of Object.entries(params)) {
+    const flag = spec.flag ?? toKebabCase(key);
+    const help = spec.help ?? `recipe parameter "${key}"`;
+    if (spec.type === 'boolean') {
+      command.option(`--${flag}`, help);
+      command.option(`--no-${flag}`, `disable ${help}`);
+    } else if (spec.type === 'string[]') {
+      command.option(
+        `--${flag} <value>`,
+        help,
+        (value: string, acc: string[] | undefined) => [...(acc ?? []), value],
+      );
+    } else {
+      command.option(`--${flag} <value>`, help);
+    }
+  }
+}
+
+function readStaticRecipeParams(file: string): ParamDefinitions | undefined {
+  const source = fs.readFileSync(path.resolve(file), 'utf8');
+  const match = /export\s+const\s+params\s*=\s*defineParams\s*\(/.exec(source);
+  if (!match) return undefined;
+  const parser = new LiteralParser(source, match.index + match[0].length);
+  const parsed = parser.parseValue();
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const params = parsed as ParamDefinitions;
+  validateParamDefinitions(params);
+  return params;
+}
+
+class LiteralParser {
+  constructor(
+    private readonly source: string,
+    private index: number,
+  ) {}
+
+  parseValue(): unknown {
+    this.skip();
+    const ch = this.source[this.index];
+    if (ch === '{') return this.parseObject();
+    if (ch === '[') return this.parseArray();
+    if (ch === '"' || ch === "'" || ch === '`') return this.parseString();
+    if (ch === '-' || /\d/.test(ch ?? '')) return this.parseNumber();
+    const ident = this.parseIdentifier();
+    if (ident === 'true') return true;
+    if (ident === 'false') return false;
+    throw new Error('recipe params help only supports literal metadata');
+  }
+
+  private parseObject(): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    this.expect('{');
+    while (true) {
+      this.skip();
+      if (this.take('}')) return out;
+      const key = this.parseKey();
+      this.skip();
+      this.expect(':');
+      out[key] = this.parseValue();
+      this.skip();
+      if (this.take('}')) return out;
+      this.expect(',');
+    }
+  }
+
+  private parseArray(): unknown[] {
+    const out: unknown[] = [];
+    this.expect('[');
+    while (true) {
+      this.skip();
+      if (this.take(']')) return out;
+      out.push(this.parseValue());
+      this.skip();
+      if (this.take(']')) return out;
+      this.expect(',');
+    }
+  }
+
+  private parseKey(): string {
+    this.skip();
+    const ch = this.source[this.index];
+    if (ch === '"' || ch === "'" || ch === '`') return this.parseString();
+    return this.parseIdentifier();
+  }
+
+  private parseString(): string {
+    const quote = this.source[this.index++];
+    let out = '';
+    while (this.index < this.source.length) {
+      const ch = this.source[this.index++]!;
+      if (ch === quote) return out;
+      if (quote === '`' && ch === '$' && this.source[this.index] === '{') {
+        throw new Error('recipe params help does not evaluate template expressions');
+      }
+      if (ch !== '\\') {
+        out += ch;
+        continue;
+      }
+      const escaped = this.source[this.index++]!;
+      if (escaped === 'n') out += '\n';
+      else if (escaped === 'r') out += '\r';
+      else if (escaped === 't') out += '\t';
+      else if (escaped === 'u') {
+        const hex = this.source.slice(this.index, this.index + 4);
+        if (!/^[0-9a-f]{4}$/i.test(hex)) throw new Error('invalid unicode escape');
+        out += String.fromCharCode(Number.parseInt(hex, 16));
+        this.index += 4;
+      } else {
+        out += escaped;
+      }
+    }
+    throw new Error('unterminated string in recipe params');
+  }
+
+  private parseNumber(): number {
+    const match = /-?(?:0|[1-9]\d*)(?:\.\d+)?/.exec(
+      this.source.slice(this.index),
+    );
+    if (!match) throw new Error('invalid number in recipe params');
+    this.index += match[0].length;
+    return Number(match[0]);
+  }
+
+  private parseIdentifier(): string {
+    const match = /[A-Za-z_$][\w$]*/.exec(this.source.slice(this.index));
+    if (!match) throw new Error('expected identifier in recipe params');
+    this.index += match[0].length;
+    return match[0];
+  }
+
+  private expect(ch: string): void {
+    this.skip();
+    if (!this.take(ch)) throw new Error(`expected "${ch}" in recipe params`);
+  }
+
+  private take(ch: string): boolean {
+    if (this.source[this.index] !== ch) return false;
+    this.index += 1;
+    return true;
+  }
+
+  private skip(): void {
+    while (this.index < this.source.length) {
+      const ch = this.source[this.index];
+      if (/\s/.test(ch ?? '')) {
+        this.index += 1;
+        continue;
+      }
+      if (ch === '/' && this.source[this.index + 1] === '/') {
+        this.index += 2;
+        while (this.index < this.source.length && this.source[this.index] !== '\n') {
+          this.index += 1;
+        }
+        continue;
+      }
+      if (ch === '/' && this.source[this.index + 1] === '*') {
+        this.index += 2;
+        while (
+          this.index < this.source.length &&
+          !(this.source[this.index] === '*' && this.source[this.index + 1] === '/')
+        ) {
+          this.index += 1;
+        }
+        this.index += 2;
+        continue;
+      }
+      return;
+    }
+  }
+}
+
+async function loadConfig(
+  flags: RunFlags,
+  cwd: string,
+): Promise<LoopsRunConfig> {
+  const configPath = await resolveConfigPath(flags.config, cwd);
+  if (!configPath) return {};
+  const mod = (await import(pathToFileURL(configPath).href)) as {
+    default?: unknown;
+    config?: unknown;
+  };
+  const config = (mod.default ?? mod.config) as LoopsConfig | undefined;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error(`${configPath}: config must export an object`);
+  }
+  const profile = flags.profile;
+  const profileConfig = profile ? config.profiles?.[profile] : undefined;
+  if (profile && profileConfig === undefined) {
+    throw new Error(`${configPath}: profile "${profile}" was not found`);
+  }
+  const profileRun =
+    profileConfig && 'run' in profileConfig
+      ? profileConfig.run
+      : (profileConfig as LoopsRunConfig | undefined);
+  const merged = {
+    ...(config.run ?? {}),
+    ...(profileRun ?? {}),
+  };
+  validateRunConfig(configPath, 'run', config.run);
+  validateRunConfig(configPath, profile ? `profiles.${profile}` : 'profile', profileRun);
+  validateRunConfig(configPath, 'merged run config', merged);
+  return merged;
+}
+
+function validateRunConfig(
+  file: string,
+  label: string,
+  config: LoopsRunConfig | undefined,
+): void {
+  if (!config) return;
+  for (const key of Object.keys(config)) {
+    if (!RUN_CONFIG_KEYS.has(key)) {
+      throw new Error(`${file}: unknown ${label} key "${key}"`);
+    }
+  }
+}
+
+async function resolveConfigPath(
+  explicit: string | undefined,
+  cwd: string,
+): Promise<string | undefined> {
+  if (explicit) {
+    const resolved = path.resolve(explicit);
+    if (!fs.existsSync(resolved)) throw new Error(`config file not found: ${explicit}`);
+    return resolved;
+  }
+  const root = (await gitRoot({ cwd })) ?? cwd;
+  for (const name of ['loops.config.ts', 'loops.config.mjs', 'loops.config.js']) {
+    const candidate = path.join(root, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function optionWasCli(command: Command, attr: string): boolean {
+  return command.getOptionValueSource(attr) === 'cli';
+}
+
+function applyRunDefaults(
+  flags: RunFlags,
+  defaults: LoopsRunConfig,
+  command: Command,
+): RunFlags {
+  const merged: RunFlags = { ...flags };
+  const set = <K extends keyof RunFlags>(
+    key: K,
+    value: RunFlags[K] | undefined,
+    attr = String(key),
+  ) => {
+    if (value !== undefined && !optionWasCli(command, attr)) merged[key] = value;
+  };
+
+  set('engine', defaults.engine);
+  set('defaultModel', defaults.defaultModel);
+  set('workerModel', defaults.workerModel);
+  set('validatorModel', defaults.validatorModel);
+  set('reviewerModel', defaults.reviewerModel);
+  set('apiKey', defaults.apiKey);
+  set('cliBinary', defaults.cliBinary);
+  set('permissionMode', defaults.permissionMode);
+  if (defaults.engineArg !== undefined && !optionWasCli(command, 'engineArg')) {
+    merged.engineArg = defaults.engineArg;
+  }
+  set(
+    'budget',
+    defaults.budget === undefined ? undefined : String(defaults.budget),
+  );
+  set('ground', defaults.ground);
+  if (defaults.record !== undefined && !optionWasCli(command, 'record')) {
+    merged.record = defaults.record;
+  }
+  set('checkpoint', defaults.checkpoint);
+  set('supervise', defaults.supervise);
+  set('onLimit', defaults.onLimit);
+  set('maxWait', defaults.maxWait);
+  set('json', defaults.json);
+  if (defaults.tui !== undefined && !optionWasCli(command, 'tui')) {
+    merged.tui = defaults.tui;
+  }
+  return merged;
+}
+
+interface ParsedParams {
+  values: RunParams;
+  args: string[];
+}
+
+async function parseRecipeParams(
+  params: ParamDefinitions | undefined,
+  command: Command,
+  flags: RunFlags,
+  cwd: string,
+  coreOptions: CoreOptionMetadata,
+): Promise<ParsedParams> {
+  if (!params) return { values: {}, args: [] };
+  assertNoCoreParamCollisions(params, coreOptions);
+  const values: RunParams = {};
+  const args: string[] = [];
+  const root = await gitRoot({ cwd });
+
+  for (const [key, spec] of Object.entries(params)) {
+    const flag = spec.flag ?? toKebabCase(key);
+    const attr = optionAttribute(flag);
+    const source = command.getOptionValueSource(attr);
+    const cliValue = (flags as Record<string, unknown>)[attr];
+    const envValue = spec.env ? process.env[spec.env] : undefined;
+    const raw =
+      source === 'cli'
+        ? cliValue
+        : envValue !== undefined
+          ? envValue
+          : spec.defaultFrom === 'gitRoot'
+            ? root ?? cwd
+            : spec.defaultFrom === 'cwd'
+              ? cwd
+              : defaultFor(spec);
+    if (raw === undefined) {
+      if (spec.required) throw new Error(`missing required recipe param --${flag}`);
+      continue;
+    }
+    values[key] = coerceParam(key, spec, raw);
+    if (source === 'cli') args.push(...renderParamArg(flag, spec, values[key]));
+  }
+  return { values, args };
+}
+
+function defaultFor(spec: ParamSpec): unknown {
+  return 'default' in spec ? spec.default : undefined;
+}
+
+function coerceParam(
+  key: string,
+  spec: ParamSpec,
+  raw: unknown,
+): string | number | boolean | string[] {
+  switch (spec.type) {
+    case 'string':
+      return String(raw);
+    case 'number': {
+      const value = typeof raw === 'number' ? raw : Number(raw);
+      if (!Number.isFinite(value)) {
+        throw new Error(`recipe param "${key}" must be a number`);
+      }
+      return value;
+    }
+    case 'boolean':
+      if (typeof raw === 'boolean') return raw;
+      if (/^(true|1|yes|on)$/i.test(String(raw))) return true;
+      if (/^(false|0|no|off)$/i.test(String(raw))) return false;
+      throw new Error(`recipe param "${key}" must be boolean`);
+    case 'choice': {
+      const value = String(raw);
+      if (!spec.choices.includes(value)) {
+        throw new Error(
+          `recipe param "${key}" must be one of ${spec.choices.join(' | ')}`,
+        );
+      }
+      return value;
+    }
+    case 'string[]':
+      return Array.isArray(raw) ? raw.map(String) : [String(raw)];
+  }
+}
+
+function renderParamArg(
+  flag: string,
+  spec: ParamSpec,
+  value: string | number | boolean | string[],
+): string[] {
+  if (spec.type === 'boolean') return [value ? `--${flag}` : `--no-${flag}`];
+  if (Array.isArray(value)) return value.flatMap((item) => [`--${flag}`, item]);
+  return [`--${flag}`, String(value)];
 }
 
 function buildFromFlags(flags: RunFlags): Job {
@@ -162,10 +665,32 @@ function buildFromFlags(flags: RunFlags): Job {
 async function execute(
   file: string | undefined,
   flags: RunFlags,
+  command: Command,
+  coreOptions: CoreOptionMetadata,
 ): Promise<void> {
-  const { job, title } = file
+  const cwd = process.cwd();
+  const resumeWasCli = optionWasCli(command, 'resume');
+  const checkpointWasCli = optionWasCli(command, 'checkpoint');
+  const defaults = await loadConfig(flags, cwd);
+  flags = applyRunDefaults(flags, defaults, command);
+  if (
+    flags.resume &&
+    (!flags.checkpoint || (resumeWasCli && !checkpointWasCli))
+  ) {
+    flags.checkpoint = flags.resume;
+  }
+
+  const { job, title, params } = file
     ? await loadJob(file)
-    : { job: buildFromFlags(flags), title: 'loop' };
+    : { job: buildFromFlags(flags), title: 'loop', params: undefined };
+  const parsedParams = await parseRecipeParams(
+    params,
+    command,
+    flags,
+    cwd,
+    coreOptions,
+  );
+  if (parsedParams.args.length) flags.paramArg = parsedParams.args;
 
   const engineOptions: EngineOptions = {};
   if (flags.defaultModel) engineOptions.defaultModel = flags.defaultModel;
@@ -232,6 +757,8 @@ async function execute(
 
   const resumeCommand =
     process.env.LOOPS_RESUME_COMMAND ?? buildResumeCommand(file, flags);
+  const recordTo =
+    flags.record === false ? undefined : flags.record === undefined ? 'auto' : flags.record;
 
   const hub = createHub();
   const signals = installSignalHandlers();
@@ -239,11 +766,14 @@ async function execute(
     engine: flags.engine as EngineName | undefined,
     engineOptions,
     signal: signals.controller.signal,
+    cwd,
     onEvent: hub.emit,
     state,
+    params: parsedParams.values,
+    resetScratch: !flags.resume,
     budget,
     ground: flags.ground,
-    recordTo: flags.record,
+    recordTo,
     checkpoint: flags.checkpoint,
     resumeFrom: flags.resume,
     supervise: flags.supervise,
@@ -332,8 +862,9 @@ export function buildResumeCommand(
   if (flags.ground) parts.push('--ground');
   opt('--on-limit', flags.onLimit);
   opt('--max-wait', flags.maxWait);
-  opt('--record', flags.record);
-  opt('--checkpoint', flags.checkpoint);
+  if (flags.record && flags.record !== 'auto') opt('--record', flags.record);
+  if (flags.record === false) parts.push('--no-record');
+  for (const arg of flags.paramArg ?? []) parts.push(quoteArg(arg));
   if (flags.tui === false) parts.push('--no-tui');
   if (flags.json) parts.push('--json');
   return parts.join(' ');
@@ -466,7 +997,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     )
     .version(PKG_VERSION);
 
-  program
+  const runCommand = program
     .command('run', { isDefault: true })
     .argument(
       '[file]',
@@ -551,15 +1082,28 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       '--max-wait <dur>',
       'cap an auto/wait limit-wait (e.g. 5m, 30s); default 5m',
     )
+    .option('--config <path>', 'load run defaults from a loops.config.ts/js file')
+    .option('--profile <name>', 'named profile from loops.config.ts/js')
     .option('--json', 'emit NDJSON events to stdout (no TUI)')
     .option('--no-tui', 'plain line output instead of the Ink TUI')
+    .option('--no-record', 'disable the default .loops/records/<runId>.jsonl record')
     .option(
       '--supervise',
       'register this run in ~/.loops/runs so `loops list`/`status`/`tail` can observe it from another process',
-    )
-    .action((file: string | undefined, flags: RunFlags) =>
-      execute(file, flags),
     );
+  const coreOptions = optionMetadata(runCommand);
+  const inferredRunFile = inferRunFile(argv.slice(2), coreOptions);
+  const inferredParams = inferredRunFile
+    ? readStaticRecipeParams(inferredRunFile)
+    : undefined;
+  if (inferredParams) addRecipeParamOptions(runCommand, inferredParams, coreOptions);
+  runCommand.action(function (
+    this: Command,
+    file: string | undefined,
+    flags: RunFlags,
+  ) {
+    return execute(file, flags, this, coreOptions);
+  });
 
   program
     .command('validate')

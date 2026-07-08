@@ -119,6 +119,9 @@ export function reduce(vm: ViewModel, e: LoopEvent): void {
   };
 
   switch (e.kind) {
+    case 'runtime:restore':
+      vm.notice = e.reason;
+      break;
     case 'loop:start':
       ensure('loop').max = e.max;
       break;

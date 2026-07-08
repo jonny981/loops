@@ -4,6 +4,8 @@
  * state, and the stats collector. Reporters/TUI observe via `onEvent`.
  */
 
+import { join } from 'node:path';
+
 import type {
   Engine,
   EngineName,
@@ -24,11 +26,19 @@ import { startSupervisor, newRunId, type Supervisor } from './supervisor.ts';
 import { jobMeta } from '../core/describe.ts';
 import { currentBranch, workspaceFingerprint } from '../core/git.ts';
 import type { GroundConfig } from '../core/job.ts';
+import {
+  assertSafeScratchPath,
+  ensureScratchSubdir,
+  resetLedger,
+  resetPrompt,
+} from '../core/draft.ts';
 import type { Environment, EnvHandle } from '../env/environment.ts';
 import type { Forge } from '../core/forge.ts';
+import type { RunParams } from '../core/params.ts';
 import type {
   Job,
   JobContext,
+  JobMeta,
   LimitPolicy,
   LoopEvent,
   Outcome,
@@ -70,6 +80,10 @@ export interface RunOptions {
   onEvent?: (event: LoopEvent) => void;
   /** Seed the shared, mutable run state. */
   state?: Record<string, unknown>;
+  /** Values parsed from a recipe's declared run parameters. */
+  params?: RunParams;
+  /** Clear `.loops/ledger.md` and `.loops/prompt.md` before a fresh run. */
+  resetScratch?: boolean;
   /**
    * Default grounding for every `agentJob` in the run. A job's own `ground`
    * (including an explicit `false`) always wins.
@@ -81,8 +95,8 @@ export interface RunOptions {
    * Engine call sites refuse to spend past it (see `Budget`).
    */
   budget?: number | BudgetConfig;
-  /** Append every structured event as JSONL here, a readable run record. */
-  recordTo?: string;
+  /** Append every structured event as JSONL here, or auto-name one under `.loops/records`. */
+  recordTo?: string | 'auto';
   /** Snapshot the shared run state here at each loop/dag/job boundary. */
   checkpoint?: string;
   /**
@@ -117,6 +131,75 @@ export interface RunResult {
   budget?: { limit: number; spent: number; remaining: number };
   /** The registry id, when the run was supervised. */
   runId?: string;
+  /** The JSONL event record path, when recording was enabled. */
+  recordPath?: string;
+}
+
+type RestoreEvent = Extract<LoopEvent, { kind: 'runtime:restore' }>;
+
+function countCheckpointNodes(
+  dags: CheckpointControl['resumeDags'] | undefined,
+): number {
+  return Object.values(dags ?? {}).reduce(
+    (total, dag) => total + Object.keys(dag.nodes).length,
+    0,
+  );
+}
+
+function restorableCheckpointDags(
+  dags: CheckpointControl['resumeDags'] | undefined,
+  shape: JobMeta | undefined,
+): CheckpointControl['resumeDags'] | undefined {
+  if (!dags || !shape) return dags;
+  const current = dagShapeKeys(shape);
+  const filtered: NonNullable<CheckpointControl['resumeDags']> = {};
+  for (const [key, dag] of Object.entries(dags)) {
+    const nodes = current.get(key);
+    if (!nodes) continue;
+    const kept = Object.fromEntries(
+      Object.entries(dag.nodes).filter(
+        ([name, node]) =>
+          nodes.has(name) &&
+          node.phase === 'done' &&
+          node.outcome.status === 'pass',
+      ),
+    );
+    if (Object.keys(kept).length) filtered[key] = { nodes: kept };
+  }
+  return filtered;
+}
+
+function dagShapeKeys(
+  meta: JobMeta | undefined,
+  path: string[] = [],
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  if (!meta) return out;
+  if (meta.kind === 'loop' && typeof meta.name === 'string') {
+    mergeDagShapeKeys(out, dagShapeKeys(meta.body as JobMeta | undefined, [...path, meta.name]));
+    return out;
+  }
+  if (meta.kind === 'dag' && typeof meta.name === 'string') {
+    const dagPath = [...path, meta.name];
+    const nodes = ((meta.nodes as Array<{ name?: unknown; job?: JobMeta }> | undefined) ?? [])
+      .filter((node): node is { name: string; job?: JobMeta } => typeof node.name === 'string');
+    out.set(JSON.stringify(dagPath), new Set(nodes.map((node) => node.name)));
+    for (const node of nodes) {
+      mergeDagShapeKeys(out, dagShapeKeys(node.job, [...dagPath, node.name]));
+    }
+  }
+  return out;
+}
+
+function mergeDagShapeKeys(
+  target: Map<string, Set<string>>,
+  source: Map<string, Set<string>>,
+): void {
+  for (const [key, nodes] of source) target.set(key, nodes);
+}
+
+function uniquePaths(paths: Array<string | undefined>): string[] {
+  return [...new Set(paths.filter((path): path is string => path !== undefined))];
 }
 
 export async function run(
@@ -152,28 +235,82 @@ export async function run(
         )
       : undefined;
   const dir = options.cwd ?? process.cwd();
+  const shape = jobMeta(job);
+  const title = shape?.name ?? 'run';
+  const needsRunId = options.supervise || options.recordTo === 'auto';
+  const runId = needsRunId ? newRunId(title) : undefined;
+  if (options.resetScratch && !options.resumeFrom) {
+    resetLedger({ dir });
+    resetPrompt({ dir });
+  }
 
   // Resume restores the shared scratchpad a prior checkpoint wrote; an explicit
   // `state` seed wins over the restored values.
   let initialState: Record<string, unknown> = options.state ?? {};
   let checkpointControl: CheckpointControl | undefined =
     options.checkpoint || options.resumeFrom ? { dags: {} } : undefined;
+  let restoreEvent: RestoreEvent | undefined;
   if (options.resumeFrom) {
     try {
+      assertSafeScratchPath({ dir }, options.resumeFrom);
       const checkpoint = loadCheckpointEnvelope(options.resumeFrom);
       initialState = { ...checkpoint.state, ...initialState };
       checkpointControl = checkpoint.control;
+      const checkpointNodes = countCheckpointNodes(checkpointControl.resumeDags);
       const currentFingerprint = await workspaceFingerprint({
         cwd: dir,
         signal: controller.signal,
-        excludePaths: [options.resumeFrom],
+        excludePaths: uniquePaths([options.resumeFrom, options.checkpoint]),
       });
       if (
         currentFingerprint !== undefined &&
+        checkpoint.workspaceFingerprint !== undefined &&
         checkpoint.workspaceFingerprint !== currentFingerprint
       ) {
         checkpointControl.resumeDags = undefined;
         checkpointControl.dags = {};
+        restoreEvent = {
+          kind: 'runtime:restore',
+          ts: Date.now(),
+          path: [],
+          checkpoint: options.resumeFrom,
+          decision: 'skipped',
+          restoredNodes: 0,
+          totalNodes: checkpointNodes,
+          reason: `restoring nothing from ${options.resumeFrom}: workspace fingerprint changed`,
+          fingerprint: 'changed',
+        };
+      } else {
+        checkpointControl.resumeDags = restorableCheckpointDags(
+          checkpointControl.resumeDags,
+          shape,
+        );
+        checkpointControl.dags = restorableCheckpointDags(
+          checkpointControl.dags,
+          shape,
+        ) ?? {};
+        const restoredNodes = countCheckpointNodes(checkpointControl.resumeDags);
+        const totalNodes = countCheckpointNodes(checkpointControl.resumeDags);
+        const fingerprint =
+          checkpoint.workspaceFingerprint === undefined
+            ? 'checkpoint-missing'
+            : currentFingerprint === undefined
+              ? 'workspace-unavailable'
+              : 'matched';
+        restoreEvent = {
+          kind: 'runtime:restore',
+          ts: Date.now(),
+          path: [],
+          checkpoint: options.resumeFrom,
+          decision: restoredNodes > 0 ? 'restored' : 'skipped',
+          restoredNodes,
+          totalNodes,
+          reason:
+            restoredNodes > 0
+              ? `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom}`
+              : `restoring nothing from ${options.resumeFrom}: no checkpointed DAG nodes match the current graph`,
+          fingerprint,
+        };
       }
     } catch (e) {
       throw new LoopError({
@@ -187,22 +324,26 @@ export async function run(
   // checkpointer closes over `initialState`, which is `rootCtx.state`, so it
   // always snapshots the live, mutated scratchpad.
   const sinks: Array<(event: LoopEvent) => void> = [];
-  if (options.recordTo) sinks.push(makeRecorder(options.recordTo));
-  if (options.checkpoint)
+  const recordPath =
+    options.recordTo === 'auto'
+      ? join(ensureScratchSubdir({ dir }, 'records'), `${runId!}.jsonl`)
+      : options.recordTo;
+  if (recordPath) {
+    sinks.push(makeRecorder(recordPath, { thin: options.recordTo === 'auto' }));
+  }
+  if (options.checkpoint) {
+    assertSafeScratchPath({ dir }, options.checkpoint);
     sinks.push(
       makeCheckpointer(options.checkpoint, initialState, checkpointControl),
     );
+  }
 
   // A supervised run registers itself in the global registry (~/.loops/runs) and
   // writes its live state there, so another process can list/status/tail it.
   let supervisor: Supervisor | undefined;
-  let runId: string | undefined;
   if (options.supervise) {
-    const shape = jobMeta(job);
-    const title = shape?.name ?? 'run';
-    runId = newRunId(title);
     supervisor = startSupervisor({
-      runId,
+      runId: runId!,
       cwd: dir,
       title,
       shape,
@@ -219,6 +360,8 @@ export async function run(
   };
   const resolveEngine = (ref?: EngineRef): Engine =>
     registry.create(ref, defaultEngine);
+
+  if (restoreEvent) emit(restoreEvent);
 
   // The root workspace is the substrate the whole run reads and writes. Branch
   // resolution is best-effort: a non-git cwd just leaves `branch` undefined.
@@ -258,7 +401,8 @@ export async function run(
               remaining: budget.remaining(),
             }
           : undefined,
-        runId: supervisor?.runId,
+        runId: supervisor?.runId ?? runId,
+        recordPath,
       };
     }
   }
@@ -271,6 +415,7 @@ export async function run(
     checkpoint: checkpointControl,
     emit,
     state: initialState,
+    params: options.params ?? {},
     workspace,
     environment,
     forge: options.forge,
@@ -304,17 +449,21 @@ export async function run(
     if (environment) await environment.down(controller.signal).catch(() => {});
   }
 
-  // A paused run is meant to be resumed; guarantee the latest shared state is on
-  // disk even if no boundary event flushed it (the checkpointer is best-effort).
-  if (outcome.status === 'paused' && options.checkpoint)
+  // Paused runs and graceful signal aborts are meant to be resumable; guarantee
+  // the latest shared state is on disk even if no boundary event flushed it.
+  if (
+    options.checkpoint &&
+    (outcome.status === 'paused' ||
+      (outcome.status === 'aborted' && controller.signal.aborted))
+  )
     flushCheckpoint(
       options.checkpoint,
       initialState,
       checkpointControl,
       await workspaceFingerprint({
         cwd: dir,
-        signal: controller.signal,
-        excludePaths: [options.checkpoint],
+        signal: controller.signal.aborted ? undefined : controller.signal,
+        excludePaths: uniquePaths([options.checkpoint, options.resumeFrom]),
       }),
     );
 
@@ -330,7 +479,8 @@ export async function run(
           remaining: budget.remaining(),
         }
       : undefined,
-    runId: supervisor?.runId,
+    runId: supervisor?.runId ?? runId,
+    recordPath,
   };
 }
 

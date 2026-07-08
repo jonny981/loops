@@ -43,6 +43,48 @@ export default defineJob(
 
 `loop()` config worth knowing: `body` (the Job per iteration), `until` (stop gate), `start` (gate before iterating), `stopOn` (hard early-exit), `review` (runs when `until` is met; a failing review folds its findings back into the next iteration), `max` (iteration cap), `noProgress` (end `exhausted` after n consecutive iterations that reach no new state; `{ window, gate: true }` also fingerprints the failing gate's `output`, so the same failure signature repeating counts as stall evidence — deterministic gates only, and it requires an explicit `until`), `delayMs` (polling delay), `commit` (milestone commit on convergence).
 
+## Recipe parameters
+
+Put run inputs in `defineParams(...)`, not in shell env prefixes. The CLI exposes
+them as recipe-owned flags, shows them in `loops run <file> --help`, and passes
+the parsed values to `ctx.params`.
+
+```ts
+import { defineJob, defineParams, fnJob } from '@loops-adk/core';
+
+export const params = defineParams({
+  oem: { type: 'string', required: true, help: 'OEM name' },
+  device: { type: 'choice', choices: ['battery', 'inverter'], default: 'battery' },
+  skip: { type: 'string[]', default: [] },
+  repoRoot: { type: 'string', defaultFrom: 'gitRoot' },
+});
+
+export default defineJob(
+  fnJob('use-params', async (ctx) => ({
+    status: 'pass',
+    summary: JSON.stringify(ctx.params),
+  })),
+);
+```
+
+Project boilerplate belongs in `loops.config.ts`:
+
+```ts
+import { defineConfig } from '@loops-adk/core';
+
+export default defineConfig({
+  run: { supervise: true, tui: false, record: 'auto' },
+  profiles: {
+    live: { run: { permissionMode: 'bypassPermissions', defaultModel: 'claude-sonnet-5' } },
+  },
+});
+```
+
+`record: 'auto'` writes the default thin record under `.loops/records/`; an
+explicit `--record <path>` writes the full event stream.
+
+Run it as `loops run onboard.loop.ts --profile live --oem Sigenergy`.
+
 ## The gate
 
 A gate that just asks the model whether it is done lets it grade its own homework, and it always says yes. Make the gate real:
@@ -77,7 +119,7 @@ body: agentJob({
 
 Progress accumulates on disk, so each iteration starts with a clean context but not a blank one.
 
-- `ground: true` on an `agentJob` reads the recent commit log + this run's scratch files into the next prompt, so a fresh turn knows what was already tried. To default it on for every `agentJob` in a run, set `RunOptions.ground` or pass `--ground`; a job's own `ground` (including an explicit `false`) wins.
+- `ground: true` on an `agentJob` reads the recent commit log + this run's scratch files into the next prompt, so a fresh turn knows what was already tried. The bounded prompt keeps the task and handoff instruction first, then the live handoff, working memory, and committed context. To default it on for every `agentJob` in a run, set `RunOptions.ground` or pass `--ground`; a job's own `ground` (including an explicit `false`) wins.
 - `commit: { subject }` (or `commit: true`) writes one structured milestone commit on convergence: the reasoning welded to the diff. Later turns ground on it.
 - For long, noisy histories use `ground: { retrieve: true }` (select relevant commits, not recent-N); for indefinite processes add `consolidateJob` to fold history into a bounded, decision-preserving record.
 

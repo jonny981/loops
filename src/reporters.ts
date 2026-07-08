@@ -89,6 +89,14 @@ export function plainReporter(): Listener {
   return (event: LoopEvent) => {
     const key = event.path.join(' / ');
     switch (event.kind) {
+      case 'runtime:restore':
+        endStream();
+        console.log(
+          event.decision === 'restored'
+            ? `${pc.cyan('restore')}: ${pc.dim(event.reason)}`
+            : `${pc.yellow('restore')}: ${pc.dim(event.reason)}`,
+        );
+        return;
       case 'engine:text':
         process.stdout.write(event.delta);
         streaming = true;

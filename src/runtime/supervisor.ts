@@ -513,6 +513,8 @@ export function formatEvent(event: LoopEvent): string {
 function renderEvent(event: LoopEvent): string {
   const at = event.path.length ? `${event.path.join(' › ')} ` : '';
   switch (event.kind) {
+    case 'runtime:restore':
+      return event.reason;
     case 'loop:start':
       return `${at}▸ loop${event.max ? ` (max ${event.max})` : ''}`;
     case 'dag:start':

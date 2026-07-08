@@ -36,6 +36,18 @@ export type {
   ProofArtifact,
   ProofRecord,
 } from './core/types.ts';
+export {
+  defineParams,
+  type ParamDefinitions,
+  type ParamSpec,
+  type ParamType,
+  type RunParams,
+} from './core/params.ts';
+export {
+  defineConfig,
+  type LoopsConfig,
+  type LoopsRunConfig,
+} from './core/config-file.ts';
 
 // Primitives
 export { loop } from './core/loop.ts';
@@ -124,6 +136,7 @@ export {
 export {
   isRepo,
   currentBranch,
+  gitRoot,
   headSha,
   stageAll,
   hasStagedChanges,

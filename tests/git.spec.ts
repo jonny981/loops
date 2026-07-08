@@ -1,8 +1,10 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import { mkdirSync, realpathSync } from 'node:fs';
 
 import {
   isRepo,
   currentBranch,
+  gitRoot,
   headSha,
   stageAll,
   hasStagedChanges,
@@ -26,6 +28,13 @@ describe('git substrate', () => {
     const bare = tmpBareDir();
     expect(await isRepo({ cwd: bare })).toBe(false);
     expect(await currentBranch({ cwd: bare })).toBeUndefined();
+    expect(await gitRoot({ cwd: bare })).toBeUndefined();
+  });
+
+  it('reports the git top-level from a subdirectory', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(`${repo}/nested`);
+    expect(await gitRoot({ cwd: `${repo}/nested` })).toBe(realpathSync(repo));
   });
 
   it('stages and reports staged + dirty state', async () => {

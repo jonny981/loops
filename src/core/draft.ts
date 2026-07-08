@@ -27,18 +27,23 @@
 import {
   appendFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 import type { Workspace } from './types.ts';
 
 const SCRATCH_DIR = '.loops';
 const LEDGER_FILE = 'ledger.md';
 const PROMPT_FILE = 'prompt.md';
+const LEDGER_CHAR_CAP = 64_000;
+const PROMPT_CHAR_CAP = 32_000;
+const OMITTED_PREFIX = '[older scratch omitted to keep this file bounded]\n\n';
 
 /** Absolute path to a workspace's working memory (`ledger.md`). */
 export function ledgerPath(workspace: Workspace): string {
@@ -51,9 +56,88 @@ export function promptPath(workspace: Workspace): string {
 }
 
 /** Create `.loops/` and keep it (and everything in it) out of git. */
-function ensureDir(workspace: Workspace): void {
+export function ensureScratchDir(workspace: Workspace): void {
+  assertSafeScratchDir(workspace);
   mkdirSync(join(workspace.dir, SCRATCH_DIR), { recursive: true });
+  assertSafeScratchDir(workspace);
   ensureIgnored(workspace);
+}
+
+export function ensureScratchSubdir(
+  workspace: Workspace,
+  name: string,
+): string {
+  ensureScratchDir(workspace);
+  const dir = join(workspace.dir, SCRATCH_DIR, name);
+  assertSafeDir(workspace, dir, `${SCRATCH_DIR}/${name}`);
+  mkdirSync(dir, { recursive: true });
+  assertSafeDir(workspace, dir, `${SCRATCH_DIR}/${name}`);
+  return dir;
+}
+
+export function assertSafeScratchPath(
+  workspace: Workspace,
+  targetPath: string,
+): void {
+  const scratch = join(resolve(workspace.dir), SCRATCH_DIR);
+  const target = resolve(workspace.dir, targetPath);
+  const rel = relative(scratch, target);
+  if (rel === '..' || rel.startsWith(`..${sep}`)) return;
+  assertSafeScratchDir(workspace);
+  const dir = dirname(target);
+  const dirRel = relative(scratch, dir);
+  if (!(dirRel === '' || dirRel === '..' || dirRel.startsWith(`..${sep}`))) {
+    let current = scratch;
+    for (const part of dirRel.split(sep)) {
+      current = join(current, part);
+      if (lstatIfExists(current)) assertSafeDir(workspace, current, current);
+    }
+  }
+  if (lstatIfExists(target)) assertSafeFile(workspace, target, target);
+}
+
+function assertSafeScratchDir(workspace: Workspace): void {
+  const dir = join(workspace.dir, SCRATCH_DIR);
+  if (!lstatIfExists(dir)) return;
+  assertSafeDir(workspace, dir, SCRATCH_DIR);
+}
+
+function assertSafeDir(workspace: Workspace, dir: string, label: string): void {
+  const stat = lstatIfExists(dir);
+  if (!stat) return;
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`unsafe ${label}: must be a real directory inside the workspace`);
+  }
+  const root = realpathSync(workspace.dir);
+  const real = realpathSync(dir);
+  const rel = relative(root, real);
+  if (rel === '') return;
+  if (rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new Error(`unsafe ${label}: resolves outside the workspace`);
+  }
+}
+
+function assertSafeFile(workspace: Workspace, file: string, label: string): void {
+  const stat = lstatIfExists(file);
+  if (!stat) return;
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error(`unsafe ${label}: must be a regular file inside the workspace`);
+  }
+  const root = realpathSync(workspace.dir);
+  const real = realpathSync(file);
+  const rel = relative(root, real);
+  if (rel === '') return;
+  if (rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new Error(`unsafe ${label}: resolves outside the workspace`);
+  }
+}
+
+function lstatIfExists(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -68,9 +152,10 @@ export function ensureIgnored(workspace: Workspace): void {
   if (!existsSync(ignore)) writeFileSync(ignore, '*\n');
 }
 
-function read(path: string): string {
+function read(path: string, maxChars?: number): string {
   try {
-    return readFileSync(path, 'utf8').trim();
+    const text = readFileSync(path, 'utf8').trim();
+    return maxChars === undefined ? text : capText(text, maxChars);
   } catch {
     return '';
   }
@@ -82,6 +167,22 @@ function reset(path: string): void {
   } catch {
     /* best-effort */
   }
+}
+
+function capText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const keep = Math.max(0, maxChars - OMITTED_PREFIX.length);
+  return `${OMITTED_PREFIX}${text.slice(-keep).trimStart()}`;
+}
+
+function capEntry(text: string, maxChars: number): string {
+  const maxEntry = Math.max(0, maxChars - OMITTED_PREFIX.length - 4);
+  if (text.length <= maxEntry) return text;
+  const marker = '\n[entry middle omitted]\n';
+  const keep = Math.max(0, maxEntry - marker.length);
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  return `${text.slice(0, head).trimEnd()}${marker}${text.slice(-tail).trimStart()}`;
 }
 
 // ── The handoff (`prompt.md`) ────────────────────────────────────────────────
@@ -101,23 +202,26 @@ export interface PromptNote {
  * O_APPEND write, so concurrent appends do not clobber each other.
  */
 export function appendPrompt(workspace: Workspace, note: PromptNote | string): void {
-  ensureDir(workspace);
+  ensureScratchDir(workspace);
   const n = typeof note === 'string' ? { body: note } : note;
   const header = n.heading
     ? `## ${n.heading}${n.author ? ` — ${n.author}` : ''}\n\n`
     : n.author
       ? `_${n.author}:_ `
       : '';
-  appendFileSync(promptPath(workspace), `${header}${n.body.trim()}\n\n`);
+  const path = promptPath(workspace);
+  appendFileSync(path, `${capEntry(`${header}${n.body.trim()}`, PROMPT_CHAR_CAP)}\n\n`);
 }
 
 /** Read the handoff, or '' when nothing has been drafted. */
 export function readPrompt(workspace: Workspace): string {
-  return read(promptPath(workspace));
+  assertSafeScratchPath(workspace, promptPath(workspace));
+  return read(promptPath(workspace), PROMPT_CHAR_CAP);
 }
 
 /** Clear the handoff at the commit boundary. */
 export function resetPrompt(workspace: Workspace): void {
+  assertSafeScratchPath(workspace, promptPath(workspace));
   reset(promptPath(workspace));
 }
 
@@ -141,11 +245,13 @@ export interface LedgerEntry {
  * clobber each other.
  */
 export function appendLedger(workspace: Workspace, entry: LedgerEntry | string): void {
-  ensureDir(workspace);
+  ensureScratchDir(workspace);
   const path = ledgerPath(workspace);
   if (typeof entry === 'string') {
     const body = entry.trim();
-    if (body) appendFileSync(path, `${body}\n\n`);
+    if (body) {
+      appendFileSync(path, `${capEntry(body, LEDGER_CHAR_CAP)}\n\n`);
+    }
     return;
   }
   const head = entry.label
@@ -158,15 +264,17 @@ export function appendLedger(workspace: Workspace, entry: LedgerEntry | string):
   if (entry.text?.trim()) lines.push(entry.text.trim());
   if (entry.tools?.length) lines.push(`_actions: ${entry.tools.join(', ')}_`);
   if (!lines.length) return;
-  appendFileSync(path, `${lines.join('\n\n')}\n\n`);
+  appendFileSync(path, `${capEntry(lines.join('\n\n'), LEDGER_CHAR_CAP)}\n\n`);
 }
 
 /** Read the working memory, or '' when nothing has been logged. */
 export function readLedger(workspace: Workspace): string {
-  return read(ledgerPath(workspace));
+  assertSafeScratchPath(workspace, ledgerPath(workspace));
+  return read(ledgerPath(workspace), LEDGER_CHAR_CAP);
 }
 
 /** Clear the working memory at the commit boundary. */
 export function resetLedger(workspace: Workspace): void {
+  assertSafeScratchPath(workspace, ledgerPath(workspace));
   reset(ledgerPath(workspace));
 }

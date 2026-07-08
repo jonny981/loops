@@ -73,6 +73,12 @@ export async function currentBranch(opts: GitOpts): Promise<string | undefined> 
   return name && name !== 'HEAD' ? name : undefined;
 }
 
+/** The git worktree root containing `cwd`, or undefined outside a git repo. */
+export async function gitRoot(opts: GitOpts): Promise<string | undefined> {
+  const r = await git(['rev-parse', '--show-toplevel'], opts);
+  return r.exitCode === 0 ? r.stdout.trim() || undefined : undefined;
+}
+
 /** The HEAD commit sha, or undefined when the branch has no commits yet. */
 export async function headSha(opts: GitOpts): Promise<string | undefined> {
   const r = await git(['rev-parse', 'HEAD'], opts);

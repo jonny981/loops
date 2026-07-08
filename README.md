@@ -138,6 +138,44 @@ the opposite engine family by default (`codex` main => `claude-cli` adversarial,
 Claude-family main => `codex` adversarial). Override that lane with
 `--adversarial-engine` and `--adversarial-model`.
 
+**Recipe parameters and run defaults**: a recipe can declare its own CLI flags
+with `defineParams`, and those values arrive on `ctx.params`.
+
+```ts
+import { defineJob, defineParams, fnJob } from '@loops-adk/core';
+
+export const params = defineParams({
+  oem: { type: 'string', required: true, help: 'OEM name' },
+  device: { type: 'choice', choices: ['battery', 'inverter'], default: 'battery' },
+  skip: { type: 'string[]', default: [] },
+  repoRoot: { type: 'string', defaultFrom: 'gitRoot' },
+});
+
+export default defineJob(
+  fnJob('show-params', async (ctx) => ({
+    status: 'pass',
+    summary: JSON.stringify(ctx.params),
+  })),
+);
+```
+
+`loops run onboard.loop.ts --help` lists those recipe flags beside the built-in
+flags. A `loops.config.ts` file can hold project defaults for boilerplate run
+flags:
+
+```ts
+import { defineConfig } from '@loops-adk/core';
+
+export default defineConfig({
+  run: { supervise: true, tui: false, record: 'auto' },
+  profiles: {
+    live: { run: { permissionMode: 'bypassPermissions', defaultModel: 'claude-sonnet-5' } },
+  },
+});
+```
+
+Use it with `loops run onboard.loop.ts --profile live --oem Sigenergy`.
+
 **Offline demo** (no network, no key; uses the mock engine):
 
 ```bash
@@ -320,6 +358,11 @@ The three tiers below form a progression. The scratch files record what failed a
   ```ts
   agentJob({ label: 'work', prompt: 'Continue the task.', ground: true });
   ```
+
+  Grounded prompts are bounded by `ground.promptChars` (default 48000 chars).
+  The task prompt and handoff instruction are kept first, then the live handoff,
+  working memory, and committed context within the remaining budget. The scratch
+  files are rolling buffers, and the CLI clears them on a fresh non-resume run.
 
 - **Scaling the read: retrieval, then consolidation.** Recent-N grounding is the default, but on a long, noisy log the relevant commit falls out of the window. `ground: { retrieve: true }` has a cheap model select the relevant commits by subject instead. Use it for long-horizon work. For an indefinite process, `consolidateJob` folds the history into a **decision-preserving consolidated ledger**: a bounded record that keeps every accrued decision verbatim (a naive progress summary loses the specifics), committed as a commit body (the coarse tier, grounded like any milestone, never a side file). Retrieval finds the _relevant_ past commits; consolidation keeps _all the decisions_ in bounded space: different jobs, both in the git grain.
 
@@ -586,22 +629,30 @@ There is no `converge()` / `sweep()` / `tend()` in the API. They are patterns, n
 
 ## Budget, records, resume
 
-Four opt-in `RunOptions` (with matching CLI flags). All default off.
+Four `RunOptions` with matching CLI flags. The API defaults are off. The CLI
+auto-writes a thin JSONL record under `.loops/records/<runId>.jsonl`; pass
+`--record <path>` to choose a full-fidelity record path, or `--no-record` to
+disable it.
 
 | Option       | CLI flag             | Effect                                                                                |
 | ------------ | -------------------- | ------------------------------------------------------------------------------------- |
 | `budget`     | `--budget <n>`       | Cap total tokens for the run. Engine calls refuse once the cap is hit.                |
-| `recordTo`   | `--record <path>`    | Append every structured event as JSONL: a readable, queryable run record.            |
+| `recordTo`   | `--record <path>`    | Append every structured event as JSONL: a readable, queryable run record. Use `'auto'` to name a thin record from the run id. |
 | `checkpoint` | `--checkpoint <p>`   | Snapshot shared `ctx.state` and completed green DAG nodes at loop/dag/job boundaries. |
 | `resumeFrom` | `--resume <path>`    | Restore checkpoint state and skip restored green DAG nodes once, then continue warm.  |
 
 ```ts
 await run(job, { budget: 2_000_000, recordTo: '.loops/run.jsonl', checkpoint: '.loops/state.json' });
 // later, after a crash or a deliberate stop:
-await run(job, { resumeFrom: '.loops/state.json' });
+await run(job, { resumeFrom: '.loops/state.json', checkpoint: '.loops/state.json' });
 ```
 
 `budget` is the cost guard for a loop that fires a worker plus several judges per iteration: `max` bounds the call _count_, `budget` bounds their _cost_ (`{ limit, headroom, soft }` for a soft warn-don't-refuse mode).
+
+In the CLI, `--resume <path>` also checkpoints back to `<path>` when
+`--checkpoint` is omitted. A resumed run emits a startup restore event such as
+`restored 3/3 nodes from .loops/state.json` or a skip reason when the workspace
+fingerprint changed.
 
 ### Rate limits, quotas, and budgets: wait or resume
 

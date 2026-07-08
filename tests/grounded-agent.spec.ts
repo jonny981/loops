@@ -1,4 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import { mkdirSync, mkdtempSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   run,
@@ -65,6 +68,97 @@ describe('grounded agentJob (read automation)', () => {
     // the caller's prompt is still there, last
     expect(prompt).toContain('CONTINUE THE TASK');
     expect(prompt.indexOf('the commit log')).toBeLessThan(prompt.indexOf('CONTINUE THE TASK'));
+  });
+
+  it('caps the assembled grounded prompt while preserving the task prompt', async () => {
+    const repo = await tmpRepo();
+    appendLedger(ws(repo), 'ledger tail ' + 'L'.repeat(20_000));
+    appendPrompt(ws(repo), 'handoff tail ' + 'H'.repeat(20_000));
+
+    const cap = capturing();
+    await run(
+      agentJob({
+        label: 'work',
+        prompt: 'KEEP THIS TASK PROMPT',
+        ground: { promptChars: 1_200 },
+      }),
+      { engine: 'mock', engines: { mock: () => cap.engine }, cwd: repo },
+    );
+
+    const prompt = cap.last();
+    expect(prompt.length).toBeLessThanOrEqual(1_200);
+    expect(prompt).toContain('KEEP THIS TASK PROMPT');
+    expect(prompt).toContain('===HANDOFF===');
+  });
+
+  it('preserves prompt.md handoff before ledger text under a tight cap', async () => {
+    const repo = await tmpRepo();
+    const cap = capturing();
+    appendLedger(ws(repo), 'ledger tail ' + 'L'.repeat(20_000));
+    appendPrompt(ws(repo), 'CRITICAL_HANDOFF');
+
+    await run(
+      agentJob({
+        label: 'work',
+        prompt: 'KEEP THIS TASK PROMPT',
+        ground: { promptChars: 900 },
+      }),
+      { engine: 'mock', engines: { mock: () => cap.engine }, cwd: repo },
+    );
+
+    const prompt = cap.last();
+    expect(prompt.length).toBeLessThanOrEqual(900);
+    expect(prompt).toContain('KEEP THIS TASK PROMPT');
+    expect(prompt).toContain('CRITICAL_HANDOFF');
+    expect(prompt).not.toContain('ledger tail');
+  });
+
+  it('does not read scratch through an unsafe .loops symlink', async () => {
+    const repo = await tmpRepo();
+    const external = mkdtempSync(join(tmpdir(), 'loops-external-scratch-'));
+    writeFileSync(join(external, 'ledger.md'), 'EXTERNAL_LEDGER');
+    writeFileSync(join(external, 'prompt.md'), 'EXTERNAL_PROMPT');
+    symlinkSync(external, join(repo, '.loops'));
+    try {
+      const { outcome } = await run(
+        agentJob({
+          label: 'work',
+          prompt: 'KEEP THIS TASK PROMPT',
+          ground: true,
+        }),
+        { engine: 'mock', engines: { mock: () => new MockEngine(() => 'done') }, cwd: repo },
+      );
+      expect(outcome.status).toBe('fail');
+      expect(outcome.summary).toContain('unsafe .loops');
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
+  });
+
+  it('does not read prompt.md or ledger.md through unsafe file symlinks', async () => {
+    const repo = await tmpRepo();
+    const external = mkdtempSync(join(tmpdir(), 'loops-external-scratch-files-'));
+    const prompt = join(external, 'prompt.md');
+    const ledger = join(external, 'ledger.md');
+    writeFileSync(prompt, 'EXTERNAL_PROMPT');
+    writeFileSync(ledger, 'EXTERNAL_LEDGER');
+    mkdirSync(join(repo, '.loops'));
+    symlinkSync(prompt, join(repo, '.loops', 'prompt.md'));
+    symlinkSync(ledger, join(repo, '.loops', 'ledger.md'));
+    try {
+      const { outcome } = await run(
+        agentJob({
+          label: 'work',
+          prompt: 'KEEP THIS TASK PROMPT',
+          ground: true,
+        }),
+        { engine: 'mock', engines: { mock: () => new MockEngine(() => 'done') }, cwd: repo },
+      );
+      expect(outcome.status).toBe('fail');
+      expect(outcome.summary).toContain('unsafe');
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
   });
 
   it('auto-captures the turn into working memory after a grounded run', async () => {

@@ -51,6 +51,18 @@ describe('prompt.md (the handoff)', () => {
     expect(existsSync(promptPath(ws(repo)))).toBe(false);
   });
 
+  it('keeps the handoff file bounded and preserves newest notes', async () => {
+    const repo = await tmpRepo();
+    appendPrompt(ws(repo), 'old note ' + 'x'.repeat(40_000));
+    appendPrompt(ws(repo), 'new note ' + 'y'.repeat(40_000));
+
+    const handoff = readPrompt(ws(repo));
+    expect(handoff.length).toBeLessThanOrEqual(32_000);
+    expect(handoff).toContain('older scratch omitted');
+    expect(handoff).toContain('new note');
+    expect(handoff).not.toContain('old note');
+  });
+
   it('captures the why from multiple agents and commitJob composes from it', async () => {
     const repo = await tmpRepo();
     // Simulate a fanned-out team: two sub-agents each record their why.
@@ -106,6 +118,17 @@ describe('ledger.md (working memory)', () => {
     resetLedger(ws(repo));
     expect(readLedger(ws(repo))).toBe('');
     expect(existsSync(ledgerPath(ws(repo)))).toBe(false);
+  });
+
+  it('keeps working memory bounded and preserves newest entries', async () => {
+    const repo = await tmpRepo();
+    appendLedger(ws(repo), 'old entry ' + 'x'.repeat(70_000));
+    appendLedger(ws(repo), 'new entry');
+
+    const ledger = readLedger(ws(repo));
+    expect(ledger.length).toBeLessThanOrEqual(64_000);
+    expect(ledger).toContain('entry middle omitted');
+    expect(ledger).toContain('new entry');
   });
 });
 

@@ -23,6 +23,7 @@ import {
 import { dirname } from 'node:path';
 
 import type { CheckpointControl, LoopEvent } from '../core/types.ts';
+import type { Outcome } from '../core/types.ts';
 
 /** High-frequency transcript deltas, excluded from the record. */
 const NOISE: ReadonlySet<LoopEvent['kind']> = new Set([
@@ -39,23 +40,82 @@ const CHECKPOINT_AT: ReadonlySet<LoopEvent['kind']> = new Set([
   'job:end',
 ]);
 
+interface RecorderOptions {
+  thin?: boolean;
+}
+
 function ensureDir(path: string): void {
   const dir = dirname(path);
   if (dir && dir !== '.') mkdirSync(dir, { recursive: true });
 }
 
 /** Append-only JSONL event sink. Truncates any existing file at the start. */
-export function makeRecorder(path: string): (event: LoopEvent) => void {
+export function makeRecorder(
+  path: string,
+  options: RecorderOptions = {},
+): (event: LoopEvent) => void {
   ensureDir(path);
   writeFileSync(path, '');
   return (event) => {
     if (NOISE.has(event.kind)) return;
     try {
-      appendFileSync(path, `${JSON.stringify(event)}\n`);
+      appendFileSync(
+        path,
+        `${JSON.stringify(options.thin ? thinEvent(event) : event)}\n`,
+      );
     } catch {
       /* best-effort: a record write must never break the run */
     }
   };
+}
+
+function thinEvent(event: LoopEvent): unknown {
+  switch (event.kind) {
+    case 'job:end':
+      return { ...event, outcome: thinOutcome(event.outcome) };
+    case 'loop:end':
+      return { ...event, outcome: thinOutcome(event.outcome) };
+    case 'loop:review':
+      return { ...event, outcome: thinOutcome(event.outcome) };
+    case 'dag:end':
+      return { ...event, outcome: thinOutcome(event.outcome) };
+    case 'dag:node':
+      return event.outcome
+        ? { ...event, outcome: thinOutcome(event.outcome) }
+        : event;
+    case 'proof':
+      return { ...event, artifact: thinProofArtifact(event.artifact) };
+    case 'loop:condition':
+      return {
+        ...event,
+        result: event.result.output === undefined
+          ? event.result
+          : { ...event.result, output: '[omitted from auto record]' },
+      };
+    default:
+      return event;
+  }
+}
+
+function thinOutcome(outcome: Outcome): Outcome {
+  const thin: Outcome = {
+    status: outcome.status,
+  };
+  if (outcome.confidence !== undefined) thin.confidence = outcome.confidence;
+  if (outcome.late !== undefined) thin.late = outcome.late;
+  if (outcome.summary !== undefined) thin.summary = outcome.summary;
+  if (outcome.error !== undefined) thin.error = outcome.error;
+  if (outcome.stall !== undefined) thin.stall = outcome.stall;
+  if (outcome.revision !== undefined) thin.revision = outcome.revision;
+  return thin;
+}
+
+function thinProofArtifact(
+  artifact: Extract<LoopEvent, { kind: 'proof' }>['artifact'],
+): Extract<LoopEvent, { kind: 'proof' }>['artifact'] {
+  if (artifact.data === undefined) return artifact;
+  const { data: _data, ...rest } = artifact;
+  return rest;
 }
 
 /** Snapshot the shared run state at each boundary (latest-wins, overwritten). */
@@ -157,9 +217,27 @@ export function loadCheckpointEnvelope(path: string): CheckpointEnvelope {
       : undefined;
   return {
     state,
-    control: { resumeDags: dags, dags: { ...dags } },
+    control: { resumeDags: cloneCheckpointDags(dags), dags: cloneCheckpointDags(dags) },
     workspaceFingerprint,
   };
+}
+
+function cloneCheckpointDags(
+  dags: CheckpointControl['dags'],
+): CheckpointControl['dags'] {
+  return Object.fromEntries(
+    Object.entries(dags).map(([name, dag]) => [
+      name,
+      {
+        nodes: Object.fromEntries(
+          Object.entries(dag.nodes).map(([node, record]) => [
+            node,
+            { ...record },
+          ]),
+        ),
+      },
+    ]),
+  );
 }
 
 /** Restore the shared run state written by a prior `makeCheckpointer`. */

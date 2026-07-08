@@ -146,6 +146,8 @@ export interface GroundConfig {
   includeScratch?: boolean;
   /** Tell the agent to leave memory for the next agent. Default true. */
   recordInstruction?: boolean;
+  /** Hard cap for the assembled grounded prompt. Default 48000 chars. */
+  promptChars?: number;
   /**
    * Retrieve relevant commits with a cheap model instead of taking recent-N.
    * Far less noisy when the branch log carries unrelated work (a shared repo).
@@ -215,7 +217,9 @@ async function withGrounding(
   routeModel?: string,
 ): Promise<string> {
   const opts: GroundConfig = typeof ground === 'object' ? ground : {};
-  const parts: string[] = [];
+  const contextParts: string[] = [];
+  const scratchParts: string[] = [];
+  const essentialParts: string[] = [];
   const retrieveConfig =
     typeof opts.retrieve === 'object' ? opts.retrieve : undefined;
 
@@ -233,26 +237,64 @@ async function withGrounding(
         bodyChars: opts.bodyChars,
         signal: ctx.signal,
       });
-  if (committed) parts.push(committed);
+  if (committed) contextParts.push(committed);
 
   if (opts.includeScratch !== false) {
+    const handoff = readPrompt(ctx.workspace);
+    if (handoff)
+      scratchParts.push(
+        `## Handoff so far (what earlier work distilled for the next agent)\n\n${handoff}`,
+      );
     const working = readLedger(ctx.workspace);
     if (working)
-      parts.push(
+      scratchParts.push(
         `## Working memory (this run so far)\n\n` +
           `What earlier turns in this run tried and found — build on it.\n\n${working}`,
       );
-    const handoff = readPrompt(ctx.workspace);
-    if (handoff)
-      parts.push(
-        `## Handoff so far (what earlier work distilled for the next agent)\n\n${handoff}`,
-      );
   }
 
-  if (opts.recordInstruction !== false) parts.push(recordBlock());
+  if (opts.recordInstruction !== false) essentialParts.push(recordBlock());
 
-  parts.push(userPrompt);
-  return parts.join('\n\n---\n\n');
+  essentialParts.push(userPrompt);
+  return cappedPrompt(
+    [...scratchParts, ...contextParts],
+    essentialParts,
+    opts.promptChars ?? 48_000,
+  );
+}
+
+function cappedPrompt(
+  optionalParts: string[],
+  essentialParts: string[],
+  maxChars: number,
+): string {
+  const sep = '\n\n---\n\n';
+  const join = (parts: string[]) => parts.filter(Boolean).join(sep);
+  const essential = join(essentialParts);
+  if (essential.length >= maxChars) return truncateMiddle(essential, maxChars);
+
+  const selected: string[] = [];
+  for (const part of optionalParts) {
+    const candidate = join([...selected, part, essential]);
+    if (candidate.length <= maxChars) {
+      selected.push(part);
+      continue;
+    }
+    const remaining = maxChars - join([...selected, essential]).length - sep.length;
+    if (remaining > 200) selected.push(truncateMiddle(part, remaining));
+    break;
+  }
+  return join([...selected, essential]);
+}
+
+function truncateMiddle(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  if (maxChars <= 32) return text.slice(0, maxChars);
+  const marker = '\n[omitted]\n';
+  const keep = maxChars - marker.length;
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  return `${text.slice(0, head).trimEnd()}${marker}${text.slice(-tail).trimStart()}`;
 }
 
 /** Collapse a turn's tool-use counts into compact tokens (`Edit×2`, `Bash`). */

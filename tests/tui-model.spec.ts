@@ -12,6 +12,25 @@ const req = <T>(x: T | undefined): T => {
 };
 
 describe('tui view-model', () => {
+  it('surfaces restore diagnostics as a notice', () => {
+    const vm = emptyVM();
+    reduce(
+      vm,
+      at({
+        kind: 'runtime:restore',
+        path: [],
+        checkpoint: 'ckpt.json',
+        decision: 'restored',
+        restoredNodes: 1,
+        totalNodes: 1,
+        reason: 'restored 1/1 nodes from ckpt.json',
+        fingerprint: 'matched',
+      }),
+    );
+
+    expect(vm.notice).toBe('restored 1/1 nodes from ckpt.json');
+  });
+
   it('builds a loop node and tracks iterations + status', () => {
     const vm = emptyVM();
     reduce(vm, at({ kind: 'loop:start', path: ['poll'], depth: 1, max: 5 }));

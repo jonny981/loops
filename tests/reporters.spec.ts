@@ -4,6 +4,17 @@ import { plainReporter, jsonReporter, printSummary } from '../src/reporters.ts';
 import type { LoopEvent } from '../src/api.ts';
 
 const sample: LoopEvent[] = [
+  {
+    kind: 'runtime:restore',
+    ts: 0,
+    path: [],
+    checkpoint: 'ckpt.json',
+    decision: 'restored',
+    restoredNodes: 1,
+    totalNodes: 1,
+    reason: 'restored 1/1 nodes from ckpt.json',
+    fingerprint: 'matched',
+  },
   { kind: 'loop:start', ts: 0, path: ['l'], depth: 1, max: 3 },
   { kind: 'loop:iteration', ts: 0, path: ['l'], iteration: 1 },
   { kind: 'job:start', ts: 0, path: ['l'], label: 'worker' },
@@ -80,7 +91,7 @@ describe('reporters', () => {
     sample.forEach(report);
     write.mockRestore();
     expect(lines).toHaveLength(sample.length);
-    expect(JSON.parse(lines[0]!).kind).toBe('loop:start');
+    expect(JSON.parse(lines[0]!).kind).toBe('runtime:restore');
     expect(lines.every((l) => l.endsWith('\n'))).toBe(true);
   });
 

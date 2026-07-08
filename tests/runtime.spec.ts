@@ -1,4 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, describe, it, expect } from 'vitest';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import {
   run,
@@ -9,6 +19,9 @@ import {
   MockEngine,
 } from '../src/api.ts';
 import type { Engine, RunOptions } from '../src/api.ts';
+import { cleanupRepos, tmpBareDir } from './git-helpers.ts';
+
+afterAll(cleanupRepos);
 
 const mockOpts: RunOptions = {
   engine: 'mock',
@@ -81,6 +94,76 @@ describe('run', () => {
     );
     expect(calledWith).toBe('hello-engine');
     expect(outcome.status).toBe('pass');
+  });
+
+  it('auto-names JSONL records from the run id', async () => {
+    const dir = tmpBareDir();
+    const result = await run(
+      fnJob('done', async () => ({
+        status: 'pass',
+        summary: 'ok',
+        data: { secret: 'private payload' },
+      })),
+      { cwd: dir, recordTo: 'auto' },
+    );
+
+    expect(result.runId).toBeTruthy();
+    expect(result.recordPath).toBe(`${dir}/.loops/records/${result.runId}.jsonl`);
+    expect(existsSync(result.recordPath!)).toBe(true);
+    const record = readFileSync(result.recordPath!, 'utf8');
+    expect(record).toContain('"kind":"job:end"');
+    expect(record).not.toContain('private payload');
+    expect(readFileSync(`${dir}/.loops/.gitignore`, 'utf8')).toBe('*\n');
+  });
+
+  it('rejects Loops-managed scratch paths that escape through a symlink', async () => {
+    const dir = tmpBareDir();
+    const target = mkdtempSync(join(tmpdir(), 'loops-escape-target-'));
+    symlinkSync(target, join(dir, '.loops'));
+    try {
+      await expect(
+        run(fnJob('done', async () => ({ status: 'pass' })), {
+          cwd: dir,
+          recordTo: 'auto',
+        }),
+      ).rejects.toThrow(/unsafe \.loops/);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects checkpoint paths under an unsafe .loops symlink', async () => {
+    const dir = tmpBareDir();
+    const target = mkdtempSync(join(tmpdir(), 'loops-checkpoint-escape-'));
+    symlinkSync(target, join(dir, '.loops'));
+    try {
+      await expect(
+        run(fnJob('done', async () => ({ status: 'pass' })), {
+          cwd: dir,
+          checkpoint: join(dir, '.loops', 'state.json'),
+        }),
+      ).rejects.toThrow(/unsafe \.loops/);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects checkpoint target files that are symlinks under .loops', async () => {
+    const dir = tmpBareDir();
+    const target = join(mkdtempSync(join(tmpdir(), 'loops-checkpoint-target-')), 'state.json');
+    mkdirSync(join(dir, '.loops'));
+    symlinkSync(target, join(dir, '.loops', 'state.json'));
+    try {
+      await expect(
+        run(fnJob('done', async () => ({ status: 'pass' })), {
+          cwd: dir,
+          checkpoint: join(dir, '.loops', 'state.json'),
+        }),
+      ).rejects.toThrow(/unsafe .*state\.json/);
+      expect(existsSync(target)).toBe(false);
+    } finally {
+      rmSync(dirname(target), { recursive: true, force: true });
+    }
   });
 });
 

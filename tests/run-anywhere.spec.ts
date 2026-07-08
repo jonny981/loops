@@ -1,7 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -50,6 +59,24 @@ export default defineJob(
 );
 `;
 
+const PARAM_RECIPE = `import { defineJob, defineParams, fnJob } from '${apiUrl}';
+
+export const params = defineParams({
+  oem: { type: 'string', required: true, help: 'OEM name' },
+  device: { type: 'choice', choices: ['battery', 'inverter'], default: 'battery', help: 'Device type' },
+  skip: { type: 'string[]', default: [], help: 'Stage to skip' },
+  dryRun: { type: 'boolean', default: false, help: 'Dry run only' },
+  repoRoot: { type: 'string', defaultFrom: 'gitRoot', help: 'Repository root' },
+});
+
+export default defineJob(
+  fnJob('params', async (ctx) => ({
+    status: 'pass',
+    summary: JSON.stringify(ctx.params),
+  })),
+);
+`;
+
 describe('running a loop from outside the package tree', () => {
   let dir: string;
 
@@ -58,6 +85,7 @@ describe('running a loop from outside the package tree', () => {
     dir = mkdtempSync(join(tmpdir(), 'loops-oot-'));
     writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
     writeFileSync(join(dir, 'recipe.loop.ts'), RECIPE);
+    writeFileSync(join(dir, 'params.loop.ts'), PARAM_RECIPE);
   });
 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -102,6 +130,210 @@ describe('running a loop from outside the package tree', () => {
       name: 'oot-smoke',
       body: { kind: 'fn', name: 'check' },
     });
+  }, 30_000);
+
+  it('recipe-declared params appear in help and reach ctx.params', async () => {
+    const recipe = join(dir, 'params.loop.ts');
+
+    const help = await loops(['run', recipe, '--help'], dir);
+    expect(help.code).toBe(0);
+    expect(help.out).toContain('--oem <value>');
+    expect(help.out).toContain('--device <value>');
+    expect(help.out).toContain('--skip <value>');
+    expect(help.out).toContain('--dry-run');
+
+    const runResult = await loops(
+      [
+        'run',
+        recipe,
+        '--no-tui',
+        '--no-record',
+        '--oem',
+        'Sigenergy',
+        '--device',
+        'battery',
+        '--skip',
+        'go-live-chaos',
+        '--skip',
+        'docs',
+        '--dry-run',
+      ],
+      dir,
+    );
+    expect(runResult.code).toBe(0);
+    expect(runResult.out).toContain('"oem":"Sigenergy"');
+    expect(runResult.out).toContain('"device":"battery"');
+    expect(runResult.out).toContain('"skip":["go-live-chaos","docs"]');
+    expect(runResult.out).toContain('"dryRun":true');
+    expect(runResult.out).toContain(`"repoRoot":"${realpathSync(dir)}"`);
+  }, 30_000);
+
+  it('does not import recipe top-level code to render recipe-param help', async () => {
+    const marker = join(dir, 'help-side-effect.txt');
+    const recipe = join(dir, 'help-safe.loop.ts');
+    writeFileSync(
+      recipe,
+      `import { defineJob, defineParams, fnJob } from '${apiUrl}';
+import { writeFileSync } from 'node:fs';
+writeFileSync(${JSON.stringify(marker)}, 'executed');
+export const params = defineParams({ oem: { type: 'string', required: true, help: 'OEM name' } });
+export default defineJob(fnJob('noop', async () => ({ status: 'pass' })));
+`,
+    );
+
+    const help = await loops(['run', recipe, '--help'], dir);
+    expect(help.code).toBe(0);
+    expect(help.out).toContain('--oem <value>');
+    expect(existsSync(marker)).toBe(false);
+  }, 30_000);
+
+  it('keeps the invocation cwd as workspace while exposing git root as a param default', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'loops-cwd-root-'));
+    const child = join(root, 'nested');
+    mkdirSync(child);
+    writeFileSync(join(root, 'package.json'), '{"type":"module"}');
+    writeFileSync(
+      join(root, 'recipe.loop.ts'),
+      `import { defineJob, defineParams, fnJob } from '${apiUrl}';
+export const params = defineParams({ repoRoot: { type: 'string', defaultFrom: 'gitRoot' } });
+export default defineJob(fnJob('cwd', async (ctx) => ({
+  status: 'pass',
+  summary: JSON.stringify({ workspace: ctx.workspace.dir, repoRoot: ctx.params.repoRoot }),
+})));
+`,
+    );
+    await exec('git', ['init'], { cwd: root });
+
+    try {
+      const result = await loops(
+        ['run', '../recipe.loop.ts', '--no-tui', '--no-record'],
+        child,
+      );
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(`"workspace":"${realpathSync(child)}"`);
+      expect(result.out).toContain(`"repoRoot":"${realpathSync(root)}"`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('rejects unknown run flags after recipe params are registered', async () => {
+    const result = await loops(
+      [
+        'run',
+        join(dir, 'params.loop.ts'),
+        '--no-tui',
+        '--no-record',
+        '--oem',
+        'Sigenergy',
+        '--chekpoint',
+        'typo.json',
+      ],
+      dir,
+    );
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("unknown option '--chekpoint'");
+  }, 30_000);
+
+  it('loads config/profile defaults and lets CLI override the record path', async () => {
+    const recipe = join(dir, 'params.loop.ts');
+    const home = mkdtempSync(join(tmpdir(), 'loops-config-runs-'));
+    const record = join(dir, 'explicit-record.jsonl');
+    writeFileSync(
+      join(dir, 'loops.config.ts'),
+      `import { defineConfig } from '${apiUrl}';
+export default defineConfig({
+  run: { tui: false, record: false },
+  profiles: { observed: { run: { supervise: true } } },
+});
+`,
+    );
+    try {
+      const env = { LOOPS_HOME: home };
+      const runResult = await loops(
+        [
+          'run',
+          recipe,
+          '--profile',
+          'observed',
+          '--record',
+          record,
+          '--oem',
+          'Sigenergy',
+        ],
+        dir,
+        env,
+      );
+      expect(runResult.code).toBe(0);
+      expect(readdirSync(join(home, 'runs'))).toHaveLength(1);
+      expect(existsSync(record)).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('lets CLI --resume continue checkpointing to the resume path over a config default', async () => {
+    const recipe = join(dir, 'params.loop.ts');
+    const config = join(dir, 'resume-precedence.config.ts');
+    const resume = join(dir, 'resume.ckpt.json');
+    const configured = join(dir, 'configured.ckpt.json');
+    writeFileSync(
+      resume,
+      JSON.stringify({ state: {}, dags: {} }),
+    );
+    writeFileSync(
+      config,
+      `export default { run: { checkpoint: ${JSON.stringify(configured)}, tui: false, record: false } };
+`,
+    );
+
+    const result = await loops(
+      [
+        'run',
+        recipe,
+        '--config',
+        config,
+        '--resume',
+        resume,
+        '--oem',
+        'Sigenergy',
+      ],
+      dir,
+    );
+    expect(result.code).toBe(0);
+    expect(JSON.parse(readFileSync(resume, 'utf8'))).toHaveProperty('ts');
+    expect(existsSync(configured)).toBe(false);
+  }, 30_000);
+
+  it('fails fast on unknown config keys', async () => {
+    const recipe = join(dir, 'params.loop.ts');
+    const badConfig = join(dir, 'bad-loops.config.ts');
+    writeFileSync(
+      badConfig,
+      `export default { run: { unknownKey: true } };
+`,
+    );
+    const result = await loops(
+      ['run', recipe, '--config', badConfig, '--oem', 'Sigenergy'],
+      dir,
+    );
+    expect(result.code).toBe(1);
+    expect(result.out).toContain('unknown run key "unknownKey"');
+  }, 30_000);
+
+  it('resets scratch files on a fresh CLI run', async () => {
+    const recipe = join(dir, 'params.loop.ts');
+    mkdirSync(join(dir, '.loops'), { recursive: true });
+    writeFileSync(join(dir, '.loops', 'ledger.md'), 'stale prior run');
+    writeFileSync(join(dir, '.loops', 'prompt.md'), 'stale handoff');
+
+    const runResult = await loops(
+      ['run', recipe, '--no-tui', '--no-record', '--oem', 'Sigenergy'],
+      dir,
+    );
+    expect(runResult.code).toBe(0);
+    expect(existsSync(join(dir, '.loops', 'ledger.md'))).toBe(false);
+    expect(existsSync(join(dir, '.loops', 'prompt.md'))).toBe(false);
   }, 30_000);
 
   it('records exposes supervised semantic records from the CLI', async () => {

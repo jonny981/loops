@@ -46,6 +46,7 @@ export function childContext(
     checkpoint: parent.checkpoint,
     emit: parent.emit,
     state: parent.state,
+    params: parent.params,
     // A child inherits the parent's workspace by default; a concurrency
     // boundary forks it into an isolated worktree by passing `workspace`.
     workspace: over.workspace ?? parent.workspace,

@@ -464,6 +464,7 @@ describe('the printed resume hint', () => {
       record: 'run.jsonl',
       state: '{"old":true}',
       ack: ['prior-gate'],
+      paramArg: ['--oem', 'Sigenergy'],
       tui: false,
     });
 
@@ -478,8 +479,9 @@ describe('the printed resume hint', () => {
     expect(command).toContain('--default-model gpt-5.4-mini');
     expect(command).toContain("--engine-arg 'bar baz'");
     expect(command).toContain('--ground');
-    expect(command).toContain('--checkpoint ckpt.json');
     expect(command).toContain('--resume ckpt.json');
+    expect(command).toContain('--oem Sigenergy');
+    expect(command).not.toContain('--checkpoint ckpt.json');
     expect(command).not.toContain('--state');
     expect(command).not.toContain('--ack');
   });

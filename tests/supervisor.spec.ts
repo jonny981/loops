@@ -316,5 +316,23 @@ describe('out-of-process supervision', () => {
 
       expect(line).toContain('pass late');
     });
+
+    it('renders restore diagnostics for tail and recent status lines', () => {
+      const line = formatEvent({
+        kind: 'runtime:restore',
+        ts: 0,
+        path: [],
+        checkpoint: 'ckpt.json',
+        decision: 'skipped',
+        restoredNodes: 0,
+        totalNodes: 2,
+        reason: 'restoring nothing from ckpt.json: workspace fingerprint changed',
+        fingerprint: 'changed',
+      });
+
+      expect(line).toBe(
+        'restoring nothing from ckpt.json: workspace fingerprint changed',
+      );
+    });
   });
 });
