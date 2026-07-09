@@ -16,6 +16,10 @@ heading, dated, before the tag is pushed.
 - Releases key off the version bump: a `main` push whose `package.json`
   version has no `v*` tag yet is gated, tested, tagged by CI, and published —
   no hand-pushed tag needed (hand tags and the manual trigger still work).
+- Every release also creates a GitHub Release whose body is the version's
+  changelog section (one source of truth). The publish steps are idempotent
+  (existing tag kept, published version not re-published, existing Release
+  left alone), so a partial release is completed by the next push.
 
 ## [0.6.0] — 2026-07-09
 

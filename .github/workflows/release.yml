@@ -12,7 +12,10 @@ name: Release
 # A push that does not bump the version is a no-op here. The old paths still
 # work: pushing a v* tag by hand, or the manual trigger (publishes whatever
 # version main carries). The tag is created in-workflow from package.json, so
-# a tag/version mismatch is structurally impossible on this path.
+# a tag/version mismatch is structurally impossible on this path. The run
+# finishes by creating the GitHub Release, whose body is the version's
+# CHANGELOG.md section (one source of truth). Every publish step is
+# idempotent, so a run that stopped partway is completed by the next push.
 #
 # Why one workflow instead of a tagger that triggers a releaser: tags pushed
 # with the default GITHUB_TOKEN do not trigger other workflows (GitHub's
@@ -45,18 +48,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [ "$GITHUB_REF_TYPE" = "tag" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "explicit release ref/dispatch for $VERSION"
-          elif git ls-remote --exit-code origin "refs/tags/v$VERSION" > /dev/null 2>&1; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "v$VERSION is already tagged — not a release push"
-          else
+          elif ! git ls-remote --exit-code origin "refs/tags/v$VERSION" > /dev/null 2>&1; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "v$VERSION has no tag yet — releasing"
+          elif ! gh release view "v$VERSION" > /dev/null 2>&1; then
+            # Tagged but no GitHub Release: a prior run stopped partway (the
+            # publish steps are idempotent, so re-entering is safe).
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is tagged but has no GitHub Release — completing it"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is fully released — not a release push"
           fi
 
   publish:
@@ -81,13 +91,42 @@ jobs:
       - run: npm test
       # Tag from package.json when this run was not started by a tag push.
       # Created with GITHUB_TOKEN, so it cannot re-trigger this workflow.
+      # Idempotent: an existing matching tag is left alone.
       - name: Tag the release
         if: github.ref_type != 'tag'
         run: |
           VERSION=${{ needs.decide.outputs.version }}
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -f "v$VERSION"
-          git push -f origin "refs/tags/v$VERSION"
+          if git ls-remote --exit-code origin "refs/tags/v$VERSION" > /dev/null 2>&1; then
+            echo "v$VERSION already tagged"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "v$VERSION"
+            git push origin "refs/tags/v$VERSION"
+          fi
       - run: npm install -g npm@latest # OIDC publish needs npm >= 11.5.1
-      - run: npm publish --provenance --access public
+      # Idempotent: a version already on the registry is not re-published, so
+      # a re-entered run (e.g. completing a missing GitHub Release) passes.
+      - name: Publish to npm
+        run: |
+          VERSION=${{ needs.decide.outputs.version }}
+          NAME=$(node -p "require('./package.json').name")
+          if npm view "$NAME@$VERSION" version > /dev/null 2>&1; then
+            echo "$NAME@$VERSION is already on npm — skipping publish"
+          else
+            npm publish --provenance --access public
+          fi
+      # The GitHub Release body IS the changelog section — one source of
+      # truth, and the changelog gate already guaranteed it is non-empty.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=${{ needs.decide.outputs.version }}
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "GitHub Release v$VERSION already exists"
+          else
+            node scripts/changelog-section.mjs "$VERSION" > /tmp/release-notes.md
+            gh release create "v$VERSION" --verify-tag \
+              --title "v$VERSION" --notes-file /tmp/release-notes.md
+          fi
