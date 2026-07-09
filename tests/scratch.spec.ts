@@ -58,6 +58,7 @@ describe('prompt.md (the handoff)', () => {
 
     const handoff = readPrompt(ws(repo));
     expect(handoff.length).toBeLessThanOrEqual(32_000);
+    expect(readFileSync(promptPath(ws(repo)), 'utf8').length).toBeLessThanOrEqual(32_001);
     expect(handoff).toContain('older scratch omitted');
     expect(handoff).toContain('new note');
     expect(handoff).not.toContain('old note');
@@ -127,6 +128,7 @@ describe('ledger.md (working memory)', () => {
 
     const ledger = readLedger(ws(repo));
     expect(ledger.length).toBeLessThanOrEqual(64_000);
+    expect(readFileSync(ledgerPath(ws(repo)), 'utf8').length).toBeLessThanOrEqual(64_001);
     expect(ledger).toContain('entry middle omitted');
     expect(ledger).toContain('new entry');
   });

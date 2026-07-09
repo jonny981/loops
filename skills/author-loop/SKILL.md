@@ -67,13 +67,15 @@ export default defineJob(
 );
 ```
 
-Project boilerplate belongs in `loops.config.ts`:
+Project boilerplate belongs in a recipe-adjacent `loops.config.ts`, `.js`,
+`.mjs`, `.yaml`, or `.yml`:
 
 ```ts
 import { defineConfig } from '@loops-adk/core';
 
 export default defineConfig({
   run: { supervise: true, tui: false, record: 'auto' },
+  recipe: { reviewerThreshold: 0.9 },
   profiles: {
     live: { run: { permissionMode: 'bypassPermissions', defaultModel: 'claude-sonnet-5' } },
   },
@@ -84,6 +86,10 @@ export default defineConfig({
 explicit `--record <path>` writes the full event stream.
 
 Run it as `loops run onboard.loop.ts --profile live --oem Sigenergy`.
+When a param declares `env`, CLI values are written before import, so graph
+shape built from `process.env` matches `ctx.params`. Recipes read custom config
+from `ctx.config.recipe`. For a new recipe island, run `loops init <dir>` to
+create the ESM package scope, tsconfig, config file, and `.loops/` ignore entry.
 
 ## The gate
 
@@ -109,8 +115,8 @@ A failing gate briefs the next attempt. The previous iteration's `until` verdict
 ```ts
 body: agentJob({
   prompt: (c) =>
-    c.lastGate && !c.lastGate.met
-      ? `The gate failed:\n${c.lastGate.output ?? c.lastGate.reason}\n\nFix exactly that.`
+    lastGateBrief(c)
+      ? `${lastGateBrief(c)}\n\nFix exactly that.`
       : 'Implement the feature in TASK.md.',
 }),
 ```
@@ -120,6 +126,14 @@ body: agentJob({
 Progress accumulates on disk, so each iteration starts with a clean context but not a blank one.
 
 - `ground: true` on an `agentJob` reads the recent commit log + this run's scratch files into the next prompt, so a fresh turn knows what was already tried. The bounded prompt keeps the task and handoff instruction first, then the live handoff, working memory, and committed context. To default it on for every `agentJob` in a run, set `RunOptions.ground` or pass `--ground`; a job's own `ground` (including an explicit `false`) wins.
+- Use `agentJob({ role: 'reader' })` for leaves that should read grounding but
+  end with a closing decision token. It omits the handoff instruction.
+- Parse closing contracts with `lastDecisionLine(text, token, values)` or
+  `confidenceFromText(text)`. They read the handoff-stripped work report, so a
+  token restated after `===HANDOFF===` cannot score the leaf.
+- `promptBank(dir).render(name, vars)` loads Markdown prompt templates, supports
+  `{{var}}` and `{{> fragment}}`, and fails on unused vars or unresolved
+  placeholders.
 - `commit: { subject }` (or `commit: true`) writes one structured milestone commit on convergence: the reasoning welded to the diff. Later turns ground on it.
 - For long, noisy histories use `ground: { retrieve: true }` (select relevant commits, not recent-N); for indefinite processes add `consolidateJob` to fold history into a bounded, decision-preserving record.
 
@@ -169,6 +183,13 @@ A step no model may approve (deploy to prod, spend real money) is a `humanGate({
 ## Agents and feedback
 
 A node can be a named specialist instead of an inline prompt. Define it once with `defineAgent` (persona in markdown via `fromFile`, structure in TS) and hand it to `agentJob({ agent })`; `defineSkill` folds a methodology into its system. An existing Claude Code agent `.md` loads directly with `defineAgentFromMarkdown(path, overrides?)`: frontmatter (`name`/`description`/`model`/`tools`) maps onto the def, the body becomes `system`, and the result is always a leaf (the `Task`/`Agent` spawn tools are dropped). The contract fields (`tier`, `outputs`, `failureModes`, …) are metadata for `describe` and validation, not scheduling power: the `dag` orchestrates, agents stay workers.
+
+Every leaf subprocess gets `LOOPS_LEAF=1` plus leaf id, label, path,
+iteration, and run id when present, so host hooks can skip headless agent turns.
+Use `agentJob({ advisor: { engine, model, maxCalls } })` for a bounded
+consultant. The worker asks with `<consult_advisor>`, loops records the question
+and reply, and the worker resumes with the advisor response. Do not ask a leaf
+to shell out to another model.
 
 Review feedback is a structured revision request that flows back to the worker on one channel. In a loop, a failing `review` is threaded into the next turn as `ctx.lastReview`; set `consumeFeedback: true` and `agentJob` folds it into the prompt. Aggregate several reviewers with `reviewPanel`; route a fix back to an earlier dag node with a targeted `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) when the dag's `maxKickbacks` allows it.
 

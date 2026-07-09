@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest';
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { modelFor } from '../src/engines/engine.ts';
-import { buildCodexArgs } from '../src/engines/codex.ts';
+import { buildCodexArgs, CodexEngine } from '../src/engines/codex.ts';
 
 describe('buildCodexArgs', () => {
   it('defaults to a read-only ephemeral exec and writes the last message', () => {
@@ -10,7 +18,8 @@ describe('buildCodexArgs', () => {
     expect(args).toContain('read-only');
     expect(args).toContain('-o');
     expect(args[args.indexOf('-o') + 1]).toBe('/tmp/out.txt');
-    expect(args.at(-1)).toBe('review this');
+    expect(args.at(-1)).toBe('-');
+    expect(args).not.toContain('review this');
   });
 
   it('uses write-capable unattended mode only for bypassPermissions', () => {
@@ -32,7 +41,8 @@ describe('buildCodexArgs', () => {
     );
     expect(args[args.indexOf('-m') + 1]).toBe('gpt-5.1-codex');
     expect(args).toContain('--ignore-rules');
-    expect(args.at(-1)).toBe('be careful\n\n---\n\ngo');
+    expect(args.at(-1)).toBe('-');
+    expect(args).not.toContain('be careful\n\n---\n\ngo');
   });
 
   it('does not inherit another engine default model', () => {
@@ -73,5 +83,33 @@ describe('buildCodexArgs', () => {
         'anthropic-api',
       ),
     ).toBeUndefined();
+  });
+
+  it('sends the composed prompt through stdin to the codex subprocess', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-codex-stub-'));
+    const bin = join(dir, 'codex-stub.mjs');
+    const stdinFile = join(dir, 'stdin.txt');
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const args = process.argv.slice(2);
+const out = args[args.indexOf('-o') + 1];
+writeFileSync(${JSON.stringify(stdinFile)}, readFileSync(0, 'utf8'));
+writeFileSync(out, 'stub final');
+`,
+    );
+    chmodSync(bin, 0o755);
+
+    const engine = new CodexEngine({ cliBinary: bin });
+    const result = await engine.run(
+      { prompt: 'do the work', system: 'system rules' },
+      () => {},
+      new AbortController().signal,
+    );
+
+    expect(result.text).toBe('stub final');
+    expect(readFileSync(stdinFile, 'utf8')).toBe('system rules\n\n---\n\ndo the work');
   });
 });

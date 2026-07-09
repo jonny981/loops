@@ -535,6 +535,8 @@ function renderEvent(event: LoopEvent): string {
       return `${at}◂ dag ${event.outcome.status}${event.outcome.late ? ' late' : ''}`;
     case 'job:start':
       return `${at}• ${event.label}`;
+    case 'advisor:consult':
+      return `${at}◇ advisor ${event.label} #${event.call}: ${event.question}`;
     case 'proof':
       return `${at}◈ proof ${event.name}: ${event.artifact.title ?? event.artifact.path ?? event.artifact.kind}`;
     case 'job:end':

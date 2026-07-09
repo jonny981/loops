@@ -11,15 +11,52 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-09
+
+### Added
+
+- Graph-shaping recipe params: params that declare `env` are resolved before
+  recipe import and written back to that env var, so module-scope graph labels,
+  prompts, and fan-out read the same value as `ctx.params`.
+- Recipe-adjacent config discovery and recipe tunables: `loops.config.*` is
+  found upward from the recipe before falling back to the invocation git root;
+  config files may expose `recipe` data on `ctx.config.recipe`; YAML config is
+  supported via `loops.config.yaml` / `.yml`.
+- `loops init <dir>` scaffolds the small recipe-island baseline: ESM
+  `package.json`, strict no-emit `tsconfig.json`, `loops.config.ts`, and a
+  `.loops/` gitignore entry.
+- Decision-token helpers: `lastDecisionLine`, `confidenceFromText`,
+  `confidenceCondition`, and `lastGateBrief`, all built around the
+  handoff-stripped work report.
+- `promptBank(dir)`: Markdown prompt templates with `{{var}}` interpolation,
+  `{{> fragment}}` includes, cycle detection, and fail-loud unused or missing
+  variables.
+- `agentJob({ role: 'reader' })` for grounded reader leaves that should end
+  with a decision token instead of a handoff instruction.
+- Bounded advisor consults on `agentJob`: a worker can request a capped,
+  model-pinned consult, and Loops records the question and reply as
+  `advisor:consult` events before resuming the worker.
+
 ### Changed
 
 - Releases key off the version bump: a `main` push whose `package.json`
-  version has no `v*` tag yet is gated, tested, tagged by CI, and published —
-  no hand-pushed tag needed (hand tags and the manual trigger still work).
+  version has no `v*` tag yet is gated, tested, tagged by CI, and published.
+  No hand-pushed tag needed; hand tags and the manual trigger still work.
 - Every release also creates a GitHub Release whose body is the version's
   changelog section (one source of truth). The publish steps are idempotent
   (existing tag kept, published version not re-published, existing Release
   left alone), so a partial release is completed by the next push.
+- Claude CLI model ids are normalised before dispatch, stripping Claude Code
+  long-context suffixes such as `[1m]`.
+- CLI-backed engines receive prompts over stdin rather than argv, preserving the
+  prompt cap while removing the OS argument-length ceiling.
+
+### Fixed
+
+- Scratch files are rolling buffers on disk, not only at read time, so long
+  in-run ledgers and handoffs stay bounded.
+- Added a subprocess SIGTERM restore regression for checkpointed DAG nodes,
+  covering the killed-run resume path.
 
 ## [0.6.0] — 2026-07-09
 
@@ -163,7 +200,8 @@ limit policies, supervision (`--supervise`, `list`/`status`/`tail`), the Ink
 TUI, `loops validate` / run-from-any-repo via the global tsx loader, and the
 author-loop skill.
 
-[Unreleased]: https://github.com/jonny981/loops/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jonny981/loops/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jonny981/loops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jonny981/loops/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/jonny981/loops/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jonny981/loops/compare/v0.4.0...v0.5.0

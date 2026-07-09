@@ -14,6 +14,7 @@ import { pathToFileURL } from 'node:url';
 import React from 'react';
 import { Command } from 'commander';
 import { z } from 'zod';
+import { parse as parseYaml } from 'yaml';
 
 import { run, exitCodeFor } from './runtime/runner.ts';
 import { createHub } from './runtime/hub.ts';
@@ -119,6 +120,11 @@ interface LoadedRecipe {
   job: Job;
   title: string;
   params?: ParamDefinitions;
+}
+
+interface LoadedConfig {
+  run: LoopsRunConfig;
+  recipe?: Record<string, unknown>;
 }
 
 async function loadJob(file: string): Promise<LoadedRecipe> {
@@ -241,6 +247,29 @@ function inferRunFile(
   return undefined;
 }
 
+function inferInspectionFile(
+  argv: string[],
+  commandName: 'validate' | 'describe',
+  coreOptions: CoreOptionMetadata,
+): string | undefined {
+  if (argv[2] !== commandName) return undefined;
+  const tokens = argv.slice(3);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i]!;
+    if (token === '--') break;
+    if (token.startsWith('--') && token.includes('=')) {
+      const [name] = token.split('=', 1);
+      if (name && coreOptions.flags.has(name)) continue;
+    }
+    if (coreOptions.valueFlags.has(token)) {
+      i += 1;
+      continue;
+    }
+    if (!token.startsWith('-') && isRecipePath(token)) return token;
+  }
+  return undefined;
+}
+
 function assertNoCoreParamCollisions(
   params: ParamDefinitions,
   coreOptions: CoreOptionMetadata,
@@ -284,14 +313,18 @@ function readStaticRecipeParams(file: string): ParamDefinitions | undefined {
   const source = fs.readFileSync(path.resolve(file), 'utf8');
   const match = /export\s+const\s+params\s*=\s*defineParams\s*\(/.exec(source);
   if (!match) return undefined;
-  const parser = new LiteralParser(source, match.index + match[0].length);
-  const parsed = parser.parseValue();
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  try {
+    const parser = new LiteralParser(source, match.index + match[0].length);
+    const parsed = parser.parseValue();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const params = parsed as ParamDefinitions;
+    validateParamDefinitions(params);
+    return params;
+  } catch {
     return undefined;
   }
-  const params = parsed as ParamDefinitions;
-  validateParamDefinitions(params);
-  return params;
 }
 
 class LiteralParser {
@@ -438,16 +471,21 @@ class LiteralParser {
 async function loadConfig(
   flags: RunFlags,
   cwd: string,
-): Promise<LoopsRunConfig> {
-  const configPath = await resolveConfigPath(flags.config, cwd);
-  if (!configPath) return {};
-  const mod = (await import(pathToFileURL(configPath).href)) as {
-    default?: unknown;
-    config?: unknown;
-  };
-  const config = (mod.default ?? mod.config) as LoopsConfig | undefined;
+  file?: string,
+): Promise<LoadedConfig> {
+  const configPath = await resolveConfigPath(flags.config, cwd, file);
+  if (!configPath) return { run: {} };
+  const config = await loadConfigFile(configPath);
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error(`${configPath}: config must export an object`);
+  }
+  if (
+    config.recipe !== undefined &&
+    (!config.recipe ||
+      typeof config.recipe !== 'object' ||
+      Array.isArray(config.recipe))
+  ) {
+    throw new Error(`${configPath}: recipe config must be an object`);
   }
   const profile = flags.profile;
   const profileConfig = profile ? config.profiles?.[profile] : undefined;
@@ -465,7 +503,18 @@ async function loadConfig(
   validateRunConfig(configPath, 'run', config.run);
   validateRunConfig(configPath, profile ? `profiles.${profile}` : 'profile', profileRun);
   validateRunConfig(configPath, 'merged run config', merged);
-  return merged;
+  return { run: merged, recipe: config.recipe };
+}
+
+async function loadConfigFile(configPath: string): Promise<LoopsConfig | undefined> {
+  if (/\.ya?ml$/i.test(configPath)) {
+    return parseYaml(fs.readFileSync(configPath, 'utf8')) as LoopsConfig | undefined;
+  }
+  const mod = (await import(pathToFileURL(configPath).href)) as {
+    default?: unknown;
+    config?: unknown;
+  };
+  return (mod.default ?? mod.config) as LoopsConfig | undefined;
 }
 
 function validateRunConfig(
@@ -484,16 +533,49 @@ function validateRunConfig(
 async function resolveConfigPath(
   explicit: string | undefined,
   cwd: string,
+  file?: string,
 ): Promise<string | undefined> {
   if (explicit) {
     const resolved = path.resolve(explicit);
     if (!fs.existsSync(resolved)) throw new Error(`config file not found: ${explicit}`);
     return resolved;
   }
+  const names = [
+    'loops.config.ts',
+    'loops.config.mjs',
+    'loops.config.js',
+    'loops.config.yaml',
+    'loops.config.yml',
+  ];
+  if (file) {
+    const recipeDir = path.dirname(path.resolve(file));
+    const recipeRoot = (await gitRoot({ cwd: recipeDir })) ?? recipeDir;
+    const found = findConfigUpward(recipeDir, recipeRoot, names);
+    if (found) return found;
+  }
   const root = (await gitRoot({ cwd })) ?? cwd;
-  for (const name of ['loops.config.ts', 'loops.config.mjs', 'loops.config.js']) {
-    const candidate = path.join(root, name);
+  const found = findConfigUpward(root, root, names);
+  if (found) return found;
+  return undefined;
+}
+
+function findConfigUpward(
+  start: string,
+  stopAt: string,
+  names: readonly string[],
+): string | undefined {
+  let current = path.resolve(start);
+  const stop = path.resolve(stopAt);
+  for (const name of names) {
+    const candidate = path.join(current, name);
     if (fs.existsSync(candidate)) return candidate;
+  }
+  while (current !== stop && current !== path.dirname(current)) {
+    current = path.dirname(current);
+    for (const name of names) {
+      const candidate = path.join(current, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
   }
   return undefined;
 }
@@ -590,6 +672,18 @@ async function parseRecipeParams(
   return { values, args };
 }
 
+function applyParamEnv(
+  params: ParamDefinitions | undefined,
+  values: RunParams,
+): void {
+  if (!params) return;
+  for (const [key, spec] of Object.entries(params)) {
+    if (!spec.env || values[key] === undefined) continue;
+    const value = values[key];
+    process.env[spec.env] = Array.isArray(value) ? value.join(',') : String(value);
+  }
+}
+
 function defaultFor(spec: ParamSpec): unknown {
   return 'default' in spec ? spec.default : undefined;
 }
@@ -680,8 +774,18 @@ async function execute(
   const cwd = process.cwd();
   const resumeWasCli = optionWasCli(command, 'resume');
   const checkpointWasCli = optionWasCli(command, 'checkpoint');
-  const defaults = await loadConfig(flags, cwd);
-  flags = applyRunDefaults(flags, defaults, command);
+  const staticParams = file ? readStaticRecipeParams(file) : undefined;
+  const preImportParams = await parseRecipeParams(
+    staticParams,
+    command,
+    flags,
+    cwd,
+    coreOptions,
+  );
+  applyParamEnv(staticParams, preImportParams.values);
+
+  const defaults = await loadConfig(flags, cwd, file);
+  flags = applyRunDefaults(flags, defaults.run, command);
   if (
     flags.resume &&
     (!flags.checkpoint || (resumeWasCli && !checkpointWasCli))
@@ -692,13 +796,10 @@ async function execute(
   const { job, title, params } = file
     ? await loadJob(file)
     : { job: buildFromFlags(flags), title: 'loop', params: undefined };
-  const parsedParams = await parseRecipeParams(
-    params,
-    command,
-    flags,
-    cwd,
-    coreOptions,
-  );
+  const parsedParams = staticParams
+    ? preImportParams
+    : await parseRecipeParams(params, command, flags, cwd, coreOptions);
+  applyParamEnv(params, parsedParams.values);
   if (parsedParams.args.length) flags.paramArg = parsedParams.args;
 
   const engineOptions: EngineOptions = {};
@@ -810,6 +911,7 @@ async function execute(
     onEvent: hub.emit,
     state,
     params: parsedParams.values,
+    config: defaults.recipe !== undefined ? { recipe: defaults.recipe } : {},
     resetScratch: !flags.resume,
     budget,
     ground: flags.ground,
@@ -857,6 +959,24 @@ async function execute(
 
   signals.dispose();
   process.exitCode = exitCodeFor(result.outcome);
+}
+
+async function loadJobForInspection(
+  file: string,
+  flags: RunFlags,
+  command: Command,
+  coreOptions: CoreOptionMetadata,
+): Promise<LoadedRecipe> {
+  const staticParams = readStaticRecipeParams(file);
+  const parsedParams = await parseRecipeParams(
+    staticParams,
+    command,
+    flags,
+    process.cwd(),
+    coreOptions,
+  );
+  applyParamEnv(staticParams, parsedParams.values);
+  return loadJob(file);
 }
 
 /**
@@ -992,6 +1112,70 @@ function matchesRecordPath(record: SemanticRunRecord, prefix: string): boolean {
   return path === prefix || path.startsWith(`${prefix}/`);
 }
 
+function writeInitFile(
+  file: string,
+  contents: string,
+  force: boolean,
+  written: string[],
+): void {
+  if (fs.existsSync(file) && !force) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, contents);
+  written.push(file);
+}
+
+function ensureGitignore(dir: string, force: boolean, written: string[]): void {
+  const file = path.join(dir, '.gitignore');
+  const entry = '.loops/';
+  if (!fs.existsSync(file)) {
+    writeInitFile(file, `${entry}\n`, force, written);
+    return;
+  }
+  const text = fs.readFileSync(file, 'utf8');
+  if (text.split(/\r?\n/).includes(entry)) return;
+  fs.appendFileSync(file, `${text.endsWith('\n') ? '' : '\n'}${entry}\n`);
+  written.push(file);
+}
+
+function initProject(dir: string, force: boolean): string[] {
+  const target = path.resolve(dir);
+  const written: string[] = [];
+  writeInitFile(
+    path.join(target, 'package.json'),
+    JSON.stringify({ type: 'module' }, null, 2) + '\n',
+    force,
+    written,
+  );
+  writeInitFile(
+    path.join(target, 'tsconfig.json'),
+    JSON.stringify(
+      {
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'NodeNext',
+          moduleResolution: 'NodeNext',
+          allowImportingTsExtensions: true,
+          noEmit: true,
+          strict: true,
+        },
+        include: ['**/*.ts'],
+      },
+      null,
+      2,
+    ) + '\n',
+    force,
+    written,
+  );
+  writeInitFile(
+    path.join(target, 'loops.config.ts'),
+    "import { defineConfig } from '@loops-adk/core';\n\nexport default defineConfig({\n  run: { tui: false, record: 'auto' },\n});\n",
+    force,
+    written,
+  );
+  ensureGitignore(target, force, written);
+  return written;
+}
+
 // The package version, read at runtime rather than hardcoded (a literal here
 // goes stale on every release). Both homes of this module sit one level below
 // the package root (`src/` under tsx, `dist/` when built), so '../package.json'
@@ -1110,8 +1294,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       '--max-wait <dur>',
       'cap an auto/wait limit-wait (e.g. 5m, 30s); default 5m',
     )
-    .option('--config <path>', 'load run defaults from a loops.config.ts/js file')
-    .option('--profile <name>', 'named profile from loops.config.ts/js')
+    .option('--config <path>', 'load run defaults from a loops.config.* file')
+    .option('--profile <name>', 'named profile from loops.config.*')
     .option('--json', 'emit NDJSON events to stdout (no TUI)')
     .option('--no-tui', 'plain line output instead of the Ink TUI')
     .option('--no-record', 'disable the default .loops/records/<runId>.jsonl record')
@@ -1137,19 +1321,24 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     return execute(file, flags, this, coreOptions);
   });
 
-  program
+  const validateCommand = program
     .command('validate')
     .argument('<file>', 'a loop-definition file to check')
     .description(
       'load a .loop.ts and print its shape without running it: the cheap, no-model pre-flight an agent runs before `loops run`',
     )
     .option('--json', 'emit JSON with the loaded job shape')
-    .action(async (file: string, flags: { json?: boolean }) => {
+    .action(async function (this: Command, file: string, flags: { json?: boolean }) {
       // loadJob imports + constructs the Job (so it catches syntax, import,
       // transform, and bad-export errors) but never calls run(), so no agent
       // turns fire. A failure throws the same agent-grade error `run` would,
       // and the top-level handler reports it with exit code 1.
-      const { job } = await loadJob(file);
+      const { job } = await loadJobForInspection(
+        file,
+        flags as RunFlags,
+        this,
+        validateCoreOptions,
+      );
       const shape = jobMeta(job);
       if (flags.json) {
         process.stdout.write(
@@ -1162,16 +1351,28 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         `✓ ${file} loads (not executed)\n${plan.map((l) => `  ${l}`).join('\n')}\n`,
       );
     });
+  let validateCoreOptions = optionMetadata(validateCommand);
+  const validateParamsFile = inferInspectionFile(argv, 'validate', validateCoreOptions);
+  const validateParams = validateParamsFile
+    ? readStaticRecipeParams(validateParamsFile)
+    : undefined;
+  if (validateParams)
+    addRecipeParamOptions(validateCommand, validateParams, validateCoreOptions);
 
-  program
+  const describeCommand = program
     .command('describe')
     .argument('<file>', 'a loop-definition file')
     .description(
       "print a loop's shape (its gate, body, and dag nodes) without running it",
     )
     .option('--json', 'emit the job shape as JSON')
-    .action(async (file: string, flags: { json?: boolean }) => {
-      const { job } = await loadJob(file);
+    .action(async function (this: Command, file: string, flags: { json?: boolean }) {
+      const { job } = await loadJobForInspection(
+        file,
+        flags as RunFlags,
+        this,
+        describeCoreOptions,
+      );
       const shape = jobMeta(job);
       process.stdout.write(
         flags.json
@@ -1179,6 +1380,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           : `${renderPlan(shape).join('\n')}\n`,
       );
     });
+  let describeCoreOptions = optionMetadata(describeCommand);
+  const describeParamsFile = inferInspectionFile(argv, 'describe', describeCoreOptions);
+  const describeParams = describeParamsFile
+    ? readStaticRecipeParams(describeParamsFile)
+    : undefined;
+  if (describeParams)
+    addRecipeParamOptions(describeCommand, describeParams, describeCoreOptions);
 
   program
     .command('helm')
@@ -1252,6 +1460,22 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         if (results.some((r) => !r.ok)) process.exitCode = 1;
       },
     );
+
+  program
+    .command('init')
+    .argument('[dir]', 'directory to initialise', '.')
+    .description('create the small project files a loops recipe island expects')
+    .option('--force', 'overwrite package.json, tsconfig.json, and loops.config.ts')
+    .action((dir: string, flags: { force?: boolean }) => {
+      const written = initProject(dir, !!flags.force);
+      if (!written.length) {
+        process.stdout.write('loops init: no changes\n');
+        return;
+      }
+      for (const file of written) {
+        process.stdout.write(`created ${path.relative(process.cwd(), file) || file}\n`);
+      }
+    });
 
   // ── Supervision: observe a run from another process (the registry is files) ──
 

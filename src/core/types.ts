@@ -185,6 +185,8 @@ export interface JobContext {
   readonly state: Record<string, unknown>;
   /** Values parsed from a recipe's declared run parameters. */
   readonly params: RunParams;
+  /** Project config surfaced to recipes. Run-owned config stays in RunOptions. */
+  readonly config: { recipe?: Record<string, unknown> };
   /** Where this job's code lives — the working dir and branch (the substrate). */
   readonly workspace: Workspace;
   /** The running environment for this workspace, when one is up (gate target). */
@@ -618,6 +620,16 @@ export type LoopEvent =
       label: string;
       /** Soft timeout in force for this job, when one is configured. */
       timeoutMs?: number;
+    }
+  | {
+      kind: 'advisor:consult';
+      ts: number;
+      path: string[];
+      label: string;
+      call: number;
+      question: string;
+      reply: string;
+      model?: string;
     }
   | {
       kind: 'proof';

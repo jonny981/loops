@@ -192,6 +192,12 @@ export function plainReporter(): Listener {
         endStream();
         console.log(`${indent(event.path)}  ${pc.gray('•')} ${event.label}`);
         return;
+      case 'advisor:consult':
+        endStream();
+        console.log(
+          `${indent(event.path)}  ${pc.cyan('advisor')} ${event.label} #${event.call}: ${pc.dim(event.question)}`,
+        );
+        return;
       case 'proof':
         endStream();
         console.log(

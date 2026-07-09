@@ -214,6 +214,15 @@ export {
   type PromptNote,
   type LedgerEntry,
 } from './core/draft.ts';
+export {
+  confidenceCondition,
+  confidenceFromText,
+  lastDecisionLine,
+  lastGateBrief,
+  type ConfidenceConditionOptions,
+  type LastGateBriefOptions,
+} from './core/decision.ts';
+export { promptBank, type PromptBank, type PromptVars } from './core/prompt-bank.ts';
 
 // The read side — grounding the next fresh context in the branch-local commit log
 export {

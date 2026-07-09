@@ -180,15 +180,24 @@ export function modelFor(
   opts: EngineOptions,
   engine: EngineName,
 ): string | undefined {
-  return (
+  const model =
     req.model ??
     opts.defaultModels?.[engine] ??
     (opts.defaultEngine == null ||
     opts.defaultEngine === engine ||
     sameModelFamily(opts.defaultEngine, engine)
       ? opts.defaultModel
-      : undefined)
-  );
+      : undefined);
+  return normalizeModelForEngine(engine, model);
+}
+
+export function normalizeModelForEngine(
+  engine: EngineName,
+  model: string | undefined,
+): string | undefined {
+  if (!model) return model;
+  if (engine === 'claude-cli') return model.replace(/\s*\[[^\]]+\]\s*$/, '');
+  return model;
 }
 
 const CLAUDE_MODEL_ENGINES = new Set<EngineName>([

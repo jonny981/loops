@@ -149,7 +149,7 @@ with `defineParams`, and those values arrive on `ctx.params`.
 import { defineJob, defineParams, fnJob } from '@loops-adk/core';
 
 export const params = defineParams({
-  oem: { type: 'string', required: true, help: 'OEM name' },
+  oem: { type: 'string', env: 'OEM', required: true, help: 'OEM name' },
   device: { type: 'choice', choices: ['battery', 'inverter'], default: 'battery' },
   skip: { type: 'string[]', default: [] },
   repoRoot: { type: 'string', defaultFrom: 'gitRoot' },
@@ -164,14 +164,19 @@ export default defineJob(
 ```
 
 `loops run onboard.loop.ts --help` lists those recipe flags beside the built-in
-flags. A `loops.config.ts` file can hold project defaults for boilerplate run
-flags:
+flags. When a param declares `env`, CLI values are written before the recipe is
+imported, so env-shaped graph labels and fan-out read the same value as
+`ctx.params`.
+
+A recipe-adjacent `loops.config.ts`, `.js`, `.mjs`, `.yaml`, or `.yml` file can
+hold project defaults for boilerplate run flags plus recipe-owned tunables:
 
 ```ts
 import { defineConfig } from '@loops-adk/core';
 
 export default defineConfig({
   run: { supervise: true, tui: false, record: 'auto' },
+  recipe: { reviewerThreshold: 0.9 },
   profiles: {
     live: { run: { permissionMode: 'bypassPermissions', defaultModel: 'claude-sonnet-5' } },
   },
@@ -179,6 +184,9 @@ export default defineConfig({
 ```
 
 Use it with `loops run onboard.loop.ts --profile live --oem Sigenergy`.
+Recipes read custom tunables from `ctx.config.recipe`. `loops init <dir>`
+creates the small ESM, TypeScript, config, and `.loops/` ignore scaffold for a
+new recipe island.
 
 **Offline demo** (no network, no key; uses the mock engine):
 
@@ -350,8 +358,11 @@ The three tiers below form a progression. The scratch files record what failed a
   The handoff is a parseable contract, not a convention: a grounded turn closes its reply with the `HANDOFF_MARK` marker (`===HANDOFF===`), and `parseHandoff(text)` splits the reply into `{ work, handoff }` — the same split the auto-capture uses. An `agentJob`'s `outcome` mapper receives that split as its third argument, so decision-token parsing reads `parts.work` and a token restated inside the handoff's sections cannot false-score:
 
   ```ts
-  agentJob({ prompt, ground: true, outcome: (text, ctx, parts) => ({ status: parts.work.includes('DONE') ? 'pass' : 'fail' }) });
+  agentJob({ prompt, role: 'reader', outcome: (text) => ({ status: confidenceFromText(text) >= 0.9 ? 'pass' : 'fail' }) });
   ```
+
+  Use `lastDecisionLine(text, token, values)` and `confidenceFromText(text)` for
+  closing-line contracts; both ignore tokens restated inside the handoff block.
 
 - **Milestone commits: crystallise it.** A commit is a _milestone_, not an iteration. When a loop converges, `commitJob` composes one structured body, the handoff plus a compacted working log (the **way**), welded to the diff (the **what**), then clears both scratch files. Turn it on with `commit:`; iterations stay durable in the workspace + scratch files, so the log holds only converged, reasoned-over checkpoints. Welded to its diff, a commit body is a permanent record any later agent can look back to, as far back as it wants. Finer milestones? Compose finer loops/nodes.
 
@@ -368,7 +379,9 @@ The three tiers below form a progression. The scratch files record what failed a
   Grounded prompts are bounded by `ground.promptChars` (default 48000 chars).
   The task prompt and handoff instruction are kept first, then the live handoff,
   working memory, and committed context within the remaining budget. The scratch
-  files are rolling buffers, and the CLI clears them on a fresh non-resume run.
+  files are rolling buffers on disk, and the CLI clears them on a fresh
+  non-resume run. CLI-backed engines receive prompts over stdin, not argv, so
+  large bounded prompts do not hit the OS argument limit.
 
 - **Scaling the read: retrieval, then consolidation.** Recent-N grounding is the default, but on a long, noisy log the relevant commit falls out of the window. `ground: { retrieve: true }` has a cheap model select the relevant commits by subject instead. Use it for long-horizon work. For an indefinite process, `consolidateJob` folds the history into a **decision-preserving consolidated ledger**: a bounded record that keeps every accrued decision verbatim (a naive progress summary loses the specifics), committed as a commit body (the coarse tier, grounded like any milestone, never a side file). Retrieval finds the _relevant_ past commits; consolidation keeps _all the decisions_ in bounded space: different jobs, both in the git grain.
 
@@ -514,6 +527,18 @@ For a runnable contract plus feedback example, see
 [`examples/contracted-agent.loop.ts`](examples/contracted-agent.loop.ts).
 
 `agentJob` resolves the def into the engine request (`system` = persona + skills, plus `model`/`tools`); inline `system`/`model`/`tools` still override it. A **skill** is a methodology (how to work: TDD, writing-plans), not a worker. The extra contract fields are optional metadata for validation, `loops describe`, docs, and future discovery — except `humanGates`, whose entries are structurally `HumanGateConfig`s, so each declared gate drops straight into the graph as a runtime pause: `humanGate(def.humanGates[0])` (see [Human gates](#human-gates-a-pause-only-a-person-lifts)). None of it gives an agent dispatch authority. This is what turns a `dag` into a named **team** (`storeEngineer`, `apiEngineer`, `securityReviewer` as separate files) orchestrated by the DAG and gated by `quorum(...)`.
+
+Every `agentJob` and `agentCheck` subprocess gets `LOOPS_LEAF=1` plus leaf
+metadata (`LOOPS_LEAF_ID`, label, path, iteration, and run id when present), so
+host hooks can skip headless leaves. Claude-family model ids are normalised for
+the Claude CLI, including stripping long-context suffixes such as `[1m]`.
+`agentJob({ role: 'reader' })` keeps grounding but omits the handoff instruction,
+which is useful for leaves that must end with a decision token.
+
+For a bounded expert consult, set `agentJob({ advisor: { engine, model } })`.
+The worker asks with a `<consult_advisor>` block; loops runs the advisor turn,
+records the question and reply, then resumes the worker. This is the visible,
+capped escalation path for hard forks inside a leaf.
 
 A Claude Code agent file loads directly: `defineAgentFromMarkdown(path, overrides?)` maps the `.md`'s frontmatter (`name`, `description`, `model`, `tools`) onto the def and takes the body as `system`. The result is always a leaf — the sub-agent spawn tools (`Task`, `Agent`) are dropped from its allowlist — and `overrides` spread last, so the caller wins:
 

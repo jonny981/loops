@@ -27,10 +27,15 @@
 import {
   appendFileSync,
   existsSync,
+  closeSync,
+  fstatSync,
+  openSync,
   lstatSync,
   mkdirSync,
+  readSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -41,9 +46,12 @@ import type { Workspace } from './types.ts';
 const SCRATCH_DIR = '.loops';
 const LEDGER_FILE = 'ledger.md';
 const PROMPT_FILE = 'prompt.md';
+const LOCK_DIR = '.write.lock';
 const LEDGER_CHAR_CAP = 64_000;
 const PROMPT_CHAR_CAP = 32_000;
 const OMITTED_PREFIX = '[older scratch omitted to keep this file bounded]\n\n';
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 5_000;
 
 /** Absolute path to a workspace's working memory (`ledger.md`). */
 export function ledgerPath(workspace: Workspace): string {
@@ -185,6 +193,63 @@ function capEntry(text: string, maxChars: number): string {
   return `${text.slice(0, head).trimEnd()}${marker}${text.slice(-tail).trimStart()}`;
 }
 
+function readTail(path: string, maxBytes: number): string {
+  const fd = openSync(path, 'r');
+  try {
+    const stat = fstatSync(fd);
+    const length = Math.min(stat.size, maxBytes);
+    const offset = Math.max(0, stat.size - length);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, offset);
+    return buffer.toString('utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function withScratchWriteLock<T>(workspace: Workspace, fn: () => T): T {
+  const lock = join(workspace.dir, SCRATCH_DIR, LOCK_DIR);
+  const started = Date.now();
+  for (;;) {
+    try {
+      mkdirSync(lock);
+      break;
+    } catch {
+      const stat = lstatIfExists(lock);
+      if (stat && Date.now() - Number(stat.mtimeMs) > LOCK_STALE_MS) {
+        rmSync(lock, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() - started > LOCK_WAIT_MS) {
+        throw new Error(`timed out waiting for ${SCRATCH_DIR} write lock`);
+      }
+      sleepSync(10);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+function enforceFileCap(path: string, maxChars: number): void {
+  const stat = lstatIfExists(path);
+  if (!stat || stat.size <= maxChars) return;
+  const tail = readTail(path, maxChars * 4);
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, `${capText(tail, maxChars)}\n`);
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
 // ── The handoff (`prompt.md`) ────────────────────────────────────────────────
 
 export interface PromptNote {
@@ -210,7 +275,10 @@ export function appendPrompt(workspace: Workspace, note: PromptNote | string): v
       ? `_${n.author}:_ `
       : '';
   const path = promptPath(workspace);
-  appendFileSync(path, `${capEntry(`${header}${n.body.trim()}`, PROMPT_CHAR_CAP)}\n\n`);
+  withScratchWriteLock(workspace, () => {
+    appendFileSync(path, `${capEntry(`${header}${n.body.trim()}`, PROMPT_CHAR_CAP)}\n\n`);
+    enforceFileCap(path, PROMPT_CHAR_CAP);
+  });
 }
 
 /** Read the handoff, or '' when nothing has been drafted. */
@@ -250,7 +318,10 @@ export function appendLedger(workspace: Workspace, entry: LedgerEntry | string):
   if (typeof entry === 'string') {
     const body = entry.trim();
     if (body) {
-      appendFileSync(path, `${capEntry(body, LEDGER_CHAR_CAP)}\n\n`);
+      withScratchWriteLock(workspace, () => {
+        appendFileSync(path, `${capEntry(body, LEDGER_CHAR_CAP)}\n\n`);
+        enforceFileCap(path, LEDGER_CHAR_CAP);
+      });
     }
     return;
   }
@@ -264,7 +335,10 @@ export function appendLedger(workspace: Workspace, entry: LedgerEntry | string):
   if (entry.text?.trim()) lines.push(entry.text.trim());
   if (entry.tools?.length) lines.push(`_actions: ${entry.tools.join(', ')}_`);
   if (!lines.length) return;
-  appendFileSync(path, `${capEntry(lines.join('\n\n'), LEDGER_CHAR_CAP)}\n\n`);
+  withScratchWriteLock(workspace, () => {
+    appendFileSync(path, `${capEntry(lines.join('\n\n'), LEDGER_CHAR_CAP)}\n\n`);
+    enforceFileCap(path, LEDGER_CHAR_CAP);
+  });
 }
 
 /** Read the working memory, or '' when nothing has been logged. */

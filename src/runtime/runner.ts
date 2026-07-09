@@ -83,6 +83,8 @@ export interface RunOptions {
   state?: Record<string, unknown>;
   /** Values parsed from a recipe's declared run parameters. */
   params?: RunParams;
+  /** Config surfaced to recipes. */
+  config?: { recipe?: Record<string, unknown> };
   /** Clear `.loops/ledger.md` and `.loops/prompt.md` before a fresh run. */
   resetScratch?: boolean;
   /**
@@ -446,6 +448,7 @@ export async function run(
     emit,
     state: initialState,
     params: options.params ?? {},
+    config: options.config ?? {},
     workspace,
     environment,
     forge: options.forge,

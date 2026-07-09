@@ -22,6 +22,7 @@ export interface LoopsRunConfig {
 export interface LoopsConfig {
   run?: LoopsRunConfig;
   profiles?: Record<string, LoopsRunConfig | { run?: LoopsRunConfig }>;
+  recipe?: Record<string, unknown>;
 }
 
 /** Identity helper for `loops.config.ts`. */

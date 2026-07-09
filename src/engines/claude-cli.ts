@@ -213,9 +213,6 @@ export function buildClaudeArgs(
   if (req.leaf) args.push('--disallowedTools', SUBAGENT_TOOLS.join(','));
   if (opts.permissionMode) args.push('--permission-mode', opts.permissionMode);
   if (opts.cliArgs?.length) args.push(...opts.cliArgs);
-  // `--` ends option parsing so a prompt starting with `-` can't be
-  // mis-interpreted by `claude` as a flag (argument smuggling).
-  args.push('--', req.prompt);
   return args;
 }
 
@@ -246,10 +243,8 @@ export class ClaudeCliEngine implements Engine {
       // execa merges this over `process.env` (`extendEnv` default); undefined
       // is inert, so a request with no env changes nothing.
       env,
+      input: req.prompt,
       cancelSignal: signal,
-      // The prompt is passed as an argument, not piped, so don't let `claude -p`
-      // stall waiting on stdin.
-      stdin: 'ignore',
       // If the child ignores the SIGTERM from an abort/timeout, escalate to
       // SIGKILL so a wedged subprocess can't make Ctrl-C hang.
       forceKillAfterDelay: 5000,

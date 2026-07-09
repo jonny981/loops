@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { buildClaudeArgs } from '../src/engines/claude-cli.ts';
 
 describe('buildClaudeArgs', () => {
-  it('always uses headless stream-json and ends with `-- <prompt>`', () => {
+  it('always uses headless stream-json and keeps the prompt out of argv', () => {
     const args = buildClaudeArgs({ prompt: 'do the thing' }, {});
     expect(args.slice(0, 4)).toEqual([
       '-p',
@@ -11,7 +11,7 @@ describe('buildClaudeArgs', () => {
       'stream-json',
       '--verbose',
     ]);
-    expect(args.slice(-2)).toEqual(['--', 'do the thing']);
+    expect(args).not.toContain('do the thing');
     expect(args).not.toContain('--permission-mode');
   });
 
@@ -41,12 +41,20 @@ describe('buildClaudeArgs', () => {
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Bash');
   });
 
-  it('appends caller cliArgs before the `--` prompt guard', () => {
+  it('strips Claude Code long-context suffixes before passing --model', () => {
+    const args = buildClaudeArgs(
+      { prompt: 'go', model: 'claude-fable-5 [1m]' },
+      {},
+    );
+    expect(args[args.indexOf('--model') + 1]).toBe('claude-fable-5');
+  });
+
+  it('appends caller cliArgs', () => {
     const args = buildClaudeArgs(
       { prompt: 'go' },
       { cliArgs: ['--add-dir', '/tmp'] },
     );
-    expect(args.indexOf('--add-dir')).toBeLessThan(args.indexOf('--'));
+    expect(args).toContain('--add-dir');
   });
 
   it('disallows the sub-agent tools for a leaf agent', () => {

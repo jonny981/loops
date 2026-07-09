@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -211,6 +211,163 @@ describe('AgentDef', () => {
       LOOPS_LEAF_PATH: '',
       LOOPS_LEAF_ITERATION: '0',
     });
+  });
+
+  it('reader role grounds the turn without appending the handoff instruction', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, '.loops'), { recursive: true });
+    writeFileSync(join(repo, '.loops', 'ledger.md'), 'prior working memory\n');
+    const cap = capturing();
+    await run(agentJob({ role: 'reader', prompt: 'score it' }), {
+      engine: 'mock',
+      engines: { mock: () => cap.engine },
+      cwd: repo,
+    });
+    expect(cap.req().prompt).toContain('prior working memory');
+    expect(cap.req().prompt).not.toContain('Before you finish: the handoff');
+  });
+
+  it('runs bounded advisor consults and records the question and reply', async () => {
+    const repo = await tmpRepo();
+    const events: string[] = [];
+    let workerCalls = 0;
+    let advisorReq: AgentRequest | undefined;
+    const worker = new MockEngine((req) => {
+      workerCalls += 1;
+      if (workerCalls === 1) {
+        return [
+          '<consult_advisor>',
+          '<question>Which design?</question>',
+          '<context>Two options.</context>',
+          '</consult_advisor>',
+        ].join('\n');
+      }
+      expect(req.prompt).toContain('Advisor reply:');
+      expect(req.prompt).toContain('Use the smaller design.');
+      return 'final answer';
+    });
+    const advisor = new MockEngine((req) => {
+      advisorReq = req;
+      return 'Use the smaller design.';
+    });
+
+    const { outcome } = await run(
+      agentJob({
+        label: 'worker',
+        prompt: 'build',
+        engine: 'worker',
+        maxTokens: 50,
+        timeoutMs: 1000,
+        timeoutGraceMs: 200,
+        advisor: { engine: 'advisor', model: 'fable', maxCalls: 1 },
+      }),
+      {
+        engine: 'worker',
+        engines: { worker: () => worker, advisor: () => advisor },
+        cwd: repo,
+        onEvent: (event) => {
+          if (event.kind === 'advisor:consult') events.push(`${event.question} -> ${event.reply}`);
+        },
+      },
+    );
+
+    expect(outcome.status).toBe('pass');
+    expect(workerCalls).toBe(2);
+    expect(events).toEqual(['Which design? -> Use the smaller design.']);
+    expect(advisorReq).toMatchObject({
+      model: 'fable',
+      maxTokens: 50,
+      timeoutMs: 1000,
+      timeoutGraceMs: 200,
+      leaf: true,
+    });
+  });
+
+  it('only treats a whole reply consult block as an advisor request', async () => {
+    const repo = await tmpRepo();
+    let advisorCalls = 0;
+    const worker = new MockEngine(() =>
+      [
+        'This is documentation, not a request.',
+        '<consult_advisor>',
+        '<question>Which design?</question>',
+        '</consult_advisor>',
+      ].join('\n'),
+    );
+    const advisor = new MockEngine(() => {
+      advisorCalls += 1;
+      return 'advisor reply';
+    });
+
+    const { outcome } = await run(
+      agentJob({
+        label: 'worker',
+        prompt: 'build',
+        engine: 'worker',
+        advisor: { engine: 'advisor', maxCalls: 1 },
+      }),
+      {
+        engine: 'worker',
+        engines: { worker: () => worker, advisor: () => advisor },
+        cwd: repo,
+      },
+    );
+
+    expect(outcome.status).toBe('pass');
+    expect(advisorCalls).toBe(0);
+  });
+
+  it('scrubs advisor consult questions and replies before forwarding or recording', async () => {
+    const repo = await tmpRepo();
+    const secret = 'super-secret-token';
+    let workerCalls = 0;
+    let advisorPrompt = '';
+    let followupPrompt = '';
+    const events: string[] = [];
+    const worker = new MockEngine((req) => {
+      workerCalls += 1;
+      if (workerCalls === 1) {
+        return [
+          '<consult_advisor>',
+          `<question>Should I use ${secret}?</question>`,
+          '</consult_advisor>',
+        ].join('\n');
+      }
+      followupPrompt = req.prompt;
+      return 'final answer';
+    });
+    const advisor = new MockEngine((req) => {
+      advisorPrompt = req.prompt;
+      return `Do not use ${secret}.`;
+    });
+
+    const { outcome } = await run(
+      agentJob({
+        label: 'worker',
+        prompt: 'build',
+        engine: 'worker',
+        env: { SECRET_TOKEN: secret },
+        advisor: { engine: 'advisor', maxCalls: 1 },
+      }),
+      {
+        engine: 'worker',
+        engines: { worker: () => worker, advisor: () => advisor },
+        cwd: repo,
+        onEvent: (event) => {
+          if (event.kind === 'advisor:consult') {
+            events.push(`${event.question} -> ${event.reply}`);
+          }
+        },
+      },
+    );
+
+    expect(outcome.status).toBe('pass');
+    expect(advisorPrompt).not.toContain(secret);
+    expect(followupPrompt).not.toContain(secret);
+    expect(events.join('\n')).not.toContain(secret);
+    expect(advisorPrompt).toContain('[redacted]');
+    expect(followupPrompt).toContain('[redacted]');
+    expect(events.join('\n')).toContain('[redacted]');
   });
 
   it('agentCheck supplies Loops leaf metadata to judge engine requests', async () => {

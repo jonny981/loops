@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   existsSync,
@@ -77,6 +77,22 @@ export default defineJob(
 );
 `;
 
+const ENV_SHAPED_RECIPE = `import { defineJob, defineParams, fnJob } from '${apiUrl}';
+
+export const params = defineParams({
+  oem: { type: 'string', env: 'OEM', default: 'ExampleOEM', help: 'OEM name' },
+});
+
+const label = process.env.OEM ?? 'ExampleOEM';
+
+export default defineJob(
+  fnJob(label + '-graph', async (ctx) => ({
+    status: 'pass',
+    summary: JSON.stringify({ label, oem: ctx.params.oem }),
+  })),
+);
+`;
+
 describe('running a loop from outside the package tree', () => {
   let dir: string;
 
@@ -86,6 +102,7 @@ describe('running a loop from outside the package tree', () => {
     writeFileSync(join(dir, 'package.json'), '{"type":"module"}');
     writeFileSync(join(dir, 'recipe.loop.ts'), RECIPE);
     writeFileSync(join(dir, 'params.loop.ts'), PARAM_RECIPE);
+    writeFileSync(join(dir, 'env-shaped.loop.ts'), ENV_SHAPED_RECIPE);
   });
 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -168,6 +185,33 @@ describe('running a loop from outside the package tree', () => {
     expect(runResult.out).toContain(`"repoRoot":"${realpathSync(dir)}"`);
   }, 30_000);
 
+  it('writes declared env-backed params before importing a graph-shaped recipe', async () => {
+    const recipe = join(dir, 'env-shaped.loop.ts');
+    const runResult = await loops(
+      ['run', recipe, '--no-tui', '--no-record', '--oem', 'Sigenergy'],
+      dir,
+      { OEM: 'WrongEnv' },
+    );
+    expect(runResult.code).toBe(0);
+    expect(runResult.out).toContain('Sigenergy-graph');
+    expect(runResult.out).toContain('"label":"Sigenergy"');
+    expect(runResult.out).toContain('"oem":"Sigenergy"');
+  }, 30_000);
+
+  it('applies env-backed params before validate and describe import graph-shaped recipes', async () => {
+    const recipe = join(dir, 'env-shaped.loop.ts');
+    const validate = await loops(['validate', recipe, '--oem', 'Sigenergy'], dir);
+    expect(validate.code).toBe(0);
+    expect(validate.out).toContain('fn "Sigenergy-graph"');
+
+    const describe = await loops(['describe', recipe, '--oem', 'Sigenergy', '--json'], dir);
+    expect(describe.code).toBe(0);
+    expect(JSON.parse(describe.out)).toMatchObject({
+      kind: 'fn',
+      name: 'Sigenergy-graph',
+    });
+  }, 30_000);
+
   it('does not import recipe top-level code to render recipe-param help', async () => {
     const marker = join(dir, 'help-side-effect.txt');
     const recipe = join(dir, 'help-safe.loop.ts');
@@ -185,6 +229,25 @@ export default defineJob(fnJob('noop', async () => ({ status: 'pass' })));
     expect(help.code).toBe(0);
     expect(help.out).toContain('--oem <value>');
     expect(existsSync(marker)).toBe(false);
+  }, 30_000);
+
+  it('still loads non-literal params after recipe import', async () => {
+    const recipe = join(dir, 'dynamic-params.loop.ts');
+    writeFileSync(
+      recipe,
+      `import { defineJob, defineParams, fnJob } from '${apiUrl}';
+const spec = { oem: { type: 'string', default: 'Sigenergy' } };
+export const params = defineParams(spec);
+export default defineJob(fnJob('dynamic-params', async (ctx) => ({
+  status: 'pass',
+  summary: JSON.stringify(ctx.params),
+})));
+`,
+    );
+
+    const result = await loops(['run', recipe, '--no-tui', '--no-record'], dir);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain('"oem":"Sigenergy"');
   }, 30_000);
 
   it('keeps the invocation cwd as workspace while exposing git root as a param default', async () => {
@@ -272,6 +335,98 @@ export default defineConfig({
     }
   }, 30_000);
 
+  it('discovers recipe-adjacent config before the invocation git root config', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'loops-config-root-'));
+    const island = join(root, 'tools', 'island');
+    const record = join(island, 'adjacent-record.jsonl');
+    mkdirSync(island, { recursive: true });
+    writeFileSync(join(root, 'package.json'), '{"type":"module"}');
+    writeFileSync(join(root, 'loops.config.ts'), `export default { run: { record: false, tui: false } };\n`);
+    writeFileSync(
+      join(island, 'loops.config.ts'),
+      `import { defineConfig } from '${apiUrl}';
+export default defineConfig({
+  run: { record: ${JSON.stringify(record)}, tui: false },
+  recipe: { island: 'sigenergy' },
+});
+`,
+    );
+    writeFileSync(
+      join(island, 'config.loop.ts'),
+      `import { defineJob, fnJob } from '${apiUrl}';
+export default defineJob(fnJob('config', async (ctx) => ({
+  status: 'pass',
+  summary: JSON.stringify(ctx.config.recipe),
+})));
+`,
+    );
+    await exec('git', ['init'], { cwd: root });
+
+    try {
+      const result = await loops(['run', 'tools/island/config.loop.ts'], root);
+      expect(result.code).toBe(0);
+      expect(result.out).toContain('"island":"sigenergy"');
+      expect(existsSync(record)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('loads yaml config with recipe tunables', async () => {
+    const recipe = join(dir, 'yaml-config.loop.ts');
+    const record = join(dir, 'yaml-record.jsonl');
+    const config = join(dir, 'loops.config.yaml');
+    writeFileSync(
+      config,
+      [
+        'run:',
+        '  tui: false',
+        `  record: ${JSON.stringify(record)}`,
+        'recipe:',
+        '  threshold: 0.9',
+      ].join('\n'),
+    );
+    writeFileSync(
+      recipe,
+      `import { defineJob, fnJob } from '${apiUrl}';
+export default defineJob(fnJob('yaml-config', async (ctx) => ({
+  status: 'pass',
+  summary: JSON.stringify(ctx.config.recipe),
+})));
+`,
+    );
+
+    const result = await loops(['run', recipe, '--config', config], dir);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain('"threshold":0.9');
+    expect(existsSync(record)).toBe(true);
+  }, 30_000);
+
+  it('rejects non-object recipe config', async () => {
+    const recipe = join(dir, 'yaml-config.loop.ts');
+    const config = join(dir, 'bad-recipe.config.yaml');
+    writeFileSync(config, ['run:', '  tui: false', 'recipe:', '  - bad'].join('\n'));
+
+    const result = await loops(['run', recipe, '--config', config], dir);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain('recipe config must be an object');
+  }, 30_000);
+
+  it('initialises a minimal recipe island without overwriting existing files', async () => {
+    const target = mkdtempSync(join(tmpdir(), 'loops-init-'));
+    writeFileSync(join(target, 'package.json'), '{"name":"keep"}\n');
+
+    const first = await loops(['init', target], dir);
+    expect(first.code).toBe(0);
+    expect(readFileSync(join(target, 'package.json'), 'utf8')).toContain('"keep"');
+    expect(existsSync(join(target, 'tsconfig.json'))).toBe(true);
+    expect(readFileSync(join(target, '.gitignore'), 'utf8')).toContain('.loops/');
+
+    const second = await loops(['init', target, '--force'], dir);
+    expect(second.code).toBe(0);
+    expect(readFileSync(join(target, 'package.json'), 'utf8')).toContain('"type": "module"');
+  }, 30_000);
+
   it('lets CLI --resume continue checkpointing to the resume path over a config default', async () => {
     const recipe = join(dir, 'params.loop.ts');
     const config = join(dir, 'resume-precedence.config.ts');
@@ -304,6 +459,130 @@ export default defineConfig({
     expect(JSON.parse(readFileSync(resume, 'utf8'))).toHaveProperty('ts');
     expect(existsSync(configured)).toBe(false);
   }, 30_000);
+
+  it('restores checkpointed DAG nodes after a SIGTERM-killed CLI run', async () => {
+    const recipe = join(dir, 'sigterm-restore.loop.ts');
+    const checkpoint = join(dir, 'sigterm.ckpt.json');
+    const countFile = join(dir, 'setup-count.txt');
+    writeFileSync(
+      recipe,
+      `import { defineJob, dag, fnJob } from '${apiUrl}';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+
+const countFile = ${JSON.stringify(countFile)};
+
+const setup = fnJob('setup', async () => {
+  const count = existsSync(countFile) ? Number(readFileSync(countFile, 'utf8')) : 0;
+  writeFileSync(countFile, String(count + 1));
+  return { status: 'pass', summary: 'setup complete' };
+});
+
+const wait = fnJob('wait', async (ctx) => {
+  if (process.env.RESUMED === '1') return { status: 'pass', summary: 'resumed wait passed' };
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 60_000);
+    ctx.signal.addEventListener('abort', () => {
+      clearTimeout(timer);
+      resolve(undefined);
+    }, { once: true });
+  });
+  return { status: ctx.signal.aborted ? 'aborted' : 'pass', summary: 'wait ended' };
+});
+
+export default defineJob(dag({
+  name: 'sigterm-restore',
+  nodes: { setup, wait: { needs: ['setup'], job: wait } },
+}));
+`,
+    );
+
+    const child = spawn(
+      'node',
+      [
+        bin,
+        'run',
+        recipe,
+        '--checkpoint',
+        checkpoint,
+        '--json',
+        '--no-record',
+      ],
+      { cwd: dir, env: process.env },
+    );
+
+    let output = '';
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('timed out waiting for setup checkpoint')), 15_000);
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (chunk: string) => {
+        output += chunk;
+        for (const line of output.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line) as {
+              kind?: string;
+              node?: string;
+              phase?: string;
+              outcome?: { status?: string };
+            };
+            if (
+              event.kind === 'dag:node' &&
+              event.node === 'setup' &&
+              event.phase === 'done' &&
+              event.outcome?.status === 'pass'
+            ) {
+              clearTimeout(timeout);
+              child.kill('SIGTERM');
+              resolve();
+              return;
+            }
+          } catch {
+            /* ignore partial lines */
+          }
+        }
+      });
+      child.once('error', reject);
+    });
+
+    await new Promise<void>((resolve) => child.once('close', () => resolve()));
+    expect(readFileSync(countFile, 'utf8')).toBe('1');
+
+    const resumed = await loops(
+      [
+        'run',
+        recipe,
+        '--resume',
+        checkpoint,
+        '--checkpoint',
+        checkpoint,
+        '--json',
+        '--no-record',
+      ],
+      dir,
+      { RESUMED: '1' },
+    );
+    expect(resumed.code).toBe(0);
+    expect(readFileSync(countFile, 'utf8')).toBe('1');
+    const events = resumed.out
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { kind: string; decision?: string; restoredNodes?: number; cached?: boolean; node?: string });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'restored',
+        restoredNodes: 1,
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'dag:node',
+        node: 'setup',
+        cached: true,
+      }),
+    );
+  }, 45_000);
 
   it('fails fast on unknown config keys', async () => {
     const recipe = join(dir, 'params.loop.ts');

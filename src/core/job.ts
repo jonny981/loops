@@ -87,6 +87,20 @@ export interface AgentJobConfig {
    * its direct dependents, without handing the agent the whole orchestration graph.
    */
   graphContext?: boolean;
+  /**
+   * Reader leaves default to grounded context without the handoff-writing
+   * instruction, so closing decision tokens survive as the final line. Writer is
+   * the ordinary agentJob behavior.
+   */
+  role?: 'writer' | 'reader';
+  /**
+   * Bounded, visible escalation: the worker may ask for a consult by replying
+   * with a `<consult_advisor>` block. Loops runs one model-pinned advisor turn,
+   * records the question/reply, and then gives the reply back to the worker in a
+   * fresh turn. This is the sanctioned alternative to shelling out to another
+   * model from inside a leaf.
+   */
+  advisor?: AdvisorConfig;
   /** Working dir for the turn. Default: the workspace dir (the worktree). */
   cwd?: string;
   /**
@@ -134,6 +148,16 @@ export interface AgentJobConfig {
     ctx: JobContext,
     parts: HandoffParts,
   ) => Outcome | Promise<Outcome>;
+}
+
+export interface AdvisorConfig {
+  engine?: EngineRef;
+  model?: string;
+  systemPrompt?: string;
+  maxCalls?: number;
+  maxTokens?: number;
+  timeoutMs?: number;
+  timeoutGraceMs?: number;
 }
 
 export interface AgentRoute {
@@ -352,10 +376,24 @@ const TERMINAL = (text: string): Outcome => ({
   data: text,
 });
 
+function advisorInstruction(maxCalls: number): string {
+  return (
+    `## Advisor consults\n` +
+    `When you hit a hard design fork, you may request at most ${maxCalls} advisor ` +
+    `consult${maxCalls === 1 ? '' : 's'}. Do not shell out to another model. ` +
+    `Instead, make your whole reply exactly this block:\n\n` +
+    `<consult_advisor>\n` +
+    `<question>the precise question</question>\n` +
+    `<context>the minimum context the advisor needs</context>\n` +
+    `</consult_advisor>\n\n` +
+    `Loops will record the consult and return the advisor reply to you.`
+  );
+}
+
 function withOperationalContext(
   ctx: JobContext,
   userPrompt: string,
-  config: Pick<AgentJobConfig, 'consumeFeedback' | 'graphContext'>,
+  config: Pick<AgentJobConfig, 'consumeFeedback' | 'graphContext' | 'advisor'>,
 ): string {
   const parts = [userPrompt];
   if (config.consumeFeedback && ctx.lastReview) {
@@ -364,7 +402,108 @@ function withOperationalContext(
   if (config.graphContext && ctx.graph) {
     parts.push(graphPositionBlock(ctx.graph));
   }
+  if (config.advisor) parts.push(advisorInstruction(config.advisor.maxCalls ?? 1));
   return parts.join('\n\n---\n\n');
+}
+
+interface AdvisorRequest {
+  question: string;
+  context?: string;
+}
+
+function tagValue(text: string, tag: string): string | undefined {
+  const match = new RegExp(`<${tag}>\\s*([\\s\\S]*?)\\s*</${tag}>`, 'i').exec(text);
+  return match?.[1]?.trim() || undefined;
+}
+
+function parseAdvisorRequest(text: string): AdvisorRequest | undefined {
+  const block = /^\s*<consult_advisor>\s*([\s\S]*?)\s*<\/consult_advisor>\s*$/i.exec(text)?.[1];
+  if (!block) return undefined;
+  const question = tagValue(block, 'question') ?? block.trim();
+  if (!question) return undefined;
+  return { question, context: tagValue(block, 'context') };
+}
+
+function advisorFollowup(call: number, request: AdvisorRequest, reply: string): string {
+  return (
+    `Advisor consult #${call}\n\n` +
+    `Question:\n${request.question}\n\n` +
+    `${request.context ? `Context supplied:\n${request.context}\n\n` : ''}` +
+    `Advisor reply:\n${reply}\n\n` +
+    `Continue the original task. Do not ask the same question again.`
+  );
+}
+
+async function runAdvisorConsult(
+  ctx: JobContext,
+  label: string,
+  config: AdvisorConfig,
+  call: number,
+  request: AdvisorRequest,
+  inherited: { maxTokens?: number; timeoutMs?: number; timeoutGraceMs?: number },
+  redactionEnv: Record<string, string> | undefined,
+): Promise<{ reply: string; model?: string }> {
+  assertBudget(ctx);
+  const engine = ctx.resolveEngine(config.engine);
+  const result = await engine.run(
+    {
+      prompt:
+        `Question:\n${request.question}` +
+        (request.context ? `\n\nContext:\n${request.context}` : ''),
+      system: config.systemPrompt,
+      model: config.model,
+      maxTokens: config.maxTokens ?? inherited.maxTokens,
+      timeoutMs: config.timeoutMs ?? inherited.timeoutMs,
+      timeoutGraceMs: config.timeoutGraceMs ?? inherited.timeoutGraceMs,
+      cwd: ctx.workspace.dir,
+      leaf: true,
+      loops: loopsRequestMeta(ctx, `${label}:advisor`),
+    },
+    (event) => {
+      const ts = Date.now();
+      if (event.type === 'usage') {
+        ctx.emit({
+          kind: 'engine:usage',
+          ts,
+          path: [...ctx.path],
+          model: event.model,
+          usage: event.usage,
+        });
+      } else if (event.type === 'tool') {
+        ctx.emit({
+          kind: 'engine:tool',
+          ts,
+          path: [...ctx.path],
+          name: event.name,
+          phase: event.phase,
+        });
+      }
+    },
+    ctx.signal,
+  );
+  const reply = scrubCapture(result.text, redactionEnv).trim();
+  ctx.emit({
+    kind: 'advisor:consult',
+    ts: Date.now(),
+    path: [...ctx.path],
+    label,
+    call,
+    question: request.question,
+    reply,
+    model: result.model,
+  });
+  return { reply, model: result.model };
+}
+
+function readerGround(
+  ground: boolean | GroundConfig | undefined,
+): boolean | GroundConfig | undefined {
+  if (ground === false) return false;
+  if (ground === undefined) return { recordInstruction: false };
+  if (ground === true) return { recordInstruction: false };
+  return ground.recordInstruction === undefined
+    ? { ...ground, recordInstruction: false }
+    : ground;
 }
 
 /** Run one fresh agent turn through whichever engine is selected. */
@@ -376,8 +515,10 @@ export function agentJob(config: AgentJobConfig): Job {
     // including an explicit `false`, which opts this job out. Every consumption
     // below reads this local, never `config.ground`, because a truthiness check
     // on the config alone cannot tell `false` from `undefined`.
-    const ground =
+    const configuredGround =
       config.ground !== undefined ? config.ground : ctx.groundDefault;
+    const ground =
+      config.role === 'reader' ? readerGround(configuredGround) : configuredGround;
     const defaultTimeoutMs = config.timeoutMs ?? ctx.timeoutMs;
     const defaultTimeoutGraceMs = config.timeoutGraceMs ?? ctx.timeoutGraceMs;
     ctx.emit({
@@ -483,7 +624,7 @@ export function agentJob(config: AgentJobConfig): Job {
       const timeoutGraceMs = route.timeoutGraceMs ?? defaultTimeoutGraceMs;
       try {
         assertBudget(ctx); // refuse to spend past the run's token budget
-        const prompt = routeGround
+        const basePrompt = routeGround
           ? await withGrounding(
               ctx,
               contextualPrompt,
@@ -494,53 +635,82 @@ export function agentJob(config: AgentJobConfig): Job {
             )
           : contextualPrompt;
         const engine = ctx.resolveEngine(route.engine ?? config.engine);
-        result = await engine.run(
-          {
-            prompt,
-            system,
-            model: routeModel,
-            maxTokens: config.maxTokens,
-            allowedTools: config.allowedTools ?? config.agent?.tools,
-            leaf: config.leaf ?? config.agent?.leaf,
-            cwd: config.cwd ?? ctx.workspace.dir,
-            timeoutMs,
-            timeoutGraceMs,
+        const maxAdvisorCalls = config.advisor?.maxCalls ?? 1;
+        const advisorReplies: string[] = [];
+        for (;;) {
+          const prompt = advisorReplies.length
+            ? `${basePrompt}\n\n---\n\n${advisorReplies.join('\n\n---\n\n')}`
+            : basePrompt;
+          result = await engine.run(
+            {
+              prompt,
+              system,
+              model: routeModel,
+              maxTokens: config.maxTokens,
+              allowedTools: config.allowedTools ?? config.agent?.tools,
+              leaf: config.leaf ?? config.agent?.leaf,
+              cwd: config.cwd ?? ctx.workspace.dir,
+              timeoutMs,
+              timeoutGraceMs,
+              env,
+              loops: loopsRequestMeta(ctx, label),
+            },
+            (e) => {
+              const ts = Date.now();
+              switch (e.type) {
+                case 'text':
+                  ctx.emit({ kind: 'engine:text', ts, path, delta: e.delta });
+                  break;
+                case 'thinking':
+                  ctx.emit({ kind: 'engine:thinking', ts, path, delta: e.delta });
+                  break;
+                case 'tool':
+                  if (e.phase === 'use')
+                    toolUses.set(e.name, (toolUses.get(e.name) ?? 0) + 1);
+                  ctx.emit({
+                    kind: 'engine:tool',
+                    ts,
+                    path,
+                    name: e.name,
+                    phase: e.phase,
+                  });
+                  break;
+                case 'usage':
+                  ctx.emit({
+                    kind: 'engine:usage',
+                    ts,
+                    path,
+                    model: e.model,
+                    usage: e.usage,
+                  });
+                  break;
+              }
+            },
+            ctx.signal,
+          );
+          const advisor = config.advisor;
+          const capturedText = scrubCapture(result.text, env);
+          const consult = advisor ? parseAdvisorRequest(capturedText) : undefined;
+          if (!advisor || !consult) break;
+          if (advisorReplies.length >= maxAdvisorCalls) {
+            throw new LoopError({
+              code: 'BUDGET',
+              phase: 'body',
+              message: `${label} exceeded advisor consult cap (${maxAdvisorCalls})`,
+            });
+          }
+          const call = advisorReplies.length + 1;
+          const { reply } = await runAdvisorConsult(
+            ctx,
+            label,
+            advisor,
+            call,
+            consult,
+            { maxTokens: config.maxTokens, timeoutMs, timeoutGraceMs },
             env,
-            loops: loopsRequestMeta(ctx, label),
-          },
-          (e) => {
-            const ts = Date.now();
-            switch (e.type) {
-              case 'text':
-                ctx.emit({ kind: 'engine:text', ts, path, delta: e.delta });
-                break;
-              case 'thinking':
-                ctx.emit({ kind: 'engine:thinking', ts, path, delta: e.delta });
-                break;
-              case 'tool':
-                if (e.phase === 'use')
-                  toolUses.set(e.name, (toolUses.get(e.name) ?? 0) + 1);
-                ctx.emit({
-                  kind: 'engine:tool',
-                  ts,
-                  path,
-                  name: e.name,
-                  phase: e.phase,
-                });
-                break;
-              case 'usage':
-                ctx.emit({
-                  kind: 'engine:usage',
-                  ts,
-                  path,
-                  model: e.model,
-                  usage: e.usage,
-                });
-                break;
-            }
-          },
-          ctx.signal,
-        );
+          );
+          advisorReplies.push(advisorFollowup(call, consult, reply));
+        }
         successfulGround = routeGround;
         break;
       } catch (e) {
@@ -637,7 +807,7 @@ export function agentJob(config: AgentJobConfig): Job {
     // Build-time shape: only the job's own config is visible here. A run-level
     // default (`RunOptions.ground`) is applied at run time via the context, so
     // it does not show in describe output.
-    ground: !!config.ground,
+    ground: !!(config.ground ?? (config.role === 'reader' ? true : undefined)),
     contract: agentContract(config.agent),
   });
 }

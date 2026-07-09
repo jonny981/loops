@@ -5,9 +5,9 @@
  * Read-only by default: a report-only reviewer never edits, so the sandbox
  * forbids writes and the run cannot touch the workspace.
  *
- * `codex exec` is non-interactive but blocks on an open stdin, so stdin is always
- * ignored; the final assistant message is captured via `-o <file>` rather than
- * scraped from the event stream.
+ * `codex exec` reads the prompt from stdin (`-`) so large grounded prompts do
+ * not ride argv; the final assistant message is captured via `-o <file>` rather
+ * than scraped from the event stream.
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -30,7 +30,6 @@ export function buildCodexArgs(
   outFile: string,
 ): string[] {
   const model = modelFor(req, opts, 'codex');
-  const prompt = req.system ? `${req.system}\n\n---\n\n${req.prompt}` : req.prompt;
   const args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never'];
 
   if (opts.permissionMode === 'bypassPermissions') {
@@ -42,7 +41,7 @@ export function buildCodexArgs(
   if (req.cwd) args.push('-C', req.cwd);
   if (model) args.push('-m', model);
   if (opts.cliArgs?.length) args.push(...opts.cliArgs);
-  args.push('-o', outFile, prompt);
+  args.push('-o', outFile, '-');
   return args;
 }
 
@@ -60,6 +59,7 @@ export class CodexEngine implements Engine {
     const outFile = join(dir, 'last.txt');
     const args = buildCodexArgs(req, this.opts, outFile);
     const env = requestEnv(req);
+    const prompt = req.system ? `${req.system}\n\n---\n\n${req.prompt}` : req.prompt;
     const hardTimeout =
       req.timeoutMs && req.timeoutGraceMs
         ? req.timeoutMs + req.timeoutGraceMs
@@ -68,10 +68,10 @@ export class CodexEngine implements Engine {
 
     try {
       const sub = await execa(this.opts.cliBinary ?? 'codex', args, {
-        stdin: 'ignore', // codex exec stalls on an open stdin
         // execa merges this over `process.env` (`extendEnv` default); undefined
         // is inert, so a request with no env changes nothing.
         env,
+        input: prompt,
         cancelSignal: signal,
         forceKillAfterDelay: 5000,
         reject: false,
