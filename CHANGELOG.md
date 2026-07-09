@@ -11,6 +11,8 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-09
+
 ### Added
 
 - **`loops helm` — the conversational harness** (`src/helm/`, [docs/helm.md](docs/helm.md)).
@@ -151,7 +153,8 @@ limit policies, supervision (`--supervise`, `list`/`status`/`tail`), the Ink
 TUI, `loops validate` / run-from-any-repo via the global tsx loader, and the
 author-loop skill.
 
-[Unreleased]: https://github.com/jonny981/loops/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/jonny981/loops/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jonny981/loops/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/jonny981/loops/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jonny981/loops/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/jonny981/loops/compare/v0.3.0...v0.4.0
