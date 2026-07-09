@@ -54,6 +54,7 @@
     "skills",
     "assets",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "publishConfig": {

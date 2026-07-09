@@ -188,7 +188,7 @@ npm run example:poll
 
 ## From source
 
-> **Status: alpha**, the API is still settling. To work on `loops` or run it from a checkout:
+> **Status: alpha**, the API is still settling — [CHANGELOG.md](CHANGELOG.md) records what each version added or broke. To work on `loops` or run it from a checkout:
 
 ```bash
 git clone https://github.com/jonny981/loops.git
