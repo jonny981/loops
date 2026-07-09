@@ -25,7 +25,8 @@ name: Release
 # this repo + workflow as a trusted publisher, so no token secret is involved
 # and no auth config may be written (a token line in .npmrc would shadow OIDC).
 # OIDC needs npm >= 11.5.1; the Node 20 runner bundles npm 10, hence the
-# upgrade step before publish. Provenance requires a public repo.
+# npm@11 upgrade step before publish (11.x, not latest: npm 12 refuses
+# Node 20). Provenance requires a public repo.
 on:
   push:
     branches: ['main']
@@ -104,7 +105,10 @@ jobs:
             git tag "v$VERSION"
             git push origin "refs/tags/v$VERSION"
           fi
-      - run: npm install -g npm@latest # OIDC publish needs npm >= 11.5.1
+      # OIDC publish needs npm >= 11.5.1. Pinned to the 11.x line: npm 12
+      # refuses Node 20, and the runner stays on the package's supported
+      # minimum (engines: node >= 20) on purpose.
+      - run: npm install -g npm@11
       # Idempotent: a version already on the registry is not re-published, so
       # a re-entered run (e.g. completing a missing GitHub Release) passes.
       - name: Publish to npm
