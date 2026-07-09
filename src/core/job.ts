@@ -40,6 +40,18 @@ import {
   revisionRequest,
 } from './feedback.ts';
 import { loopsRequestMeta } from './engine-meta.ts';
+import {
+  briefBlock,
+  curateContext,
+  readSources,
+  rungName,
+  sourcesBlock,
+  type CurateConfig,
+  type CurateVerdict,
+  type LadderRung,
+  type SourceSpec,
+  type SourceText,
+} from './curate.ts';
 
 export interface AgentJobConfig {
   /** Job label (for events). Defaults to the agent's name, then `'agent'`. */
@@ -90,6 +102,14 @@ export interface AgentJobConfig {
   fallback?: AgentRoute | AgentRoute[];
   /** Error codes that may spill to `fallback`. Default: RATE_LIMIT and QUOTA. */
   fallbackOn?: LoopErrorCode[];
+  /**
+   * Declared engine/model rungs the curator may pick from, cheapest first.
+   * Consulted only when `ground.curate` is on; rung 0 is the lane used
+   * whenever routing is off (`--no-ladder`), the verdict fails, or the
+   * curator abstains — the ladder never widens the choice beyond what the
+   * recipe declared. Off by default: no ladder, no routing.
+   */
+  ladder?: LadderRung[];
   /**
    * Ground the turn in memory before it works: prepend the branch-local commit log
    * (recent committed milestones), the live working memory (`ledger.md`) and handoff
@@ -154,6 +174,21 @@ export interface GroundConfig {
    * `true` uses defaults; an object tunes the candidate window / selection model.
    */
   retrieve?: boolean | { candidates?: number; engine?: EngineRef; model?: string };
+  /**
+   * Declared files the grounding read may include beside the commit log (the
+   * spec, ADRs, a TASK.md). Workspace-relative paths or simple globs, each
+   * excerpt capped. With `curate` on, the curator keeps only the ones that
+   * help; without it every declared source is included (inside the prompt cap).
+   */
+  sources?: SourceSpec[];
+  /**
+   * Have a cheap agent compose the context: one turn reads the task, the
+   * ledger, and the source excerpts, then returns a brief the worker prompt
+   * opens with (plus the kept sources, plus a ladder rung when the job
+   * declares one). Fail-closed: an unreadable verdict falls back to plain
+   * grounding. Off by default; run-level `--no-curate` disables it for A/B.
+   */
+  curate?: boolean | CurateConfig;
 }
 
 /** The marker the agent closes its reply with; the harness parses everything after it
@@ -215,11 +250,20 @@ async function withGrounding(
   ground: boolean | GroundConfig,
   routeEngine?: EngineRef,
   routeModel?: string,
+  curatedExtras?: { brief?: string; sources?: SourceText[] },
 ): Promise<string> {
   const opts: GroundConfig = typeof ground === 'object' ? ground : {};
   const contextParts: string[] = [];
   const scratchParts: string[] = [];
   const essentialParts: string[] = [];
+  // The curated brief is the highest-priority context block; declared sources
+  // are raw material, lowest priority (they trim first under the prompt cap).
+  const leadParts: string[] = curatedExtras?.brief
+    ? [briefBlock(curatedExtras.brief)]
+    : [];
+  const trailParts: string[] = curatedExtras?.sources?.length
+    ? [sourcesBlock(curatedExtras.sources)]
+    : [];
   const retrieveConfig =
     typeof opts.retrieve === 'object' ? opts.retrieve : undefined;
 
@@ -257,7 +301,7 @@ async function withGrounding(
 
   essentialParts.push(userPrompt);
   return cappedPrompt(
-    [...scratchParts, ...contextParts],
+    [...leadParts, ...scratchParts, ...contextParts, ...trailParts],
     essentialParts,
     opts.promptChars ?? 48_000,
   );
@@ -363,6 +407,54 @@ export function agentJob(config: AgentJobConfig): Job {
     // engine subprocess was handed.
     const env = resolveEnv(ctx, config.env);
     const toolUses = new Map<string, number>();
+
+    // Curated grounding — inert unless the recipe opts in, and each layer has
+    // a run-level kill switch (`--no-curate`, `--no-ladder`) so the same
+    // recipe benchmarks with and without. Curation happens ONCE, before the
+    // route list is built, because its verdict may pick the ladder rung the
+    // primary route runs on.
+    const groundOpts: GroundConfig | undefined = ground
+      ? typeof ground === 'object'
+        ? ground
+        : {}
+      : undefined;
+    const curateOn = !!groundOpts?.curate && ctx.curateEnabled !== false;
+    const ladderOn = !!config.ladder?.length && ctx.ladderEnabled !== false;
+    let sources: SourceText[] = groundOpts?.sources?.length
+      ? readSources(ctx, groundOpts.sources)
+      : [];
+    let curated: CurateVerdict | undefined;
+    if (curateOn) {
+      curated = await curateContext(ctx, {
+        intent: contextualPrompt,
+        sources,
+        ladder: ladderOn ? config.ladder : undefined,
+        config:
+          typeof groundOpts!.curate === 'object' ? groundOpts!.curate : {},
+      });
+      if (curated) {
+        if (curated.sources) {
+          const kept = new Set(curated.sources);
+          sources = sources.filter((s) => kept.has(s.path));
+        }
+        ctx.log(
+          `curate: brief ${curated.brief.length} chars, ${sources.length} source(s)` +
+            (curated.rung !== undefined && config.ladder
+              ? `, rung ${curated.rung} (${rungName(config.ladder[curated.rung]!)})`
+              : ''),
+        );
+      }
+    }
+    // Rung 0 is the declared default lane; routing off (or an abstaining /
+    // failed verdict) means rung 0, never a lane outside the recipe's ladder.
+    const rung: LadderRung | undefined = ladderOn
+      ? config.ladder![curated?.rung ?? 0]
+      : undefined;
+    const curatedExtras =
+      curated?.brief || sources.length
+        ? { brief: curated?.brief, sources }
+        : undefined;
+
     const fallbacks = config.fallback
       ? Array.isArray(config.fallback)
         ? config.fallback
@@ -370,8 +462,8 @@ export function agentJob(config: AgentJobConfig): Job {
       : [];
     const routes: AgentRoute[] = [
       {
-        engine: config.engine,
-        model: config.model ?? config.agent?.model,
+        engine: rung?.engine ?? config.engine,
+        model: rung?.model ?? config.model ?? config.agent?.model,
         ground,
         timeoutMs: defaultTimeoutMs,
         timeoutGraceMs: defaultTimeoutGraceMs,
@@ -398,6 +490,7 @@ export function agentJob(config: AgentJobConfig): Job {
               routeGround,
               route.engine ?? config.engine,
               routeModel,
+              curatedExtras,
             )
           : contextualPrompt;
         const engine = ctx.resolveEngine(route.engine ?? config.engine);

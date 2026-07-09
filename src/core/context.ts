@@ -61,6 +61,8 @@ export function childContext(
     maxWaitMs: parent.maxWaitMs,
     resumeCommand: parent.resumeCommand,
     groundDefault: parent.groundDefault,
+    curateEnabled: parent.curateEnabled,
+    ladderEnabled: parent.ladderEnabled,
     log: parent.log,
     depth: over.depth,
     path: over.path,

@@ -235,6 +235,12 @@ export interface JobContext {
    * a job's own `ground` config (including an explicit `false`) wins.
    */
   readonly groundDefault?: boolean | GroundConfig;
+  /** Run-level kill switch for `ground.curate` (`--no-curate`): `false`
+   *  skips every curation turn, for A/B comparison. */
+  readonly curateEnabled?: boolean;
+  /** Run-level kill switch for `AgentJobConfig.ladder` (`--no-ladder`):
+   *  `false` pins every laddered job to its default lane (rung 0). */
+  readonly ladderEnabled?: boolean;
   log(message: string, level?: LogLevel): void;
 }
 

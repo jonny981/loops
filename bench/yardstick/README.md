@@ -75,6 +75,23 @@ disciplines the reference study's generation kept, plus the ones its audit flagg
   which `report.ts` prices with your `--prices` table — measured dollars, plus
   the reconstructed baseline, labeled as such.
 
+## Adding curated-grounding / ladder arms
+
+Curated grounding and the ladder ship default-off with run-level kill
+switches, so extra arms cost nothing to define: give the recipe `ground.sources`
+/ `ground.curate` / `ladder`, then run the same slice once per arm --
+
+```bash
+# arm 1: plain grounding            --no-curate --no-ladder
+# arm 2: curated, static lane       --no-ladder
+# arm 3: curated + routed           (no flags)
+```
+
+-- each with `--prices`, and compare $/resolve across arms exactly the way the
+reference study's arms A/B/C compare. The routing arm earns a place in your
+recipes only if arm 3 beats arm 2 here; that is the experiment the flags exist
+to run.
+
 ## Comparability rules (read before quoting numbers)
 
 1. **Resolve rates are comparable on this slice, and only on this slice.**

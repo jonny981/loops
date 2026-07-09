@@ -60,6 +60,7 @@ A loop is easy to start and hard to keep on track. What decides whether `loops` 
 - **A conversational harness.** `loops helm` puts a driver model in front of it all: plain English in, strictly-validated intents out, deterministic code executing them — with a driver eval that measures which models can hold the wheel. ([Helm](#helm-talk-to-your-loops), [docs/helm.md](docs/helm.md))
 - **Hardening gates at zero model cost.** `ratchet` (a metric may only improve, against a baseline the loop cannot loosen), `writeScope` (declared write lanes), `sampled` (reproducible sampling for expensive judges). ([Conditions](#conditions))
 - **Dead-lane resilience and honest receipts.** `fallbackEngine` reroutes around a dead key/binary/model and latches it; `loops preflight` proves each lane live before iteration 1 spends; `--prices` turns measured usage into a receipt with a labeled reconstructed baseline, never a silent $0. ([Engines](#engines-bring-any-model))
+- **Curated grounding, and a ladder it may steer.** Declare `sources` beside the commit log; a cheap curator composes the brief and keeps only what helps; optionally it picks an engine rung from a declared ladder — fail-closed, inert by default, and A/B-able with one flag per layer (`--no-curate`, `--no-ladder`). ([Curated grounding](#curated-grounding-and-the-ladder))
 
 Two things are deliberately out of scope. The heartbeat that fires a loop on a schedule belongs in cron, GitHub Actions, or a workflow engine, with a `loops` job inside. Acting in external tools is the agent's own job through its tools. `loops` is the body of the loop.
 
@@ -382,6 +383,36 @@ The three tiers below form a progression. The scratch files record what failed a
   ```
 
 The Ledger has **two faces**: _cross-iteration_ (recover from your own failed attempts in a retry loop) and _cross-node_ (honour an upstream node's decision a downstream agent could not otherwise know). Both need headroom. On one-shot, single-node work memory is only a tax; the lift shows up only once one attempt is not enough. For where it helps and where it doesn't, [docs/concepts.md](docs/concepts.md) has the discussion and [bench/RESULTS.md](bench/RESULTS.md) has the memory-on-vs-off ablation (run `npm run bench:compare` to reproduce).
+
+### Curated grounding and the ladder
+
+Grounding's progression, from "prepend the recent ledger" to "a cheap agent composes the right context". Three layers, each **inert unless the recipe opts in**, each with a run-level A/B switch so the claim can carry a receipt:
+
+```ts
+agentJob({
+  prompt: (c) => `Iteration ${c.iteration}: make progress on the task.`,
+  ground: {
+    sources: ['TASK.md', 'docs/adr/*.md'],          // 1. declared context beside the commit log
+    curate: { engine: 'anthropic-api', model: 'claude-haiku-4-5' }, // 2. one cheap turn composes a brief + keeps only the sources that help
+  },
+  ladder: [                                          // 3. declared rungs the same verdict may pick from, cheapest first
+    { hint: 'cheap default lane' },                  //    rung 0 = the job's own engine — the lane used whenever routing is off
+    { engine: 'codex', model: 'gpt-5.2', hint: 'hard multi-file work' },
+  ],
+})
+```
+
+The curator's verdict is parsed leniently (prose and fences tolerated) and validated strictly; anything unreadable **fails closed to plain grounding and rung 0** — a curator that can't be read never steers the run. It only ever picks from the declared ladder, never a lane outside it, and every decision lands in the event stream (`loops tail` shows `curate: brief 412 chars, 2 source(s), rung 1 (codex)`).
+
+The A/B contract is one flag per layer, so the same recipe benchmarks with and without:
+
+```bash
+loops run feature.loop.ts --prices prices.json                 # curated + routed
+loops run feature.loop.ts --prices prices.json --no-ladder     # curated, static lane
+loops run feature.loop.ts --prices prices.json --no-curate --no-ladder  # plain grounding
+```
+
+Treat the ladder as an experiment until your own numbers say otherwise: the curation layer is the one with evidence behind it (context quality moves outcomes); dynamic model-picking has to beat a static per-role assignment on $/resolve before it earns a place in your recipe. That is exactly what the flags plus [`--prices`](#cost-receipts---prices-and-the-reconstructed-baseline) and [`bench/yardstick`](bench/yardstick/README.md) are for.
 
 ## Engines: bring any model
 

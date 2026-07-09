@@ -73,6 +73,11 @@ src/core/
   ground.ts           the read side: groundingText/retrieveLedger (branch-local commit log)
   consolidate.ts      consolidate/consolidateJob/compactLedger/composeCommitBody —
                       decision-preserving folds of the log
+  curate.ts           curated grounding: declared sources (contained, globbed,
+                      capped), the curation turn (brief + kept sources + ladder
+                      rung; lenient parse, strict validate, fail-closed to plain
+                      grounding and rung 0), all inert unless configured;
+                      --no-curate/--no-ladder are the run-level A/B switches
   merge.ts            mergeSynthesis: an agent resolves the conflict + writes a unified way
   forge.ts            Forge interface (PR host): GhForge (gh CLI) + MockForge, arg-builders
   pr.ts               pushJob / pullRequestJob / mergeJob — keep the squash body a

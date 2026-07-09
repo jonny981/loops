@@ -82,6 +82,8 @@ interface RunFlags {
   runId?: string;
   prices?: string;
   baselineModel?: string;
+  curate?: boolean; // commander sets false for --no-curate
+  ladder?: boolean; // commander sets false for --no-ladder
   onLimit?: string;
   maxWait?: string;
   json?: boolean;
@@ -817,6 +819,10 @@ async function execute(
     supervise: flags.supervise,
     runId: flags.runId,
     cost,
+    // Only an explicit --no-curate / --no-ladder overrides the recipe;
+    // commander defaults negated flags to true, which must stay "unset".
+    curate: flags.curate === false ? false : undefined,
+    ladder: flags.ladder === false ? false : undefined,
     onLimit,
     maxWaitMs,
     resumeCommand,
@@ -1078,6 +1084,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option(
       '--ground',
       "ground every agent job's turn in branch memory (commit log + scratch files); judge/validator turns are unaffected; a job's own ground config wins",
+    )
+    .option(
+      '--no-curate',
+      "skip every curation turn (ground.curate) — the A/B arm for measuring curated grounding against plain grounding",
+    )
+    .option(
+      '--no-ladder',
+      'pin every laddered job to its default lane (rung 0) — the A/B arm for measuring routing against a static assignment',
     )
     .option('--record <path>', 'append a JSONL run record to this path')
     .option(

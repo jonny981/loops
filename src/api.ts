@@ -361,6 +361,21 @@ export {
   type CostReport,
 } from './core/cost.ts';
 
+// Curated grounding — the grounding read graduating from "prepend the recent
+// ledger" to "a cheap agent composes the right context": declared sources, a
+// curated brief, and (opt-in) the ladder of engine rungs its verdict may pick
+// from. All inert unless configured; `--no-curate` / `--no-ladder` are the
+// run-level A/B switches.
+export {
+  readSources,
+  curateContext,
+  type SourceSpec,
+  type SourceText,
+  type CurateConfig,
+  type CurateVerdict,
+  type LadderRung,
+} from './core/curate.ts';
+
 // Hardening gates — deterministic conditions that keep a loop honest without
 // spending a model call: a monotone metric baseline the agent cannot loosen,
 // a declared write scope, and reproducible sampling for expensive judges.

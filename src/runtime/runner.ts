@@ -91,6 +91,14 @@ export interface RunOptions {
    */
   ground?: boolean | GroundConfig;
   /**
+   * Run-level kill switches for curated grounding, so the same recipe
+   * benchmarks with and without: `curate: false` skips every curation turn,
+   * `ladder: false` pins every laddered job to its default lane (rung 0).
+   * Leave undefined to let the recipe decide.
+   */
+  curate?: boolean;
+  ladder?: boolean;
+  /**
    * Cap total tokens (input + output) for the run. A bare number is the limit;
    * pass `{ limit, headroom?, soft? }` for headroom or warn-don't-refuse mode.
    * Engine call sites refuse to spend past it (see `Budget`).
@@ -446,6 +454,8 @@ export async function run(
     maxWaitMs: options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
     resumeCommand: options.resumeCommand,
     groundDefault: options.ground,
+    curateEnabled: options.curate,
+    ladderEnabled: options.ladder,
     iteration: 0,
     depth: 0,
     path: [],
