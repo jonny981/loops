@@ -27,8 +27,9 @@ Two design tenets that must survive every edit:
 src/api.ts            public surface — the package's only export ("." → ./src/api.ts)
 src/index.ts          CLI entry (run via tsx)
 src/cli.tsx           commander CLI: flags mode + `run <file>` definition mode, --ack /
-                      --ground / resume guidance, validate/describe, and the
-                      supervision reads (list / status --recent / tail / records)
+                      --ground / resume guidance, validate/describe, the supervision
+                      reads (list / status --recent / tail / records), and `helm`
+                      (the conversational harness; see docs/helm.md)
 src/config.ts         flags mode → the standard worker → until → review loop (zod-validated)
 src/reporters.ts      --no-tui (plain) and --json (NDJSON) reporters + the exit summary
 src/core/
@@ -48,6 +49,10 @@ src/core/
   condition.ts        commandSucceeds, agentCheck (dimensions, confidenceTag, cwd,
                       timeoutMs, maxReasonChars), quorum, all/any/not, predicate,
                       forgeChecks, toVerdict, gateJob (output rides Outcome.data)
+  guards.ts           the hardening gates: ratchet (runtime-owned monotone baseline,
+                      written only in the improving direction), writeScope (declared
+                      write lanes over git status), sampled (deterministic sha256
+                      bucket for expensive judges); all fail closed
   progress.ts         no-progress (stall) detection — the ProgressTracker novelty
                       rule behind LoopConfig.noProgress, the third hard stop (opt-in
                       `gate` channel fingerprints the failing gate's output)
@@ -77,6 +82,10 @@ src/core/
   env-overlay.ts      withEnv(overlay, job) + mergeEnv — env pinning for a job subtree
                       (process.env < environment.env < overlay < per-call env)
   budget.ts           Budget + assertBudget (non-retryable BUDGET LoopError)
+  cost.ts             costReport: price measured usage from a caller-supplied
+                      table (never silently $0; unpriced models named) + the
+                      reconstructed baseline (same tokens at a ceiling model's
+                      rates, labeled a reconstruction)
   limits.ts           RATE_LIMIT/QUOTA classification + the reset-hint math behind onLimit
   redact.ts           redactSecrets (shape patterns) + redactEnvValues (pinned values)
   stats.ts            event-stream fold for the TUI footer and exit summary
@@ -93,6 +102,13 @@ src/engines/
   codex.ts            `codex exec` subprocess — a different model behind the
                       same interface; read-only unless bypassPermissions
   message-map.ts      shared stream-json → EngineStreamEvent mapping (SDK + claude CLI)
+  failure.ts          EngineFailureKind taxonomy + classifyEngineFailure; the
+                      LANE_DEAD_FAILURES split (won't heal in-run → fallback's
+                      trigger) vs limits (onLimit policy owns those)
+  fallback.ts         fallbackEngine: the chain as an engine combinator — lane-dead
+                      reroute, latched; never swallows RATE_LIMIT/QUOTA by default
+  preflight.ts        one tiny live turn per lane, classified — the online
+                      counterpart to the offline `loops validate`
   mock.ts             scripted, offline — for tests/examples
   registry.ts         name → Engine resolution (lazy factories)
 src/runtime/
@@ -104,6 +120,25 @@ src/runtime/
   semantic.ts         semanticRecordsFromEvent + makeSemanticRecorder — the decision
                       stream (dispatch/completion/surfacing/revision) behind `records`
   hub.ts, signals.ts  event fan-out + abort plumbing
+src/helm/
+  intent.ts           the driver contract: 9 intents (zod), lenient wrapper parser
+                      (fences, balanced-brace scan, control-char repair), strict
+                      validator; HelmParseError vs HelmIntentError stay distinct
+                      because the eval scores them separately
+  system.ts           the byte-stable contract prompt (budget-in-context,
+                      dispatch-is-a-pause-point, authoring cheatsheet)
+  bridge.ts           executes intents: validate/author/run/ack spawn the bin
+                      (fresh process; durable fire-and-poll dispatch via --run-id);
+                      status/records read the registry in-process; paths contained
+                      to the workspace, no free-form shell
+  session.ts          the helm turn loop over any Engine: transcript fold into a
+                      fresh-context prompt, one repair reprompt, turn ends at a
+                      dispatch; transcript JSONL under ~/.loops/helm/<sessionId>
+  oracle.ts           the offline stub driver (deterministic keyword policy) — the
+                      eval's 1.0 control ceiling and the tests' offline helm
+  score.ts, eval.ts   the driver eval: 10-case battery, 4 deterministic dims
+                      (json/schema/action/executed), JSONL attempt ledger
+  cli.ts              `loops helm` REPL/one-shot (lazy-imported by cli.tsx)
 src/env/
   environment.ts      the Environment interface (up/down, EnvHandle) — where the code runs
   command.ts          commandEnvironment: the generic deploy/outputs/destroy CLI factory

@@ -139,13 +139,21 @@ interface ArmRun {
   patches: string[]; // diff vs base after each attempt (for pass@K)
   finalPatch: string; // cumulative diff after the last attempt (resolve@K-final)
   tokens: number; // total across attempts
+  inputTokens: number;
+  outputTokens: number;
+  /** Per-model usage summed across attempts — what the cost report prices. */
+  models: Record<string, { calls: number; inputTokens: number; outputTokens: number }>;
+  elapsedMs: number;
   result: RunResult; // the last attempt's run (for the dead-engine check)
 }
 
 async function runArm(inst: Instance, arm: Arm): Promise<ArmRun> {
   const dir = await prepareRepo(inst);
   const patches: string[] = [];
-  let tokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let elapsedMs = 0;
+  const models: ArmRun['models'] = {};
   let result!: RunResult;
   try {
     for (let k = 1; k <= K; k++) {
@@ -154,10 +162,27 @@ async function runArm(inst: Instance, arm: Arm): Promise<ArmRun> {
         engine: ENGINE,
         engineOptions: { permissionMode: 'bypassPermissions', defaultModel: MODEL },
       });
-      tokens += result.stats.totalInputTokens + result.stats.totalOutputTokens;
+      inputTokens += result.stats.totalInputTokens;
+      outputTokens += result.stats.totalOutputTokens;
+      elapsedMs += result.stats.elapsedMs;
+      for (const m of result.stats.models) {
+        const agg = (models[m.model] ??= { calls: 0, inputTokens: 0, outputTokens: 0 });
+        agg.calls += m.calls;
+        agg.inputTokens += m.inputTokens;
+        agg.outputTokens += m.outputTokens;
+      }
       patches.push(await captureDiff(dir, inst.base_commit));
     }
-    return { patches, finalPatch: patches[patches.length - 1] ?? '', tokens, result };
+    return {
+      patches,
+      finalPatch: patches[patches.length - 1] ?? '',
+      tokens: inputTokens + outputTokens,
+      inputTokens,
+      outputTokens,
+      models,
+      elapsedMs,
+      result,
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -192,11 +217,29 @@ async function main(): Promise<void> {
   // null result. Two such runs in a row means the engine is dead; abort loudly
   // (exit 3) so the caller stops instead of burning the rest of the matrix.
   let deadStreak = 0;
+  // Per-(instance, arm) usage rows — what bench/yardstick/report.ts prices.
+  const ledgerPath = join(OUT_DIR, 'ledger.jsonl');
+  appendFileSync(ledgerPath, '', { flag: 'w' });
+
   for (const inst of insts) {
     console.log(`\n■ ${inst.instance_id} (${inst.repo})`);
     for (const arm of ['off', 'on'] as Arm[]) {
       process.stdout.write(`  ${arm.toUpperCase().padEnd(3)} … `);
-      const { patches, finalPatch, tokens, result } = await runArm(inst, arm);
+      const { patches, finalPatch, tokens, inputTokens, outputTokens, models, elapsedMs, result } =
+        await runArm(inst, arm);
+      appendFileSync(
+        ledgerPath,
+        JSON.stringify({
+          instance_id: inst.instance_id,
+          arm,
+          attempts: K,
+          inputTokens,
+          outputTokens,
+          models,
+          elapsedMs,
+          emptyPatch: !finalPatch.trim(),
+        }) + '\n',
+      );
       const sizes = patches.map((p) => (p.trim() ? p.split('\n').length : 0)).join(',');
       console.log(
         `${finalPatch ? `${finalPatch.split('\n').length} diff lines` : 'EMPTY patch'} · ` +

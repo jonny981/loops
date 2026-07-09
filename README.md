@@ -57,6 +57,9 @@ A loop is easy to start and hard to keep on track. What decides whether `loops` 
 - **Ship via PR, memory survives the squash.** `pullRequestJob`/`mergeJob` keep the PR body a consolidation of the branch, so a squash merge doesn't flatten the Ledger into a list of subject lines. ([Ledger](#ledger-memory-built-on-git))
 - **Human-in-the-loop gates.** `humanGate` holds the run at a named checkpoint until a person acknowledges it, for the steps that must not proceed on any model's say-so. ([Human gates](#human-gates-a-pause-only-a-person-lifts))
 - **First-class agent UX.** `validate`/`describe` print a loop's shape before it spends a token; `--supervise`, `list`/`status`/`tail`, and the semantic `records` stream make a running fleet introspectable; a live TUI renders it. ([Supervise](#supervise-a-running-loop))
+- **A conversational harness.** `loops helm` puts a driver model in front of it all: plain English in, strictly-validated intents out, deterministic code executing them — with a driver eval that measures which models can hold the wheel. ([Helm](#helm-talk-to-your-loops), [docs/helm.md](docs/helm.md))
+- **Hardening gates at zero model cost.** `ratchet` (a metric may only improve, against a baseline the loop cannot loosen), `writeScope` (declared write lanes), `sampled` (reproducible sampling for expensive judges). ([Conditions](#conditions))
+- **Dead-lane resilience and honest receipts.** `fallbackEngine` reroutes around a dead key/binary/model and latches it; `loops preflight` proves each lane live before iteration 1 spends; `--prices` turns measured usage into a receipt with a labeled reconstructed baseline, never a silent $0. ([Engines](#engines-bring-any-model))
 
 Two things are deliberately out of scope. The heartbeat that fires a loop on a schedule belongs in cron, GitHub Actions, or a workflow engine, with a `loops` job inside. Acting in external tools is the agent's own job through its tools. `loops` is the body of the loop.
 
@@ -284,6 +287,8 @@ agentCheck({
 
 **Builders:** `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds` (a shell command exits 0), `all`, `any`, `not`, `quorum` (k-of-n), `agentCheck` (model judge), `always`, `never`, and `gateJob` (lift a condition into a `Job`, e.g. a reviewer).
 
+Three **hardening gates** close the ways an agent can technically satisfy a gate while betraying it, at zero model cost: `ratchet` (a measured metric may only hold or improve, against a runtime-owned baseline written only in the improving direction — the loop can't loosen its own bar), `writeScope` (every changed file must match a declared glob — lane-keeping for nodes sharing a repo), and `sampled` (run an expensive judge on a deterministic sha256 bucket of iterations, so a `quorum` at `rate: 0.25` really runs every ~4th iteration, reproducibly). Recipes for each are in [docs/patterns.md](docs/patterns.md#hardening-gates--keep-the-loop-honest-without-spending-a-model-call).
+
 ### The gate briefs the next attempt
 
 A failing gate is not just "no". The evidence-bearing conditions — `commandSucceeds`, `agentCheck`, and the combinators that wrap them — carry their verbatim diagnostic evidence on `ConditionResult.output` (a failing command's stdout/stderr, a judge's full findings), truncated and secret-scrubbed, and the loop hands the previous iteration's `until` verdict to the next body as `ctx.lastGate`. The point: the next fresh context reads **why** the gate failed instead of spending a turn re-running it to find out.
@@ -409,6 +414,43 @@ await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
 That's the whole contract: implement `run`, register a name. A managed/durable runner could be a drop-in engine too.
 
 `EngineOptions.minToolIntervalMs` puts a floor between consecutive tool executions, for backends that throttle bursty tool use. Only `agent-sdk` honors it, because only the SDK mediates tool calls in-process (an awaited PreToolUse hook). The subprocess engines (`claude-cli`, `codex`) execute tools autonomously and report them after the fact, and `anthropic-api` drives no tool loop, so all three ignore it: there is no interception point to pace at outside the SDK.
+
+### Dead lanes: fallback chains and preflight
+
+Because `Engine` is one method, "try the next provider when this one is dead" is just another engine — no runner support needed. `fallbackEngine` reroutes on **lane-dead** failures only (a bad key, an empty balance, a missing binary, an unknown model — the things that will not heal within a run) and latches a dead lane so it isn't retried fifty iterations in a row. Rate limits, quotas, and the token budget stay owned by the [`onLimit` policy](#rate-limits-quotas-and-budgets-wait-or-resume) — a fallback that silently swallowed a quota would bypass the wait/checkpoint machinery. Opt in via `on: ['quota']` if you genuinely want a quota to hop providers instead of pausing.
+
+```ts
+import { run, fallbackEngine } from '@loops-adk/core';
+
+await run(job, {
+  engines: { worker: fallbackEngine(['claude-cli', 'codex'], {
+    onFallback: ({ from, to, failure }) => console.error(`lane ${from} died (${failure}) → ${to}`),
+  }) },
+  engine: 'worker',
+});
+```
+
+`loops preflight` is the online counterpart to the offline `loops validate`: one deliberately tiny live turn per engine (a few tokens), through the same interface the run will use, so a dead lane surfaces **before** iteration 1 spends anything — classified (`auth | billing | missing-cli | model-unavailable | …`), so "your key is dead" and "the CLI isn't installed" are distinct, actionable answers.
+
+```bash
+loops validate feature.loop.ts        # offline: the recipe loads (zero spend)
+loops preflight -e claude-cli -e codex # online: the lanes work (a few tokens)
+loops run feature.loop.ts --supervise
+```
+
+Both are on the public surface too (`preflight`, `preflightEngine`, `classifyEngineFailure`).
+
+### Cost receipts: `--prices` and the reconstructed baseline
+
+Pass a price table and the exit summary prices the run's **measured** token usage per model. Prices are yours to supply (a JSON file; the library hardcodes none — stale prices are worse than no prices), a model with usage but no price entry is named instead of silently counted as $0, and `--baseline-model` adds the counterfactual: what the *same token stream* would have cost at a ceiling model's rates — always labeled a reconstruction, because it is one, not a measured alternative run.
+
+```bash
+loops run feature.loop.ts \
+  --prices prices.json \                # { "claude-haiku-4-5": { "inputPerMTokUsd": 1, "outputPerMTokUsd": 5 }, ... }
+  --baseline-model claude-opus-4-8      # "these exact tokens on opus would have been $X"
+```
+
+The same fold is a pure function on the public surface (`costReport(stats, prices, baselineModel)` → `RunResult.cost`), so a bench script or a fleet supervisor prices runs the same way the CLI does.
 
 ## Agents: define a specialist once
 
@@ -719,6 +761,18 @@ Each run keeps the raw event stream in `events.jsonl` and a smaller semantic str
 `loops status <runId>` prints, when something is holding the run, a **blocker** line, and `--recent [n]` appends the last *n* formatted events (default 10). The blocker is a heuristic read of the event tail naming the most plausible reason it is not moving — a failing gate, a limit pause, a human gate awaiting `--ack`, or an error with no progress since. The same rollup is one call on the public surface: `readRunProgress(runId, { recent })` returns a `RunProgress` (stage, iteration, last gate verdict, usage, blocker, recent events) — the one-read "where is it and what is it waiting on" a fleet supervisor polls.
 
 The read side is also on the public surface (`listRuns`, `readRunStatus`, `readRunProgress`, `runEventsPath`, `runSemanticRecordsPath`), so an agent supervising a fleet of loops, killing the ones that drift and kicking work back into the ones that hit a problem, reads the same files. Out-of-process control (pause, abort, and kickback from outside) is the next step.
+
+## Helm: talk to your loops
+
+`loops helm` is the conversational harness over everything above: you type plain English, a **driver model** turns it into one of nine strictly-validated JSON intents (answer, author, validate, run, status, records, ack, stop_run, done), and deterministic code executes them — authoring recipes, running the offline pre-flight, dispatching supervised background runs, reading their rollups and decision streams, lifting human gates you have approved. The driver never gets a shell; the only thing the bridge executes is the loops CLI, against paths contained in the workspace. Dispatch is a pause-point (the turn ends at a `run`, so a driver can't poll itself into a loop-burn), the step budget is stated in-context every turn, and an invalid reply gets exactly one repair prompt.
+
+```bash
+loops helm                                          # REPL over this workspace
+loops helm "start fix.loop.ts in the background"    # one-shot
+npm run example:helm                                # offline demo: the built-in oracle drives it, no key
+```
+
+The driver is any `Engine` — so the scripted mock drives the whole harness offline in tests, and a **driver eval** (`evalDrivers`) measures which real models can drive the contract: ten cases scored deterministically on four separate dimensions (produced JSON at all / valid intent / right intent / really executed), with a built-in zero-key oracle as the 1.0 control ceiling. The full guide — the contract, safety, embedding via `HelmSession`, and the eval — is [docs/helm.md](docs/helm.md).
 
 ## A whole engineering team, defined as files
 

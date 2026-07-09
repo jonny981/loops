@@ -14,6 +14,7 @@ import type {
 } from '../engines/engine.ts';
 import { EngineRegistry, type EngineFactory } from '../engines/registry.ts';
 import { Stats, type StatsSnapshot } from '../core/stats.ts';
+import { costReport, type CostReport, type PriceTable } from '../core/cost.ts';
 import { LoopError } from '../core/errors.ts';
 import { Budget, type BudgetConfig } from '../core/budget.ts';
 import {
@@ -105,6 +106,13 @@ export interface RunOptions {
    * it. Off by default; opt in to make a run observable from outside.
    */
   supervise?: boolean;
+  /**
+   * Assign the registry id instead of generating one, so a dispatching tool
+   * (the helm bridge, a wrapper script) knows the id before the run registers.
+   * Must match the registry alphabet (`[a-z0-9][a-z0-9-]*`); only meaningful
+   * with `supervise` or `recordTo: 'auto'`.
+   */
+  runId?: string;
   /** Restore shared run state written by a prior `checkpoint` before starting. */
   resumeFrom?: string;
   /**
@@ -117,6 +125,12 @@ export interface RunOptions {
   onLimit?: LimitPolicy;
   /** Ceiling on a single interruptible limit-wait, in ms. Default 300000. */
   maxWaitMs?: number;
+  /**
+   * Price the run's measured token usage (`RunResult.cost`). Prices are
+   * caller-supplied — the library hardcodes none. `baselineModel` adds the
+   * reconstructed counterfactual: the same token stream at that model's rates.
+   */
+  cost?: { prices: PriceTable; baselineModel?: string };
   /**
    * Ready-to-paste command to resume a paused run, surfaced to reporters and the
    * `limit:pause` event. The CLI reconstructs this from the invocation.
@@ -133,6 +147,8 @@ export interface RunResult {
   runId?: string;
   /** The JSONL event record path, when recording was enabled. */
   recordPath?: string;
+  /** The priced receipt, when `RunOptions.cost` was set. */
+  cost?: CostReport;
 }
 
 type RestoreEvent = Extract<LoopEvent, { kind: 'runtime:restore' }>;
@@ -238,7 +254,13 @@ export async function run(
   const shape = jobMeta(job);
   const title = shape?.name ?? 'run';
   const needsRunId = options.supervise || options.recordTo === 'auto';
-  const runId = needsRunId ? newRunId(title) : undefined;
+  if (options.runId != null && !/^[a-z0-9][a-z0-9-]*$/.test(options.runId)) {
+    throw new LoopError({
+      code: 'CONFIG',
+      message: `runId must match [a-z0-9][a-z0-9-]*, got "${options.runId}"`,
+    });
+  }
+  const runId = needsRunId ? (options.runId ?? newRunId(title)) : undefined;
   if (options.resetScratch && !options.resumeFrom) {
     resetLedger({ dir });
     resetPrompt({ dir });
@@ -469,9 +491,10 @@ export async function run(
 
   supervisor?.finish(outcome);
 
+  const finalStats = stats.snapshot();
   return {
     outcome,
-    stats: stats.snapshot(),
+    stats: finalStats,
     budget: budget
       ? {
           limit: budget.limit,
@@ -481,6 +504,9 @@ export async function run(
       : undefined,
     runId: supervisor?.runId ?? runId,
     recordPath,
+    cost: options.cost
+      ? costReport(finalStats, options.cost.prices, options.cost.baselineModel)
+      : undefined,
   };
 }
 

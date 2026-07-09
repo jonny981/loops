@@ -19,6 +19,7 @@ import { run, exitCodeFor } from './runtime/runner.ts';
 import { createHub } from './runtime/hub.ts';
 import { installSignalHandlers } from './runtime/signals.ts';
 import { jsonReporter, plainReporter, printSummary } from './reporters.ts';
+import type { ModelPrice, PriceTable } from './core/cost.ts';
 import { buildJobFromFlags, parseDuration } from './config.ts';
 import { loop } from './core/loop.ts';
 import { humanGateKey, pausedHumanGate } from './core/human.ts';
@@ -37,12 +38,15 @@ import {
   readRunStatus,
   readRunProgress,
   runEventsPath,
-  runSemanticRecordsPath,
   runsHome,
   formatEvent,
   toLine,
 } from './runtime/supervisor.ts';
-import type { SemanticRunRecord } from './runtime/semantic.ts';
+import {
+  formatSemanticRecord,
+  readSemanticRecords,
+  type SemanticRunRecord,
+} from './runtime/semantic.ts';
 import type { Job, LoopConfig, Outcome } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
 
@@ -75,6 +79,9 @@ interface RunFlags {
   checkpoint?: string;
   resume?: string;
   supervise?: boolean;
+  runId?: string;
+  prices?: string;
+  baselineModel?: string;
   onLimit?: string;
   maxWait?: string;
   json?: boolean;
@@ -749,6 +756,37 @@ async function execute(
   const maxWaitMs =
     flags.maxWait != null ? parseDuration(flags.maxWait) : undefined;
 
+  let cost: { prices: PriceTable; baselineModel?: string } | undefined;
+  if (flags.prices) {
+    const pricesPath = path.resolve(flags.prices);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(pricesPath, 'utf8'));
+    } catch (e) {
+      throw new Error(
+        `--prices: could not read ${flags.prices}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('--prices must be a JSON object of model → price entries');
+    }
+    for (const [model, price] of Object.entries(parsed)) {
+      const p = price as Partial<ModelPrice> | null;
+      if (
+        !p ||
+        typeof p.inputPerMTokUsd !== 'number' ||
+        typeof p.outputPerMTokUsd !== 'number'
+      ) {
+        throw new Error(
+          `--prices: entry "${model}" needs numeric inputPerMTokUsd and outputPerMTokUsd`,
+        );
+      }
+    }
+    cost = { prices: parsed as PriceTable, baselineModel: flags.baselineModel };
+  } else if (flags.baselineModel) {
+    throw new Error('--baseline-model requires --prices');
+  }
+
   const mode: 'json' | 'plain' | 'tui' = flags.json
     ? 'json'
     : flags.tui === false || !process.stdout.isTTY
@@ -777,6 +815,8 @@ async function execute(
     checkpoint: flags.checkpoint,
     resumeFrom: flags.resume,
     supervise: flags.supervise,
+    runId: flags.runId,
+    cost,
     onLimit,
     maxWaitMs,
     resumeCommand,
@@ -912,22 +952,6 @@ function relAge(ms: number): string {
   return `${Math.round(h / 24)}d`;
 }
 
-function readSemanticRecords(runId: string): SemanticRunRecord[] | undefined {
-  const path = runSemanticRecordsPath(runId);
-  if (!fs.existsSync(path)) return undefined;
-  const raw = fs.readFileSync(path, 'utf8').trim();
-  if (!raw) return [];
-  const records: SemanticRunRecord[] = [];
-  for (const line of raw.split('\n')) {
-    try {
-      records.push(JSON.parse(line) as SemanticRunRecord);
-    } catch {
-      /* skip an unparseable line */
-    }
-  }
-  return records;
-}
-
 function parsePositiveIntFlag(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -960,24 +984,6 @@ function normalizeRecordPath(value: string): string {
 function matchesRecordPath(record: SemanticRunRecord, prefix: string): boolean {
   const path = record.path.join('/');
   return path === prefix || path.startsWith(`${prefix}/`);
-}
-
-function formatSemanticRecord(record: SemanticRunRecord): string {
-  const at = record.path.length ? `${record.path.join(' › ')} ` : '';
-  switch (record.kind) {
-    case 'dispatch':
-      return `${at}dispatch ${record.unit}${record.label ? ` ${record.label}` : ''}${record.node ? ` ${record.node}` : ''}`;
-    case 'completion':
-      return `${at}completion ${record.unit}${record.label ? ` ${record.label}` : ''}: ${record.outcome.status}${record.outcome.summary ? ` — ${record.outcome.summary}` : ''}`;
-    case 'surfacing':
-      return `${at}surfacing ${record.source} ${record.decision}${record.severity ? ` [${record.severity}]` : ''}: ${record.reason}`;
-    case 'revision-emitted':
-      return `${at}revision emitted ${record.sourceEvent}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
-    case 'revision-routed':
-      return `${at}revision routed ${record.sourceEvent} ${record.decision}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
-    case 'proof':
-      return `${at}proof ${record.name}: ${record.artifact.title ?? record.artifact.path ?? record.artifact.kind}`;
-  }
 }
 
 // The package version, read at runtime rather than hardcoded (a literal here
@@ -1062,6 +1068,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option('--state <json>', 'seed the shared run state (JSON)')
     .option('--budget <tokens>', 'cap total tokens (input+output) for the run')
     .option(
+      '--prices <file>',
+      'price the run: a JSON file of { "<model or prefix>": { "inputPerMTokUsd": n, "outputPerMTokUsd": n } }',
+    )
+    .option(
+      '--baseline-model <id>',
+      'with --prices: also report what the same tokens would have cost on this model (a reconstruction, labeled as such)',
+    )
+    .option(
       '--ground',
       "ground every agent job's turn in branch memory (commit log + scratch files); judge/validator turns are unaffected; a job's own ground config wins",
     )
@@ -1090,6 +1104,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option(
       '--supervise',
       'register this run in ~/.loops/runs so `loops list`/`status`/`tail` can observe it from another process',
+    )
+    .option(
+      '--run-id <id>',
+      'assign the registry id for --supervise (so a dispatching tool knows it up front)',
     );
   const coreOptions = optionMetadata(runCommand);
   const inferredRunFile = inferRunFile(argv.slice(2), coreOptions);
@@ -1147,6 +1165,79 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           : `${renderPlan(shape).join('\n')}\n`,
       );
     });
+
+  program
+    .command('helm')
+    .argument('[message...]', 'a one-shot message; omit for the interactive REPL')
+    .description(
+      'the conversational harness: a driver model turns your messages into authored recipes, validations, and dispatched supervised runs',
+    )
+    .option(
+      '-e, --engine <name>',
+      'driver engine: claude-cli | codex | agent-sdk | anthropic-api (default claude-cli)',
+    )
+    .option('--model <id>', 'driver model id')
+    .option('--max-steps <n>', 'intent budget per turn (default 8)')
+    .option('--max-runs <n>', 'runs the session may dispatch (default 8)')
+    .option(
+      '--run-arg <arg>',
+      'extra arg forwarded to every dispatched run (repeatable)',
+      (v: string, acc: string[]) => acc.concat(v),
+      [] as string[],
+    )
+    .option(
+      '--import <specifier>',
+      "import specifier authored recipes use (default '@loops-adk/core')",
+    )
+    .option('--session <id>', 'name the helm session (transcript under ~/.loops/helm)')
+    .action(async (messageParts: string[], flags: Record<string, unknown>) => {
+      // Lazy import: the helm pulls in the bridge/session machinery that the
+      // ordinary run/validate paths never need.
+      const { runHelmCommand } = await import('./helm/cli.ts');
+      await runHelmCommand(messageParts, flags);
+    });
+
+  program
+    .command('preflight')
+    .description(
+      'prove each engine can actually run before a loop spends a turn finding out: one tiny live turn per lane, failures classified (auth | billing | missing-cli | model-unavailable | ...) — the online counterpart to the offline `validate`',
+    )
+    .option(
+      '-e, --engine <name>',
+      'engine to probe (repeatable; default claude-cli)',
+      (v: string, acc: string[]) => acc.concat(v),
+      [] as string[],
+    )
+    .option('--model <id>', 'model for the probes')
+    .option('--cli-binary <path>', 'path to a CLI engine binary')
+    .option('--api-key <key>', 'Anthropic API key (anthropic-api engine)')
+    .option('--timeout <dur>', 'per-probe cap (e.g. 30s); default 60s')
+    .action(
+      async (flags: {
+        engine: string[];
+        model?: string;
+        cliBinary?: string;
+        apiKey?: string;
+        timeout?: string;
+      }) => {
+        const { preflight, formatPreflight } = await import(
+          './engines/preflight.ts'
+        );
+        const engines = flags.engine.length ? flags.engine : ['claude-cli'];
+        const results = await preflight(engines, {
+          model: flags.model,
+          timeoutMs: flags.timeout ? parseDuration(flags.timeout) : undefined,
+          engineOptions: {
+            cliBinary: flags.cliBinary,
+            apiKey: flags.apiKey,
+          },
+        });
+        for (const result of results) {
+          process.stdout.write(`${toLine(formatPreflight(result))}\n`);
+        }
+        if (results.some((r) => !r.ok)) process.exitCode = 1;
+      },
+    );
 
   // ── Supervision: observe a run from another process (the registry is files) ──
 

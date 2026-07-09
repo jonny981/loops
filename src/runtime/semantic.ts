@@ -1,9 +1,13 @@
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
+  readFileSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+
+import { runSemanticRecordsPath } from './supervisor.ts';
 
 import {
   normalizeFeedbackSeverity,
@@ -285,6 +289,46 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
       ];
     default:
       return [];
+  }
+}
+
+/** Read a supervised run's semantic record stream; undefined when the run has
+ *  none. Skips unparseable lines so a torn write never breaks a read. */
+export function readSemanticRecords(
+  runId: string,
+): SemanticRunRecord[] | undefined {
+  const path = runSemanticRecordsPath(runId);
+  if (!existsSync(path)) return undefined;
+  const raw = readFileSync(path, 'utf8').trim();
+  if (!raw) return [];
+  const records: SemanticRunRecord[] = [];
+  for (const line of raw.split('\n')) {
+    try {
+      records.push(JSON.parse(line) as SemanticRunRecord);
+    } catch {
+      /* skip an unparseable line */
+    }
+  }
+  return records;
+}
+
+/** A compact one-line rendering of a semantic record, for `loops records` and
+ *  the helm's observation channel. Callers sanitise for terminals (`toLine`). */
+export function formatSemanticRecord(record: SemanticRunRecord): string {
+  const at = record.path.length ? `${record.path.join(' › ')} ` : '';
+  switch (record.kind) {
+    case 'dispatch':
+      return `${at}dispatch ${record.unit}${record.label ? ` ${record.label}` : ''}${record.node ? ` ${record.node}` : ''}`;
+    case 'completion':
+      return `${at}completion ${record.unit}${record.label ? ` ${record.label}` : ''}: ${record.outcome.status}${record.outcome.summary ? ` — ${record.outcome.summary}` : ''}`;
+    case 'surfacing':
+      return `${at}surfacing ${record.source} ${record.decision}${record.severity ? ` [${record.severity}]` : ''}: ${record.reason}`;
+    case 'revision-emitted':
+      return `${at}revision emitted ${record.sourceEvent}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
+    case 'revision-routed':
+      return `${at}revision routed ${record.sourceEvent} ${record.decision}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
+    case 'proof':
+      return `${at}proof ${record.name}: ${record.artifact.title ?? record.artifact.path ?? record.artifact.kind}`;
   }
 }
 

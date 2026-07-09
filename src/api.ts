@@ -320,10 +320,106 @@ export {
 } from './runtime/supervisor.ts';
 export {
   semanticRecordsFromEvent,
+  readSemanticRecords,
+  formatSemanticRecord,
   type SemanticDecision,
   type SemanticOutcome,
   type SemanticRunRecord,
 } from './runtime/semantic.ts';
+
+// Provider resilience — a shared failure vocabulary, a fallback chain that is
+// just another Engine, and preflight (one tiny live turn per lane, classified,
+// so a dead key or missing CLI surfaces before iteration 1 spends anything).
+export {
+  classifyEngineFailure,
+  LANE_DEAD_FAILURES,
+  type EngineFailureKind,
+} from './engines/failure.ts';
+export {
+  fallbackEngine,
+  type FallbackOptions,
+  type FallbackInfo,
+} from './engines/fallback.ts';
+export {
+  preflight,
+  preflightEngine,
+  formatPreflight,
+  type PreflightResult,
+  type PreflightOptions,
+} from './engines/preflight.ts';
+
+// Cost accounting — price measured usage with a caller-supplied table (the
+// library hardcodes no prices), never silently $0, and an optional
+// reconstructed baseline: the same token stream at a ceiling model's rates.
+export {
+  costReport,
+  formatCostReport,
+  priceFor,
+  type PriceTable,
+  type ModelPrice,
+  type ModelCost,
+  type CostReport,
+} from './core/cost.ts';
+
+// Hardening gates — deterministic conditions that keep a loop honest without
+// spending a model call: a monotone metric baseline the agent cannot loosen,
+// a declared write scope, and reproducible sampling for expensive judges.
+export {
+  ratchet,
+  writeScope,
+  sampled,
+  globToRegExp,
+  type RatchetOptions,
+  type WriteScopeOptions,
+  type SampledOptions,
+} from './core/guards.ts';
+
+// Helm — the conversational harness over the library: a driver model (any
+// Engine) emits structured intents, the bridge executes them against the
+// runtime, and the driver eval measures which models can drive the contract.
+export {
+  parseHelmIntent,
+  extractFirstJson,
+  helmIntentSchema,
+  HelmParseError,
+  HelmIntentError,
+  HELM_ACTIONS,
+  HELM_RECORD_KINDS,
+  type HelmIntent,
+  type HelmAction,
+} from './helm/intent.ts';
+export { helmSystemPrompt, type HelmSystemOptions } from './helm/system.ts';
+export {
+  HelmBridge,
+  type HelmBridgeOptions,
+  type Observation,
+} from './helm/bridge.ts';
+export {
+  HelmSession,
+  type HelmSessionOptions,
+  type HelmEvent,
+  type TurnEndReason,
+} from './helm/session.ts';
+export { oracleEngine, oracleResponder, oracleIntent } from './helm/oracle.ts';
+export {
+  assessReply,
+  compositeScore,
+  type TaskCase,
+  type AttemptDims,
+  type Assessment,
+} from './helm/score.ts';
+export {
+  evalDrivers,
+  prepareEvalWorkspace,
+  renderEvalReport,
+  apiSpecifier,
+  DRIVER_BATTERY,
+  type DriverSpec,
+  type EvalAttempt,
+  type DriverSummary,
+  type EvalReport,
+  type EvalOptions,
+} from './helm/eval.ts';
 
 import type { Job } from './core/types.ts';
 

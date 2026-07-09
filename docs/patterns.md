@@ -244,3 +244,67 @@ regardless of the repo's merge settings; body-only (drop `mergeJob`, let a human
 instead relies on the repo's squash default being "PR title and description". The host is the
 injectable `Forge` interface (gh-backed by default), so the whole flow runs offline against a
 `MockForge` — see [`examples/ship-pr.loop.ts`](../examples/ship-pr.loop.ts).
+
+## Hardening gates — keep the loop honest without spending a model call
+
+Three deterministic conditions (`src/core/guards.ts`) borrowed from the
+supervisor-orchestrator tradition. Each one closes a specific way an agent can
+technically satisfy a gate while betraying its intent — and none of them costs
+a token.
+
+**`ratchet` — a measured metric may only hold or improve.** The classic failure:
+you gate on "lint passes", the agent relaxes the lint config. A ratchet gates on
+a *number* the command emits, against a baseline the runtime owns (stored under
+`~/.loops/ratchets/`, outside the workspace) and rewrites **only in the
+improving direction**. The first run seeds the bar; after that the loop can
+neither loosen nor forget it. Missing metric, unparsable output, or a failing
+command all count as "not met" — the gate fails closed.
+
+```ts
+import { loop, agentJob, ratchet } from '@loops-adk/core';
+
+export const cleanup = loop({
+  name: 'burn-down-lint',
+  max: 20,
+  body: agentJob({ prompt: 'Fix a batch of lint errors.', ground: true }),
+  // The script prints {"metrics":{"errors":123}}; the loop may only shrink it.
+  until: ratchet('node', ['scripts/lint-count.mjs'], { metric: 'errors' }),
+  // direction: 'up' flips it for coverage-style metrics that must not fall.
+});
+```
+
+**`writeScope` — every changed file must match a declared glob.** The cheap
+lane-keeping gate for DAG nodes that share one repo without worktree isolation:
+declare where a node may write, and a stray edit outside that scope fails the
+gate deterministically, naming the files. A clean tree passes; a workspace that
+is not a git repository fails closed.
+
+```ts
+import { dag, writeScope } from '@loops-adk/core';
+
+// The docs node may touch docs/ and the README — nothing else.
+until: [commandSucceeds('npm', ['test']), writeScope(['docs/**', 'README.md'])]
+```
+
+**`sampled` — run an expensive judge on a reproducible fraction of iterations.**
+Quorum judges on every iteration of a 50-iteration loop is real money. `sampled`
+runs the inner condition on a deterministic sha256 bucket of the iteration key —
+not `Math.random()` — so a re-run of iteration 7 always samples the same way,
+and treats sampled-out iterations as met. Sample only what spends; deterministic
+gates are free, so never wrap those.
+
+```ts
+import { agentCheck, quorum, sampled } from '@loops-adk/core';
+
+until: [
+  commandSucceeds('npm', ['test']),           // every iteration — free
+  sampled(0.25, quorum(2,                     // every ~4th iteration — the jury
+    agentCheck({ question: 'Matches the spec?' }),
+    agentCheck({ question: 'No shortcuts or stubs?' }),
+    agentCheck({ question: 'Would you ship this?' }),
+  )),
+]
+```
+
+The three compose like any other `Condition` — in `until`/`start`/`stopOn`
+arrays, under `quorum`, `all`, `any`, or `not`.

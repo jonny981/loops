@@ -9,6 +9,7 @@ import pc from 'picocolors';
 import type { Listener } from './runtime/hub.ts';
 import type { LoopEvent, Outcome } from './core/types.ts';
 import type { RunResult } from './runtime/runner.ts';
+import { formatCostReport } from './core/cost.ts';
 
 const indent = (path: string[]) => '  '.repeat(Math.max(0, path.length - 1));
 const statusColor = (status: Outcome['status'], text: string): string =>
@@ -291,6 +292,14 @@ export function printSummary(result: RunResult, resumeCommand?: string): void {
         `  ${m.model}: ${m.calls} call(s), ${m.inputTokens} in / ${m.outputTokens} out`,
       ),
     );
+  }
+
+  if (result.cost) {
+    console.log(line);
+    console.log(pc.bold('Cost'));
+    for (const costLine of formatCostReport(result.cost)) {
+      console.log(`  ${costLine}`);
+    }
   }
 
   if (result.budget) {
