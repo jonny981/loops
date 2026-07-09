@@ -28,6 +28,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      # Refuse to publish a version the changelog does not describe (and a
+      # tag that does not match package.json). Dependency-free, so it runs
+      # before install for the fastest possible failure.
+      - run: node scripts/changelog-gate.mjs
       - run: npm ci
       - run: npm run typecheck
       - run: npm test

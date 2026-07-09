@@ -54,6 +54,9 @@ heading, dated, before the tag is pushed.
 - `readSemanticRecords` / `formatSemanticRecord` join the public surface (moved
   from CLI-private helpers), so supervisor-shaped tools read a run's decision
   stream the same way `loops records` does.
+- The changelog gate (`scripts/changelog-gate.mjs`): the Release workflow and
+  `prepublishOnly` refuse to publish a version this file does not describe,
+  and a version tag that does not match `package.json`.
 
 ## [0.5.1] — 2026-07-08
 

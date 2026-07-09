@@ -79,7 +79,7 @@
     "example:stall": "tsx src/index.ts run examples/stall-demo.loop.ts --no-tui",
     "example:gate": "tsx src/index.ts run examples/confidence-gate.loop.ts",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run typecheck"
+    "prepublishOnly": "npm run typecheck && node scripts/changelog-gate.mjs"
   },
   "engines": {
     "node": ">=20"
