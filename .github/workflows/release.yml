@@ -1,11 +1,23 @@
 name: Release
 
-# Publish to npm when a version tag is pushed. Cut a release with:
-#   npm version patch    # or minor / major — bumps package.json + tags
-#   git push --follow-tags
-# The manual trigger publishes whatever version main's package.json carries —
-# for re-running a failed publish, or releasing from an environment that can
-# push commits but not tags.
+# Publishing is keyed to the VERSION BUMP, not to a manually pushed tag: on
+# every push to main, the decide job checks whether package.json carries a
+# version that has no v-tag yet — if so, this run gates, tests, creates the
+# tag, and publishes. Cut a release with:
+#
+#   1. retitle CHANGELOG.md's Unreleased to the new version (the gate insists)
+#   2. npm version <patch|minor|major>
+#   3. git push          # no --follow-tags needed; CI derives and pushes the tag
+#
+# A push that does not bump the version is a no-op here. The old paths still
+# work: pushing a v* tag by hand, or the manual trigger (publishes whatever
+# version main carries). The tag is created in-workflow from package.json, so
+# a tag/version mismatch is structurally impossible on this path.
+#
+# Why one workflow instead of a tagger that triggers a releaser: tags pushed
+# with the default GITHUB_TOKEN do not trigger other workflows (GitHub's
+# anti-recursion rule), so a two-workflow cascade fails silently.
+#
 # Auth is npm trusted publishing (OIDC): the package's npmjs.com settings name
 # this repo + workflow as a trusted publisher, so no token secret is involved
 # and no auth config may be written (a token line in .npmrc would shadow OIDC).
@@ -13,14 +25,46 @@ name: Release
 # upgrade step before publish. Provenance requires a public repo.
 on:
   push:
+    branches: ['main']
     tags: ['v*']
   workflow_dispatch:
 
+# One release at a time; a queued push waits rather than racing the publish.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  publish:
+  decide:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      release: ${{ steps.decide.outputs.release }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: decide
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "explicit release ref/dispatch for $VERSION"
+          elif git ls-remote --exit-code origin "refs/tags/v$VERSION" > /dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is already tagged — not a release push"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION has no tag yet — releasing"
+          fi
+
+  publish:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release tag
       id-token: write # npm trusted publishing (OIDC) + provenance
     steps:
       - uses: actions/checkout@v4
@@ -35,5 +79,15 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # Tag from package.json when this run was not started by a tag push.
+      # Created with GITHUB_TOKEN, so it cannot re-trigger this workflow.
+      - name: Tag the release
+        if: github.ref_type != 'tag'
+        run: |
+          VERSION=${{ needs.decide.outputs.version }}
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f "v$VERSION"
+          git push -f origin "refs/tags/v$VERSION"
       - run: npm install -g npm@latest # OIDC publish needs npm >= 11.5.1
       - run: npm publish --provenance --access public

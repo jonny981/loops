@@ -11,6 +11,12 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+### Changed
+
+- Releases key off the version bump: a `main` push whose `package.json`
+  version has no `v*` tag yet is gated, tested, tagged by CI, and published —
+  no hand-pushed tag needed (hand tags and the manual trigger still work).
+
 ## [0.6.0] — 2026-07-09
 
 ### Added
