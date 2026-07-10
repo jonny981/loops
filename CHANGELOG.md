@@ -11,6 +11,13 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+### Changed
+
+- README: an in-depth comparison matrix against Mastra and LangGraph under
+  "What `loops` is (and isn't)", naming where the frameworks are ahead and
+  the three rows that carry the design bet (the done-check, fresh context
+  over a durable workspace, engines as whole agents).
+
 ## [0.7.0] - 2026-07-09
 
 ### Added
