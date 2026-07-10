@@ -7,13 +7,23 @@
   "keywords": [
     "agent",
     "agents",
+    "agent-loop",
+    "agent-orchestration",
+    "agent-workflow",
+    "multi-agent",
+    "agent-memory",
+    "git-as-memory",
     "loop",
     "loops",
     "convergence",
+    "convergence-loop",
+    "done-gate",
     "ai",
     "llm",
     "claude",
-    "orchestration"
+    "codex",
+    "orchestration",
+    "typescript"
   ],
   "repository": {
     "type": "git",

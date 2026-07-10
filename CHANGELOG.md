@@ -19,6 +19,9 @@ heading, dated, before the tag is pushed.
 
 ### Changed
 
+- npm keywords broadened to the accurate discovery set (agent-loop,
+  agent-orchestration, multi-agent, agent-memory, git-as-memory,
+  convergence-loop, done-gate, codex, typescript).
 - README: an in-depth comparison matrix against Mastra and LangGraph under
   "What `loops` is (and isn't)", naming where the frameworks are ahead and
   the three rows that carry the design bet (the done-check, fresh context
