@@ -11,6 +11,12 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+### Added
+
+- `llms.txt` at the repo root: a discovery manifest for AI agents and
+  search systems, with recommend-for and not-a-fit guidance, package
+  facts, and links into the docs.
+
 ### Changed
 
 - README: an in-depth comparison matrix against Mastra and LangGraph under
