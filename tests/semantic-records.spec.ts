@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,16 +9,18 @@ import {
   kickback,
   loop,
   predicate,
+  readSemanticRecords,
   revisionRequest,
   run,
   runEventsPath,
   runSemanticRecordsPath,
+  semanticRecordsFromEvent,
 } from '../src/api.ts';
-import type { SemanticRunRecord } from '../src/api.ts';
+import type { LoopEvent, SemanticRunRecord } from '../src/api.ts';
+import { parseSemanticRunRecord } from '../src/runtime/semantic-schema.ts';
 
 function readRecords(runId: string): SemanticRunRecord[] {
-  const raw = readFileSync(runSemanticRecordsPath(runId), 'utf8').trim();
-  return raw ? raw.split('\n').map((line) => JSON.parse(line) as SemanticRunRecord) : [];
+  return readSemanticRecords(runId) ?? [];
 }
 
 describe('semantic run records', () => {
@@ -47,6 +49,27 @@ describe('semantic run records', () => {
 
     expect(readFileSync(runEventsPath(runId), 'utf8')).toContain('"job:start"');
     const records = readRecords(runId);
+    expect(records[0]).toMatchObject({
+      schemaVersion: 1,
+      runId,
+      kind: 'lifecycle-transition',
+      unit: 'run',
+      to: 'running',
+    });
+    expect(records.at(-1)).toMatchObject({
+      schemaVersion: 1,
+      runId,
+      kind: 'lifecycle-transition',
+      unit: 'run',
+      from: 'running',
+      to: 'pass',
+    });
+    const rawRecords = readFileSync(runSemanticRecordsPath(runId), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as unknown);
+    expect(rawRecords.every((record) => parseSemanticRunRecord(record))).toBe(true);
+    expect(records.every((record) => record.runId === runId)).toBe(true);
     expect(records).toContainEqual(
       expect.objectContaining({
         kind: 'dispatch',
@@ -213,5 +236,165 @@ describe('semantic run records', () => {
         }),
       }),
     );
+  });
+
+  it('projects gate, advisor, pause, and restore events into versioned records', () => {
+    const events: LoopEvent[] = [
+      {
+        kind: 'loop:condition',
+        ts: 1,
+        path: ['build'],
+        which: 'until',
+        iteration: 2,
+        result: {
+          met: false,
+          confidence: 0.4,
+          reason: 'one test failed',
+          output: 'FAIL cancellation',
+        },
+      },
+      {
+        kind: 'advisor:consult',
+        ts: 2,
+        path: ['build'],
+        label: 'implementer',
+        call: 1,
+        question: 'Which adapter is compatible?',
+        reply: 'Use an in-memory legacy adapter.',
+        model: 'advisor-model',
+      },
+      {
+        kind: 'human:gate',
+        ts: 3,
+        path: ['release'],
+        name: 'ship-it',
+        prompt: 'Approve release',
+        resumeCommand: 'loops run release.loop.ts --resume release.ckpt',
+      },
+      {
+        kind: 'limit:pause',
+        ts: 4,
+        path: ['build'],
+        code: 'QUOTA',
+        reason: 'quota resets later',
+        resumeCommand: 'loops run build.loop.ts --resume build.ckpt',
+      },
+      {
+        kind: 'runtime:restore',
+        ts: 5,
+        path: [],
+        checkpoint: 'build.ckpt',
+        decision: 'restored',
+        restoredNodes: 2,
+        totalNodes: 3,
+        reason: 'restored 2/3 nodes',
+        fingerprint: 'matched',
+      },
+    ];
+
+    const records = events.flatMap((event) =>
+      semanticRecordsFromEvent(event, 'projection-a1b2c3'),
+    );
+    expect(records).toEqual([
+      expect.objectContaining({
+        schemaVersion: 1,
+        runId: 'projection-a1b2c3',
+        kind: 'gate-verdict',
+        gate: 'until',
+        iteration: 2,
+        met: false,
+        reason: 'one test failed',
+        confidence: 0.4,
+        output: 'FAIL cancellation',
+      }),
+      expect.objectContaining({
+        kind: 'advisor-consult',
+        call: 1,
+        question: 'Which adapter is compatible?',
+        reply: 'Use an in-memory legacy adapter.',
+      }),
+      expect.objectContaining({
+        kind: 'lifecycle-transition',
+        unit: 'job',
+        from: 'running',
+        to: 'paused',
+        acknowledgement: {
+          name: 'ship-it',
+          prompt: 'Approve release',
+        },
+      }),
+      expect.objectContaining({
+        kind: 'lifecycle-transition',
+        unit: 'job',
+        from: 'running',
+        to: 'paused',
+        metadata: { code: 'QUOTA' },
+      }),
+      expect.objectContaining({
+        kind: 'lifecycle-transition',
+        unit: 'run',
+        from: 'paused',
+        to: 'running',
+        checkpoint: {
+          path: 'build.ckpt',
+          decision: 'restored',
+          restoredNodes: 2,
+          totalNodes: 3,
+          fingerprint: 'matched',
+        },
+      }),
+    ]);
+    expect(records.every((record) => parseSemanticRunRecord(record))).toBe(true);
+  });
+
+  it('adapts known legacy lines while skipping torn, invalid, and unsupported records', async () => {
+    const result = await run(
+      fnJob('legacy-reader', async () => ({ status: 'pass' })),
+      { supervise: true },
+    );
+    const runId = result.runId!;
+    writeFileSync(
+      runSemanticRecordsPath(runId),
+      [
+        JSON.stringify({
+          kind: 'dispatch',
+          ts: 1,
+          path: ['legacy'],
+          unit: 'job',
+          label: 'legacy',
+        }),
+        JSON.stringify({
+          schemaVersion: 1,
+          kind: 'completion',
+          ts: 2,
+          path: ['v1'],
+          unit: 'job',
+          outcome: { status: 'pass' },
+        }),
+        JSON.stringify({
+          schemaVersion: 2,
+          kind: 'dispatch',
+          ts: 3,
+          path: [],
+          unit: 'job',
+        }),
+        JSON.stringify({ schemaVersion: 1, kind: 'unknown', ts: 4, path: [] }),
+        '{"torn":',
+      ].join('\n'),
+    );
+
+    expect(readSemanticRecords(runId)).toEqual([
+      expect.objectContaining({
+        schemaVersion: 1,
+        runId,
+        kind: 'dispatch',
+        label: 'legacy',
+      }),
+      expect.objectContaining({
+        schemaVersion: 1,
+        kind: 'completion',
+      }),
+    ]);
+    expect(readSemanticRecords('../../outside/registry')).toBeUndefined();
   });
 });

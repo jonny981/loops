@@ -1,6 +1,5 @@
 import {
   appendFileSync,
-  existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
@@ -15,79 +14,26 @@ import {
 } from '../core/feedback.ts';
 import type {
   FeedbackActionSeverity,
-  FeedbackDecision,
   FeedbackFinding,
   LoopEvent,
   Outcome,
-  ProofArtifact,
-  RevisionRequest,
 } from '../core/types.ts';
+import {
+  SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
+  adaptSemanticRunRecord,
+  safeParseSemanticRunRecord,
+} from './semantic-schema.ts';
+import type {
+  SemanticDecision,
+  SemanticOutcome,
+  SemanticRunRecord,
+} from './semantic-schema.ts';
 
-export type SemanticDecision = FeedbackDecision;
-
-export type SemanticRunRecord =
-  | {
-      kind: 'dispatch';
-      ts: number;
-      path: string[];
-      unit: 'job' | 'dag-node';
-      label?: string;
-      node?: string;
-      /** Present for a dag-node: which run this is (1-based; +1 per kickback re-run). */
-      attempt?: number;
-    }
-  | {
-      kind: 'completion';
-      ts: number;
-      path: string[];
-      unit: 'job' | 'loop' | 'dag' | 'dag-node';
-      label?: string;
-      outcome: SemanticOutcome;
-      iterations?: number;
-      /** Present for a dag-node: which run this completion is for. */
-      attempt?: number;
-    }
-  | {
-      kind: 'surfacing';
-      ts: number;
-      path: string[];
-      source: 'loop-review' | 'dag-kickback';
-      decision: SemanticDecision;
-      severity?: FeedbackActionSeverity;
-      from?: string;
-      to?: string;
-      reason: string;
-      note?: string;
-    }
-  | {
-      kind: 'revision-emitted';
-      ts: number;
-      path: string[];
-      sourceEvent: 'job:end';
-      revision: RevisionRequest;
-    }
-  | {
-      kind: 'revision-routed';
-      ts: number;
-      path: string[];
-      sourceEvent: 'loop:review' | 'dag:kickback';
-      decision: SemanticDecision;
-      revision: RevisionRequest;
-    }
-  | {
-      kind: 'proof';
-      ts: number;
-      path: string[];
-      name: string;
-      artifact: ProofArtifact;
-    };
-
-export interface SemanticOutcome {
-  status: Outcome['status'];
-  summary?: string;
-  confidence?: number;
-  late?: true;
-}
+export type {
+  SemanticDecision,
+  SemanticOutcome,
+  SemanticRunRecord,
+} from './semantic-schema.ts';
 
 function ensureDir(path: string): void {
   const dir = dirname(path);
@@ -100,6 +46,19 @@ function outcomeSummary(outcome: Outcome): SemanticOutcome {
     summary: outcome.summary,
     confidence: outcome.confidence,
     ...(outcome.late ? { late: true } : {}),
+  };
+}
+
+function recordBase(
+  event: LoopEvent,
+  runId?: string,
+  path: string[] = event.path,
+) {
+  return {
+    schemaVersion: SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
+    ...(runId ? { runId } : {}),
+    ts: event.ts,
+    path,
   };
 }
 
@@ -118,14 +77,14 @@ function strongestFinding(
 function emittedRevisionRecord(
   event: LoopEvent,
   outcome: Outcome,
+  runId?: string,
 ): SemanticRunRecord[] {
   const revision = revisionFromOutcome(outcome);
   return revision
     ? [
         {
+          ...recordBase(event, runId),
           kind: 'revision-emitted',
-          ts: event.ts,
-          path: event.path,
           sourceEvent: 'job:end',
           revision,
         },
@@ -133,14 +92,47 @@ function emittedRevisionRecord(
     : [];
 }
 
-export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] {
+export function semanticRecordsFromEvent(
+  event: LoopEvent,
+  runId?: string,
+): SemanticRunRecord[] {
   switch (event.kind) {
+    case 'runtime:restore':
+      return [
+        {
+          ...recordBase(event, runId),
+          kind: 'lifecycle-transition',
+          unit: 'run',
+          from: 'paused',
+          to: 'running',
+          reason: event.reason,
+          checkpoint: {
+            path: event.checkpoint,
+            decision: event.decision,
+            restoredNodes: event.restoredNodes,
+            totalNodes: event.totalNodes,
+            fingerprint: event.fingerprint,
+          },
+        },
+      ];
+    case 'loop:condition':
+      return [
+        {
+          ...recordBase(event, runId),
+          kind: 'gate-verdict',
+          gate: event.which,
+          iteration: event.iteration ?? 0,
+          met: event.result.met,
+          reason: event.result.reason,
+          confidence: event.result.confidence,
+          output: event.result.output,
+        },
+      ];
     case 'job:start':
       return [
         {
+          ...recordBase(event, runId),
           kind: 'dispatch',
-          ts: event.ts,
-          path: event.path,
           unit: 'job',
           label: event.label,
         },
@@ -149,9 +141,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
       if (event.phase === 'start')
         return [
           {
+            ...recordBase(event, runId, [...event.path, event.node]),
             kind: 'dispatch',
-            ts: event.ts,
-            path: [...event.path, event.node],
             unit: 'dag-node',
             node: event.node,
             attempt: event.attempt,
@@ -165,9 +156,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
       return event.outcome
         ? [
             {
+              ...recordBase(event, runId, [...event.path, event.node]),
               kind: 'completion',
-              ts: event.ts,
-              path: [...event.path, event.node],
               unit: 'dag-node',
               label: event.node,
               outcome: outcomeSummary(event.outcome),
@@ -178,14 +168,54 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
     case 'job:end':
       return [
         {
+          ...recordBase(event, runId),
           kind: 'completion',
-          ts: event.ts,
-          path: event.path,
           unit: 'job',
           label: event.label,
           outcome: outcomeSummary(event.outcome),
         },
-        ...emittedRevisionRecord(event, event.outcome),
+        ...emittedRevisionRecord(event, event.outcome, runId),
+      ];
+    case 'advisor:consult':
+      return [
+        {
+          ...recordBase(event, runId),
+          kind: 'advisor-consult',
+          label: event.label,
+          call: event.call,
+          question: event.question,
+          reply: event.reply,
+          model: event.model,
+        },
+      ];
+    case 'human:gate':
+      return [
+        {
+          ...recordBase(event, runId),
+          kind: 'lifecycle-transition',
+          unit: 'job',
+          from: 'running',
+          to: 'paused',
+          reason: event.prompt,
+          resumeCommand: event.resumeCommand,
+          acknowledgement: {
+            name: event.name,
+            prompt: event.prompt,
+          },
+        },
+      ];
+    case 'limit:pause':
+      return [
+        {
+          ...recordBase(event, runId),
+          kind: 'lifecycle-transition',
+          unit: 'job',
+          from: 'running',
+          to: 'paused',
+          reason: event.reason,
+          resumeCommand: event.resumeCommand,
+          metadata: { code: event.code },
+        },
       ];
     case 'loop:review': {
       if (event.outcome.status === 'pass') return [];
@@ -198,9 +228,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
         event.accepted === false ? 'rejected' : 'accepted';
       const records: SemanticRunRecord[] = [
         {
+          ...recordBase(event, runId),
           kind: 'surfacing',
-          ts: event.ts,
-          path: event.path,
           source: 'loop-review',
           decision,
           severity: strongestFinding(revision?.findings),
@@ -210,9 +239,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
       ];
       if (revision) {
         records.push({
+          ...recordBase(event, runId),
           kind: 'revision-routed',
-          ts: event.ts,
-          path: event.path,
           sourceEvent: 'loop:review',
           decision,
           revision,
@@ -223,9 +251,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
     case 'loop:end':
       return [
         {
+          ...recordBase(event, runId),
           kind: 'completion',
-          ts: event.ts,
-          path: event.path,
           unit: 'loop',
           outcome: outcomeSummary(event.outcome),
           iterations: event.iterations,
@@ -241,9 +268,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
       const decision: SemanticDecision = event.accepted ? 'accepted' : 'rejected';
       return [
         {
+          ...recordBase(event, runId, at),
           kind: 'surfacing',
-          ts: event.ts,
-          path: at,
           source: 'dag-kickback',
           decision,
           severity: 'block',
@@ -253,9 +279,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
           note: event.note,
         },
         {
+          ...recordBase(event, runId, at),
           kind: 'revision-routed',
-          ts: event.ts,
-          path: at,
           sourceEvent: 'dag:kickback',
           decision,
           revision: {
@@ -270,9 +295,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
     case 'dag:end':
       return [
         {
+          ...recordBase(event, runId),
           kind: 'completion',
-          ts: event.ts,
-          path: event.path,
           unit: 'dag',
           outcome: outcomeSummary(event.outcome),
         },
@@ -280,9 +304,8 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
     case 'proof':
       return [
         {
+          ...recordBase(event, runId),
           kind: 'proof',
-          ts: event.ts,
-          path: event.path,
           name: event.name,
           artifact: event.artifact,
         },
@@ -297,16 +320,21 @@ export function semanticRecordsFromEvent(event: LoopEvent): SemanticRunRecord[] 
 export function readSemanticRecords(
   runId: string,
 ): SemanticRunRecord[] | undefined {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(runId)) return undefined;
   const path = runSemanticRecordsPath(runId);
-  if (!existsSync(path)) return undefined;
-  const raw = readFileSync(path, 'utf8').trim();
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8').trim();
+  } catch {
+    return undefined;
+  }
   if (!raw) return [];
   const records: SemanticRunRecord[] = [];
   for (const line of raw.split('\n')) {
     try {
-      records.push(JSON.parse(line) as SemanticRunRecord);
+      records.push(adaptSemanticRunRecord(JSON.parse(line), runId));
     } catch {
-      /* skip an unparseable line */
+      /* skip a torn or schema-invalid line */
     }
   }
   return records;
@@ -329,26 +357,62 @@ export function formatSemanticRecord(record: SemanticRunRecord): string {
       return `${at}revision routed ${record.sourceEvent} ${record.decision}${record.revision.target ? ` -> ${record.revision.target}` : ''}: ${record.revision.reason}`;
     case 'proof':
       return `${at}proof ${record.name}: ${record.artifact.title ?? record.artifact.path ?? record.artifact.kind}`;
+    case 'advisor-consult':
+      return `${at}advisor ${record.label} call ${record.call}${record.model ? ` (${record.model})` : ''}: ${record.reply}`;
+    case 'gate-verdict':
+      return `${at}gate ${record.gate} iteration ${record.iteration}: ${record.met ? 'met' : 'unmet'}${record.confidence !== undefined ? ` [${record.confidence}]` : ''}: ${record.reason}`;
+    case 'benchmark-outcome':
+      return `${at}benchmark ${record.benchmark}/${record.taskId} ${record.variant}: ${record.outcome.status}${record.outcome.summary ? ` - ${record.outcome.summary}` : ''}`;
+    case 'refusal':
+      return `${at}refusal ${record.category}${record.retryable ? ' retryable' : ''}: ${record.reason}`;
+    case 'capability-gap':
+      return `${at}capability gap ${record.requirement.kind} ${record.requirement.name} (${record.disposition}): ${record.reason}`;
+    case 'handoff':
+      return `${at}handoff ${record.handoffId} ${record.sender} -> ${record.recipient} ${record.state}: ${record.task}`;
+    case 'trigger-invocation':
+      return `${at}trigger ${record.adapter}/${record.trigger} ${record.phase} ${record.action}: ${record.invocationId}`;
+    case 'cost-snapshot':
+      return `${at}cost ${record.phase}${record.report.spentUsd !== undefined ? `: $${record.report.spentUsd}` : ''}`;
+    case 'preflight-classification':
+      return `${at}preflight ${record.result.engine}${record.result.model ? `/${record.result.model}` : ''}: ${record.result.ok ? 'pass' : record.result.failure} - ${record.result.detail}`;
+    case 'lifecycle-transition':
+      return `${at}lifecycle ${record.unit} ${record.from ? `${record.from} -> ` : ''}${record.to}${record.reason ? `: ${record.reason}` : ''}`;
   }
 }
 
-/** Append-only semantic JSONL sink. Truncates any existing file at the start. */
-export function makeSemanticRecorder(path: string): (event: LoopEvent) => void {
+export interface SemanticRecorder {
+  sink: (event: LoopEvent) => void;
+  write: (record: unknown) => void;
+}
+
+/** Validated semantic JSONL sink. Truncates any existing file at the start. */
+export function makeSemanticRecorder(
+  path: string,
+  runId?: string,
+): SemanticRecorder {
+  let enabled = true;
   try {
     ensureDir(path);
     writeFileSync(path, '');
   } catch {
-    return () => {};
+    enabled = false;
   }
-  return (event) => {
-    const records = semanticRecordsFromEvent(event);
-    if (!records.length) return;
+
+  const write = (record: unknown) => {
+    if (!enabled) return;
+    const parsed = safeParseSemanticRunRecord(record);
+    if (!parsed.success) return;
     try {
-      for (const record of records) {
-        appendFileSync(path, `${JSON.stringify(record)}\n`);
-      }
+      appendFileSync(path, `${JSON.stringify(parsed.data)}\n`);
     } catch {
       /* best-effort: semantic records must never break the run */
     }
+  };
+
+  return {
+    write,
+    sink(event) {
+      for (const record of semanticRecordsFromEvent(event, runId)) write(record);
+    },
   };
 }

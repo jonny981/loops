@@ -36,6 +36,7 @@ import type {
   ProofRecord,
 } from '../core/types.ts';
 import { makeSemanticRecorder } from './semantic.ts';
+import { SEMANTIC_RUN_RECORD_SCHEMA_VERSION } from './semantic-schema.ts';
 
 /** High-frequency transcript deltas: kept out of the record, as in `recordTo`. */
 const NOISE: ReadonlySet<LoopEvent['kind']> = new Set([
@@ -137,15 +138,16 @@ export function startSupervisor(input: {
   } catch {
     /* best-effort */
   }
-  const semanticSink = makeSemanticRecorder(semanticPath);
+  const semanticRecorder = makeSemanticRecorder(semanticPath, input.runId);
+  const startedAt = Date.now();
 
   const status: RunStatus = {
     runId: input.runId,
     pid: process.pid,
     cwd: input.cwd,
     title: input.title,
-    startedAt: Date.now(),
-    updatedAt: Date.now(),
+    startedAt,
+    updatedAt: startedAt,
     status: 'running',
     shape: input.shape,
     live: {
@@ -154,6 +156,16 @@ export function startSupervisor(input: {
       usage: { inputTokens: 0, outputTokens: 0, calls: 0 },
     },
   };
+  semanticRecorder.write({
+    schemaVersion: SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
+    runId: input.runId,
+    kind: 'lifecycle-transition',
+    ts: startedAt,
+    path: [],
+    unit: 'run',
+    to: 'running',
+    reason: 'supervision started',
+  });
   const proofs: ProofRecord[] = [];
   const active = new Map<string, CurrentWork>();
 
@@ -192,7 +204,7 @@ export function startSupervisor(input: {
       } catch {
         /* best-effort */
       }
-      semanticSink(event);
+      semanticRecorder.sink(event);
     }
     switch (event.kind) {
       case 'loop:iteration':
@@ -276,8 +288,9 @@ export function startSupervisor(input: {
   };
 
   const finish = (outcome: Outcome) => {
+    const endedAt = Date.now();
     status.status = outcome.status;
-    status.endedAt = Date.now();
+    status.endedAt = endedAt;
     status.live.current = undefined;
     status.live.lastOutcome = {
       status: outcome.status,
@@ -287,6 +300,17 @@ export function startSupervisor(input: {
     if (proofs.length)
       writeEvidenceIndex(evidencePath, input.title, input.cwd, proofs);
     writeStatus();
+    semanticRecorder.write({
+      schemaVersion: SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
+      runId: input.runId,
+      kind: 'lifecycle-transition',
+      ts: endedAt,
+      path: [],
+      unit: 'run',
+      from: 'running',
+      to: outcome.status,
+      reason: outcome.summary,
+    });
   };
 
   return { runId: input.runId, dir, sink, finish };

@@ -190,6 +190,7 @@ export function loop(config: LoopConfig): Job {
           ts: ts(),
           path,
           which: 'start',
+          iteration: 0,
           result: r,
         });
         if (!r.met)
@@ -382,6 +383,7 @@ export function loop(config: LoopConfig): Job {
             ts: ts(),
             path,
             which: 'stopOn',
+            iteration,
             result: r,
           });
           if (r.met)
@@ -409,6 +411,7 @@ export function loop(config: LoopConfig): Job {
             ts: ts(),
             path,
             which: 'until',
+            iteration,
             result: conv,
           });
           // Thread the latest explicit verdict (met or not) to the next body

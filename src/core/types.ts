@@ -509,6 +509,8 @@ export type LoopEvent =
       ts: number;
       path: string[];
       which: ConditionKind;
+      /** The enclosing loop iteration; 0 for its start gate. */
+      iteration?: number;
       result: ConditionResult;
     }
   | {
