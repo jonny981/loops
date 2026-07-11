@@ -323,43 +323,55 @@ const costSnapshotRecordSchema = record('cost-snapshot', {
     .optional(),
 });
 
+const preflightBaseShape = {
+  engine: z.string(),
+  model: z.string().optional(),
+  detail: z.string(),
+  latencyMs: nonnegativeInt,
+  usage: usageSchema.optional(),
+};
+
+const preflightFailureSchema = z.enum([
+  'auth',
+  'billing',
+  'missing-cli',
+  'model-unavailable',
+  'rate-limit',
+  'quota',
+  'timeout',
+  'aborted',
+  'unknown',
+]);
+
 const preflightClassificationRecordSchema = record(
   'preflight-classification',
   {
-    engine: z.string(),
-    model: z.string().optional(),
-    ok: z.boolean(),
-    failure: z
-      .enum([
-        'auth',
-        'billing',
-        'missing-cli',
-        'model-unavailable',
-        'rate-limit',
-        'quota',
-        'timeout',
-        'aborted',
-        'unknown',
-      ])
-      .optional(),
-    detail: z.string(),
-    latencyMs: nonnegativeInt,
-    usage: usageSchema.optional(),
+    result: z.discriminatedUnion('ok', [
+      z.object({ ...preflightBaseShape, ok: z.literal(true) }).strict(),
+      z
+        .object({
+          ...preflightBaseShape,
+          ok: z.literal(false),
+          failure: preflightFailureSchema,
+        })
+        .strict(),
+    ]),
   },
 );
 
+const lifecycleStateSchema = z.enum([
+  'running',
+  'pass',
+  'fail',
+  'aborted',
+  'exhausted',
+  'paused',
+]);
+
 const lifecycleTransitionRecordSchema = record('lifecycle-transition', {
-  unit: z.enum([
-    'run',
-    'job',
-    'dag-node',
-    'workstream',
-    'artifact',
-    'handoff',
-    'trigger',
-  ]),
-  from: z.string().optional(),
-  to: z.string().min(1),
+  unit: z.enum(['run', 'job', 'dag-node']),
+  from: lifecycleStateSchema.optional(),
+  to: lifecycleStateSchema,
   reason: z.string().optional(),
   resumeCommand: z.string().optional(),
   acknowledgement: z
@@ -454,10 +466,11 @@ export function adaptSemanticRunRecord(
     candidate = {
       ...value,
       schemaVersion: SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
+      ...(suppliedRunId !== undefined && value.runId === undefined
+        ? { runId: suppliedRunId }
+        : {}),
     };
   }
-  if (suppliedRunId !== undefined && candidate.runId === undefined)
-    candidate = { ...candidate, runId: suppliedRunId };
 
   return parseSemanticRunRecord(candidate);
 }

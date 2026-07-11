@@ -87,6 +87,7 @@ describe('semantic run record schema v1', () => {
   });
 
   it('rejects unsupported versions, kinds, fields, and invalid constrained values', () => {
+    const fromJsonSchema = z.fromJSONSchema(semanticRunRecordJsonSchema);
     const valid = {
       schemaVersion: 1,
       kind: 'gate-verdict',
@@ -99,22 +100,30 @@ describe('semantic run record schema v1', () => {
       confidence: 0.9,
     };
 
-    expect(safeParseSemanticRunRecord({ ...valid, schemaVersion: 2 }).success).toBe(false);
-    expect(safeParseSemanticRunRecord({ ...valid, kind: 'unknown' }).success).toBe(false);
-    expect(safeParseSemanticRunRecord({ ...valid, extra: true }).success).toBe(false);
-    expect(safeParseSemanticRunRecord({ ...valid, confidence: 1.01 }).success).toBe(false);
-    expect(safeParseSemanticRunRecord({ ...valid, ts: -1 }).success).toBe(false);
+    const invalid = [
+      { ...valid, schemaVersion: 2 },
+      { ...valid, kind: 'unknown' },
+      { ...valid, extra: true },
+      { ...valid, confidence: 1.01 },
+      { ...valid, ts: -1 },
+    ];
+    for (const value of invalid) {
+      expect(safeParseSemanticRunRecord(value).success).toBe(false);
+      expect(() => fromJsonSchema.parse(value)).toThrow();
+    }
     expect(
       safeParseSemanticRunRecord({
         schemaVersion: 1,
         kind: 'preflight-classification',
         ts: 1,
         path: [],
-        engine: 'codex',
-        ok: false,
-        failure: 'timeout',
-        detail: 'late',
-        latencyMs: -1,
+        result: {
+          engine: 'codex',
+          ok: false,
+          failure: 'timeout',
+          detail: 'late',
+          latencyMs: -1,
+        },
       }).success,
     ).toBe(false);
     expect(
@@ -122,6 +131,38 @@ describe('semantic run record schema v1', () => {
         .success,
     ).toBe(false);
     expect(() => parseSemanticRunRecord(valid)).not.toThrow();
+
+    const contradictoryPreflight = [
+      {
+        schemaVersion: 1,
+        kind: 'preflight-classification',
+        ts: 1,
+        path: [],
+        result: {
+          engine: 'codex',
+          ok: true,
+          failure: 'timeout',
+          detail: 'ok',
+          latencyMs: 1,
+        },
+      },
+      {
+        schemaVersion: 1,
+        kind: 'preflight-classification',
+        ts: 1,
+        path: [],
+        result: {
+          engine: 'codex',
+          ok: false,
+          detail: 'failed',
+          latencyMs: 1,
+        },
+      },
+    ];
+    for (const value of contradictoryPreflight) {
+      expect(safeParseSemanticRunRecord(value).success).toBe(false);
+      expect(() => fromJsonSchema.parse(value)).toThrow();
+    }
   });
 
   it('adapts only known unversioned 0.7.0 records without mutating the archive', () => {
@@ -143,6 +184,15 @@ describe('semantic run record schema v1', () => {
       'revision-routed',
       'proof',
     ]);
+
+    const versioned = {
+      schemaVersion: 1,
+      kind: 'dispatch',
+      ts: 1,
+      path: [],
+      unit: 'job',
+    } as const;
+    expect(adaptSemanticRunRecord(versioned, 'ignored-a1b2c3')).toEqual(versioned);
 
     expect(() =>
       adaptSemanticRunRecord({
