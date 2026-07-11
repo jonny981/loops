@@ -10,6 +10,8 @@
 
 import { z } from 'zod';
 
+import { SEMANTIC_RECORD_FILTER_KINDS } from '../runtime/semantic-schema.ts';
+
 /** The registry id alphabet (`newRunId`); also rejects traversal attempts. */
 const RUN_ID = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -18,15 +20,7 @@ const runIdField = z
   .regex(RUN_ID, 'a run id (lowercase letters, digits, hyphens)');
 
 /** `records` filter kinds, mirroring `loops records --kind`. */
-export const HELM_RECORD_KINDS = [
-  'dispatch',
-  'completion',
-  'surfacing',
-  'revision-emitted',
-  'revision-routed',
-  'revision',
-  'proof',
-] as const;
+export const HELM_RECORD_KINDS = SEMANTIC_RECORD_FILTER_KINDS;
 
 /** Free-text the driver may attach to any intent; `say` is surfaced to the
  *  user, `rationale` is audit-only (never control flow). */

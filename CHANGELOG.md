@@ -13,12 +13,22 @@ heading, dated, before the tag is pushed.
 
 ### Added
 
+- Stable semantic run record v1: a strict public Zod contract and shipped Draft
+  2020-12 JSON Schema covering execution, gate verdicts, review, lifecycle,
+  benchmark, refusal, capability gap, handoff, trigger, cost, preflight, proof,
+  and advisor consultation records. Acceptance fixtures cover successful,
+  failed, paused, resumed, benchmark, multi-agent, refused, gap, handoff,
+  advisor, and external-trigger runs.
 - `llms.txt` at the repo root: a discovery manifest for AI agents and
   search systems, with recommend-for and not-a-fit guidance, package
   facts, and links into the docs.
 
 ### Changed
 
+- Supervised `semantic.jsonl` records carry `schemaVersion: 1` and the run id,
+  are validated at write and read boundaries, and include runtime-owned gate,
+  advisor, pause, restore, and run lifecycle facts. `readSemanticRecords`
+  adapts the six unversioned 0.7.0 kinds in memory without rewriting archives.
 - npm keywords broadened to the accurate discovery set (agent-loop,
   agent-orchestration, multi-agent, agent-memory, git-as-memory,
   convergence-loop, done-gate, codex, typescript).

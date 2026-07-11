@@ -124,6 +124,8 @@ src/runtime/
                       listRuns/readRunStatus/readRunProgress/formatEvent read
   semantic.ts         semanticRecordsFromEvent + makeSemanticRecorder — the decision
                       stream (dispatch/completion/surfacing/revision) behind `records`
+  semantic-schema.ts  strict semantic record v1 Zod contract, JSON Schema source,
+                      canonical kind vocabulary, and the 0.7.0 in-memory adapter
   hub.ts, signals.ts  event fan-out + abort plumbing
 src/helm/
   intent.ts           the driver contract: 9 intents (zod), lenient wrapper parser

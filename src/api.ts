@@ -331,10 +331,23 @@ export {
   semanticRecordsFromEvent,
   readSemanticRecords,
   formatSemanticRecord,
+} from './runtime/semantic.ts';
+export {
+  SEMANTIC_RECORD_FILTER_KINDS,
+  SEMANTIC_RUN_RECORD_KINDS,
+  SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
+  adaptSemanticRunRecord,
+  parseSemanticRunRecord,
+  safeParseSemanticRunRecord,
+  semanticRunRecordJsonSchema,
+  semanticRunRecordSchema,
   type SemanticDecision,
   type SemanticOutcome,
+  type SemanticRecordFilterKind,
+  type SemanticRecordKind,
+  type SemanticRecordOf,
   type SemanticRunRecord,
-} from './runtime/semantic.ts';
+} from './runtime/semantic-schema.ts';
 
 // Provider resilience — a shared failure vocabulary, a fallback chain that is
 // just another Engine, and preflight (one tiny live turn per lane, classified,

@@ -9,6 +9,8 @@
  * pause-point (a dispatched run is polled later, never awaited inline).
  */
 
+import { SEMANTIC_RECORD_FILTER_KINDS } from '../runtime/semantic-schema.ts';
+
 export interface HelmSystemOptions {
   /** Import specifier authored recipes should use (default `@loops-adk/core`;
    *  tests point it at this checkout's `src/api.ts`). */
@@ -26,7 +28,7 @@ REPLY FORMAT — every turn you reply with exactly ONE JSON intent object. Brief
 {"action":"validate","file":"name.loop.ts"}                        load a recipe and print its shape; no model calls
 {"action":"run","file":"name.loop.ts","args":["--flag","v"]}       dispatch a supervised background run; returns a runId
 {"action":"status","runId":"?"}                                    one run's live rollup, or all runs when runId is omitted
-{"action":"records","runId":"...","kind":"?","last":20}            a run's decision stream (kind: dispatch|completion|surfacing|revision|proof)
+{"action":"records","runId":"...","kind":"?","last":20}            a run's decision stream (kind: ${SEMANTIC_RECORD_FILTER_KINDS.join('|')})
 {"action":"ack","runId":"...","gate":"name"}                       lift a human gate and resume the run — only after the human approves
 {"action":"stop_run","runId":"..."}                                abort a running dispatch
 {"action":"done","say":"?"}                                        the objective is met (or nothing is left to do)

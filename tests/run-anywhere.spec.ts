@@ -644,6 +644,19 @@ export default defineJob(dag({
         .map((line) => JSON.parse(line) as { kind: string; outcome?: { status: string } });
       expect(records.some((r) => r.kind === 'completion' && r.outcome?.status === 'pass')).toBe(true);
 
+      const gates = await loops(
+        ['records', runId!, '--kind', 'gate-verdict', '--json'],
+        dir,
+        env,
+      );
+      expect(gates.code).toBe(0);
+      expect(
+        gates.out
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line) as { kind: string }),
+      ).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'gate-verdict' })]));
+
       const last = await loops(
         ['records', runId!, '--kind', 'completion', '--last', '1', '--json'],
         dir,

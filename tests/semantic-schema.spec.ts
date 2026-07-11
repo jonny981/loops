@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -10,10 +11,15 @@ import {
   SEMANTIC_RUN_RECORD_KINDS,
   SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
   adaptSemanticRunRecord,
+  formatSemanticRecord,
   parseSemanticRunRecord,
   safeParseSemanticRunRecord,
   semanticRunRecordJsonSchema,
-} from '../src/runtime/semantic-schema.ts';
+  type SemanticRecordOf,
+} from '../src/api.ts';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const require = createRequire(import.meta.url);
 
 const fixtures = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -84,6 +90,57 @@ describe('semantic run record schema v1', () => {
       ...SEMANTIC_RUN_RECORD_KINDS,
       'revision',
     ]);
+
+    const gate: SemanticRecordOf<'gate-verdict'> = {
+      schemaVersion: 1,
+      kind: 'gate-verdict',
+      ts: 1,
+      path: [],
+      gate: 'until',
+      iteration: 1,
+      met: true,
+      reason: 'done',
+    };
+    expect(gate.kind).toBe('gate-verdict');
+  });
+
+  it('ships a checked-in schema artifact that cannot drift from the runtime contract', () => {
+    const checkedIn = JSON.parse(
+      readFileSync(
+        join(repoRoot, 'schemas', 'semantic-run-record-v1.schema.json'),
+        'utf8',
+      ),
+    ) as unknown;
+    expect(checkedIn).toEqual(semanticRunRecordJsonSchema);
+
+    const pkg = JSON.parse(
+      readFileSync(join(repoRoot, 'package.json'), 'utf8'),
+    ) as {
+      exports: Record<string, string>;
+      files: string[];
+      scripts: Record<string, string>;
+    };
+    expect(pkg.files).toContain('schemas');
+    expect(pkg.files).toContain('docs/semantic-records.md');
+    expect(pkg.exports['./schemas/semantic-run-record-v1.schema.json']).toBe(
+      './schemas/semantic-run-record-v1.schema.json',
+    );
+    expect(pkg.scripts['schema:check']).toBeTruthy();
+
+    expect(
+      require('@loops-adk/core/schemas/semantic-run-record-v1.schema.json'),
+    ).toEqual(semanticRunRecordJsonSchema);
+  });
+
+  it('formats every fixture record without an unhandled record kind', () => {
+    const dir = join(fixtures, 'v1');
+    for (const file of readdirSync(dir).filter((name) => name.endsWith('.jsonl'))) {
+      for (const value of readJsonl(join(dir, file))) {
+        const formatted = formatSemanticRecord(parseSemanticRunRecord(value));
+        expect(formatted, file).toEqual(expect.any(String));
+        expect(formatted, file).not.toContain('undefined');
+      }
+    }
   });
 
   it('rejects unsupported versions, kinds, fields, and invalid constrained values', () => {

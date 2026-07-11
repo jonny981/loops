@@ -1,6 +1,6 @@
 ---
 name: supervise-loop-run
-description: Use when an agent needs to observe, monitor, or supervise a running loops job from another process: discover live runs, read a run's state and shape, stream its events, inspect the decisions it made (dispatch/completion/surfacing/revision), or decide whether to intervene. Load this when watching a long run or supervising several at once. Requires the run to have been started with `--supervise`.
+description: Use when an agent needs to observe, monitor, or supervise a running loops job from another process: discover live runs, read a run's state and shape, stream its events, inspect its versioned semantic records, or decide whether to intervene. Load this when watching a long run or supervising several at once. Requires the run to have been started with `--supervise`.
 ---
 
 # Supervising a loop run
@@ -19,7 +19,7 @@ loops run build.loop.ts --supervise   # in one terminal (or backgrounded)
 
 **`loops tail <runId>`** streams the raw event log live (Ctrl-C to stop). It ends on its own when the run reaches a terminal status or its process disappears. Use this to watch a turn unfold.
 
-**`loops records <runId>`** is the **primary agent API**: the semantic decision stream, one line per meaningful thing the run decided. This is what an agent reads to reason about a run, not the raw `--json` event firehose. Five kinds:
+**`loops records <runId>`** is the **primary agent API**: the validated semantic decision stream, one line per meaningful fact or decision. This is what an agent reads to reason about a run, not the raw `--json` event firehose. Runtime-produced kinds include:
 
 | kind | meaning |
 | --- | --- |
@@ -28,19 +28,24 @@ loops run build.loop.ts --supervise   # in one terminal (or backgrounded)
 | `surfacing` | a review or kickback raised feedback (carries severity + reason) |
 | `revision-emitted` | an outcome asked for another pass |
 | `revision-routed` | that revision was routed to a target (accepted/rejected) |
+| `proof` | a named evidence artifact was recorded |
+| `advisor-consult` | a bounded advisor question and reply completed |
+| `gate-verdict` | a start, stop, or convergence gate returned its verdict and evidence |
+| `lifecycle-transition` | a run or job started, paused, resumed, or finished |
 
 Filter it down for a machine-readable slice:
 
 ```bash
 loops records <runId> --json                                  # everything, as JSONL
 loops records <runId> --kind completion                       # just what finished
+loops records <runId> --kind gate-verdict --json              # convergence decisions and evidence
 loops records <runId> --kind revision                         # both revision kinds (emitted + routed)
 loops records <runId> --path ship/implementation --json       # only this subtree of the loop tree
 loops records <runId> --kind surfacing --since 2026-07-01T09:00:00Z
 loops records <runId> --last 20                               # the most recent 20 matching records
 ```
 
-`--path` is a slash-separated prefix over the record's position in the loop tree. `--kind revision` is the convenience union of `revision-emitted` and `revision-routed`.
+`--path` is a slash-separated prefix over the record's position in the loop tree. `--kind revision` is the convenience union of `revision-emitted` and `revision-routed`. Every new line carries `schemaVersion: 1`; see `docs/semantic-records.md` for the complete kind vocabulary and archive migration rules.
 
 ## Deciding what to do next
 
@@ -56,9 +61,9 @@ Read `records` (and `status` for tokens/gate) to choose an action, since loops d
 The read side is on the public surface, so an agent supervising a fleet (killing the ones that drift, watching the ones mid-revision) reads the same files programmatically:
 
 ```ts
-import { listRuns, readRunStatus, readRunProgress, runEventsPath, runSemanticRecordsPath } from '@loops-adk/core';
+import { listRuns, parseSemanticRunRecord, readRunProgress, readRunStatus, readSemanticRecords } from '@loops-adk/core';
 ```
 
-`listRuns()` and `readRunStatus(runId)` mirror `list`/`status`; `readRunProgress(runId, { recent })` is the one-read rollup behind the blocker line (stage, iteration, last gate verdict, usage, blocker, recent events); `runEventsPath`/`runSemanticRecordsPath` locate the two JSONL streams to read directly. `semanticRecordsFromEvent(event)` derives the semantic records from a raw event if you tail the event stream yourself.
+`listRuns()` and `readRunStatus(runId)` mirror `list`/`status`; `readRunProgress(runId, { recent })` is the one-read rollup behind the blocker line. `readSemanticRecords(runId)` returns validated records and adapts recognised 0.7.0 lines in memory. `parseSemanticRunRecord(value)` validates an explicit candidate against v1. `semanticRecordsFromEvent(event)` derives schema-valid semantic records from a raw event if you tail the event stream yourself.
 
 To author or shape the run you are supervising, see `skills/author-loop/SKILL.md`; to compose the agent team inside it, see `skills/design-agent-team/SKILL.md`.

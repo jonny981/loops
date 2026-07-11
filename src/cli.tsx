@@ -48,6 +48,7 @@ import {
   readSemanticRecords,
   type SemanticRunRecord,
 } from './runtime/semantic.ts';
+import { SEMANTIC_RECORD_FILTER_KINDS } from './runtime/semantic-schema.ts';
 import type { Job, LoopConfig, Outcome } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
 
@@ -1627,7 +1628,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("show a supervised run's semantic records")
     .option(
       '--kind <kind>',
-      'filter by record kind: dispatch | completion | surfacing | revision-emitted | revision-routed | revision | proof',
+      `filter by record kind: ${SEMANTIC_RECORD_FILTER_KINDS.join(' | ')}`,
     )
     .option('--path <path>', 'filter by slash-separated record path prefix')
     .option('--since <time>', 'show records at or after an epoch ms or ISO timestamp')
@@ -1640,15 +1641,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.exitCode = 1;
         return;
       }
-      const validKinds: readonly string[] = [
-        'dispatch',
-        'completion',
-        'surfacing',
-        'revision-emitted',
-        'revision-routed',
-        'revision',
-        'proof',
-      ];
+      const validKinds: readonly string[] = SEMANTIC_RECORD_FILTER_KINDS;
       if (flags.kind && !validKinds.includes(flags.kind)) {
         process.stderr.write(
           `--kind must be one of ${validKinds.join(' | ')}, got "${flags.kind}"\n`,

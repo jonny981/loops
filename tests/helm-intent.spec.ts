@@ -4,9 +4,11 @@ import {
   extractFirstJson,
   parseHelmIntent,
   escapeControlInStrings,
+  HELM_RECORD_KINDS,
   HelmParseError,
   HelmIntentError,
 } from '../src/helm/intent.ts';
+import { SEMANTIC_RECORD_FILTER_KINDS } from '../src/api.ts';
 
 describe('extractFirstJson', () => {
   it('parses a bare JSON object', () => {
@@ -112,6 +114,15 @@ describe('parseHelmIntent', () => {
     expect(() =>
       parseHelmIntent('{"action":"records","runId":"fix-1a","kind":"everything"}'),
     ).toThrow(HelmIntentError);
+  });
+
+  it('uses the canonical semantic record kind vocabulary', () => {
+    expect(HELM_RECORD_KINDS).toEqual(SEMANTIC_RECORD_FILTER_KINDS);
+    expect(
+      parseHelmIntent(
+        '{"action":"records","runId":"fix-1a","kind":"gate-verdict"}',
+      ),
+    ).toMatchObject({ action: 'records', kind: 'gate-verdict' });
   });
 
   it('tolerates a rationale field on any action', () => {
