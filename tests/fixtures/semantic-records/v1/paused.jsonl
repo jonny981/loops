@@ -1,0 +1,2 @@
+{"schemaVersion":1,"runId":"paused-a1b2c3","kind":"lifecycle-transition","ts":3000,"path":["release"],"unit":"run","from":"running","to":"paused","reason":"release approval required","resumeCommand":"loops run release.loop.ts --resume .loops/release.ckpt --ack release","acknowledgement":{"name":"release","prompt":"Approve the release"}}
+{"schemaVersion":1,"runId":"paused-a1b2c3","kind":"completion","ts":3001,"path":["release"],"unit":"dag","outcome":{"status":"paused","summary":"release approval required"}}

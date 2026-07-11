@@ -1,0 +1,5 @@
+{"schemaVersion":1,"runId":"successful-a1b2c3","kind":"lifecycle-transition","ts":1000,"path":[],"unit":"run","to":"running","reason":"supervision started"}
+{"schemaVersion":1,"runId":"successful-a1b2c3","kind":"dispatch","ts":1001,"path":["build"],"unit":"job","label":"compile"}
+{"schemaVersion":1,"runId":"successful-a1b2c3","kind":"gate-verdict","ts":1002,"path":["build"],"gate":"until","iteration":1,"met":true,"reason":"tests passed","confidence":0.99,"output":"12 tests passed"}
+{"schemaVersion":1,"runId":"successful-a1b2c3","kind":"completion","ts":1003,"path":["build"],"unit":"loop","outcome":{"status":"pass","summary":"compiled"},"iterations":1}
+{"schemaVersion":1,"runId":"successful-a1b2c3","kind":"lifecycle-transition","ts":1004,"path":[],"unit":"run","from":"running","to":"pass","reason":"compiled"}

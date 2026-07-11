@@ -1,0 +1,1 @@
+{"schemaVersion":1,"runId":"advisor-a1b2c3","kind":"advisor-consult","ts":10000,"path":["implementation"],"label":"worker","call":1,"question":"Which migration is safer?","reply":"Use an additive adapter.","model":"claude-opus"}

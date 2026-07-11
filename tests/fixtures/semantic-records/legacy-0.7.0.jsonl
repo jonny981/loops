@@ -1,0 +1,6 @@
+{"kind":"dispatch","ts":12000,"path":["legacy"],"unit":"job","label":"build"}
+{"kind":"completion","ts":12001,"path":["legacy"],"unit":"job","label":"build","outcome":{"status":"pass","summary":"built"}}
+{"kind":"surfacing","ts":12002,"path":["legacy"],"source":"loop-review","decision":"accepted","severity":"block","reason":"fix it"}
+{"kind":"revision-emitted","ts":12003,"path":["legacy"],"sourceEvent":"job:end","revision":{"reason":"fix it","findings":[{"severity":"advisory","evidence":"legacy alias"}]}}
+{"kind":"revision-routed","ts":12004,"path":["legacy"],"sourceEvent":"loop:review","decision":"rejected","revision":{"reason":"fix it"}}
+{"kind":"proof","ts":12005,"path":["legacy"],"name":"report","artifact":{"kind":"markdown","path":"report.md"}}

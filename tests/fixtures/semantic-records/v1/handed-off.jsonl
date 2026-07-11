@@ -1,0 +1,1 @@
+{"schemaVersion":1,"runId":"handoff-a1b2c3","kind":"handoff","ts":9000,"path":["implementation"],"handoffId":"handoff-01","sender":"implementer","recipient":"reviewer","task":"Review the completed patch","state":"created","idempotencyKey":"implementation-to-reviewer-01","references":[{"kind":"commit","ref":"def456"}]}

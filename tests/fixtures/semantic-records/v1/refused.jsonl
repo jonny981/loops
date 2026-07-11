@@ -1,0 +1,1 @@
+{"schemaVersion":1,"runId":"refused-a1b2c3","kind":"refusal","ts":7000,"path":["deploy"],"category":"permission","reason":"production credentials are unavailable","retryable":true,"actor":"deploy-agent","references":[{"kind":"artifact","ref":"evidence/auth.txt"}]}
