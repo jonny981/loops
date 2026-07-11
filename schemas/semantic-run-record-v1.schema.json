@@ -2,166 +2,468 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
     {
-      "type": "object",
-      "properties": {
-        "schemaVersion": {
-          "type": "number",
-          "const": 1
-        },
-        "ts": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "path": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "runId": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]*$"
-        },
-        "metadata": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/__schema0"
-          }
-        },
-        "kind": {
-          "type": "string",
-          "const": "dispatch"
-        },
-        "unit": {
-          "type": "string",
-          "enum": [
-            "job",
-            "dag-node"
-          ]
-        },
-        "label": {
-          "type": "string"
-        },
-        "node": {
-          "type": "string"
-        },
-        "attempt": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
-        }
-      },
-      "required": [
-        "schemaVersion",
-        "ts",
-        "path",
-        "kind",
-        "unit"
-      ],
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "properties": {
-        "schemaVersion": {
-          "type": "number",
-          "const": 1
-        },
-        "ts": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "path": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "runId": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]*$"
-        },
-        "metadata": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/__schema0"
-          }
-        },
-        "kind": {
-          "type": "string",
-          "const": "completion"
-        },
-        "unit": {
-          "type": "string",
-          "enum": [
-            "job",
-            "loop",
-            "dag",
-            "dag-node"
-          ]
-        },
-        "label": {
-          "type": "string"
-        },
-        "outcome": {
+      "oneOf": [
+        {
           "type": "object",
           "properties": {
-            "status": {
-              "type": "string",
-              "enum": [
-                "pass",
-                "fail",
-                "aborted",
-                "exhausted",
-                "paused"
-              ]
-            },
-            "summary": {
-              "type": "string"
-            },
-            "confidence": {
+            "schemaVersion": {
               "type": "number",
-              "minimum": 0,
-              "maximum": 1
+              "const": 1
             },
-            "late": {
-              "type": "boolean",
-              "const": true
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "dispatch"
+            },
+            "unit": {
+              "type": "string",
+              "const": "job"
+            },
+            "label": {
+              "type": "string"
             }
           },
           "required": [
-            "status"
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "label"
           ],
           "additionalProperties": false
         },
-        "iterations": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "attempt": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+        {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "dispatch"
+            },
+            "unit": {
+              "type": "string",
+              "const": "dag-node"
+            },
+            "node": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "node",
+            "attempt"
+          ],
+          "additionalProperties": false
         }
-      },
-      "required": [
-        "schemaVersion",
-        "ts",
-        "path",
-        "kind",
-        "unit",
-        "outcome"
-      ],
-      "additionalProperties": false
+      ]
+    },
+    {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "completion"
+            },
+            "unit": {
+              "type": "string",
+              "const": "job"
+            },
+            "label": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "aborted",
+                    "exhausted",
+                    "paused"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "late": {
+                  "type": "boolean",
+                  "const": true
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "label",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "completion"
+            },
+            "unit": {
+              "type": "string",
+              "const": "loop"
+            },
+            "outcome": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "aborted",
+                    "exhausted",
+                    "paused"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "late": {
+                  "type": "boolean",
+                  "const": true
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": false
+            },
+            "iterations": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "outcome",
+            "iterations"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "completion"
+            },
+            "unit": {
+              "type": "string",
+              "const": "dag"
+            },
+            "outcome": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "aborted",
+                    "exhausted",
+                    "paused"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "late": {
+                  "type": "boolean",
+                  "const": true
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "completion"
+            },
+            "unit": {
+              "type": "string",
+              "const": "dag-node"
+            },
+            "label": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pass",
+                    "fail",
+                    "aborted",
+                    "exhausted",
+                    "paused"
+                  ]
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "late": {
+                  "type": "boolean",
+                  "const": true
+                }
+              },
+              "required": [
+                "status"
+              ],
+              "additionalProperties": false
+            },
+            "attempt": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "label",
+            "outcome",
+            "attempt"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     {
       "type": "object",
@@ -1716,144 +2018,1756 @@
       "additionalProperties": false
     },
     {
-      "type": "object",
-      "properties": {
-        "schemaVersion": {
-          "type": "number",
-          "const": 1
-        },
-        "ts": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        "path": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "runId": {
-          "type": "string",
-          "pattern": "^[a-z0-9][a-z0-9-]*$"
-        },
-        "metadata": {
-          "type": "object",
-          "propertyNames": {
-            "type": "string"
-          },
-          "additionalProperties": {
-            "$ref": "#/$defs/__schema0"
-          }
-        },
-        "kind": {
-          "type": "string",
-          "const": "lifecycle-transition"
-        },
-        "unit": {
-          "type": "string",
-          "enum": [
-            "run",
-            "job",
-            "dag-node"
+      "oneOf": [
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "run"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "created"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "run"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "const": "paused"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "resumeCommand": {
+                      "type": "string"
+                    },
+                    "acknowledgement": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "prompt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "prompt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "run"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "enum": [
+                        "pass",
+                        "fail",
+                        "aborted",
+                        "exhausted"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "run"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "paused"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "checkpoint": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "restored"
+                        },
+                        "restoredNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "totalNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "skipped"
+                        },
+                        "restoredNodes": {
+                          "type": "number",
+                          "const": 0
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "changed",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to",
+                "checkpoint"
+              ],
+              "additionalProperties": false
+            }
           ]
         },
-        "from": {
-          "type": "string",
-          "enum": [
-            "running",
-            "pass",
-            "fail",
-            "aborted",
-            "exhausted",
-            "paused"
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "job"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "created"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "job"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "const": "paused"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "resumeCommand": {
+                      "type": "string"
+                    },
+                    "acknowledgement": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "prompt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "prompt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "job"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "enum": [
+                        "pass",
+                        "fail",
+                        "aborted",
+                        "exhausted"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "job"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "paused"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "checkpoint": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "restored"
+                        },
+                        "restoredNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "totalNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "skipped"
+                        },
+                        "restoredNodes": {
+                          "type": "number",
+                          "const": 0
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "changed",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to",
+                "checkpoint"
+              ],
+              "additionalProperties": false
+            }
           ]
         },
-        "to": {
-          "type": "string",
-          "enum": [
-            "running",
-            "pass",
-            "fail",
-            "aborted",
-            "exhausted",
-            "paused"
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "loop"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "created"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "loop"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "const": "paused"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "resumeCommand": {
+                      "type": "string"
+                    },
+                    "acknowledgement": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "prompt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "prompt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "loop"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "enum": [
+                        "pass",
+                        "fail",
+                        "aborted",
+                        "exhausted"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "loop"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "paused"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "checkpoint": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "restored"
+                        },
+                        "restoredNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "totalNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "skipped"
+                        },
+                        "restoredNodes": {
+                          "type": "number",
+                          "const": 0
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "changed",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to",
+                "checkpoint"
+              ],
+              "additionalProperties": false
+            }
           ]
         },
-        "reason": {
-          "type": "string"
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "dag-node"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "created"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "dag-node"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "const": "paused"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "resumeCommand": {
+                      "type": "string"
+                    },
+                    "acknowledgement": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "prompt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "prompt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "schemaVersion": {
+                      "type": "number",
+                      "const": 1
+                    },
+                    "ts": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "runId": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9-]*$"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "$ref": "#/$defs/__schema0"
+                      }
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "lifecycle-transition"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "const": "dag-node"
+                    },
+                    "from": {
+                      "type": "string",
+                      "const": "running"
+                    },
+                    "to": {
+                      "type": "string",
+                      "enum": [
+                        "pass",
+                        "fail",
+                        "aborted",
+                        "exhausted"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "schemaVersion",
+                    "ts",
+                    "path",
+                    "kind",
+                    "unit",
+                    "from",
+                    "to"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "schemaVersion": {
+                  "type": "number",
+                  "const": 1
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "runId": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "metadata": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  }
+                },
+                "kind": {
+                  "type": "string",
+                  "const": "lifecycle-transition"
+                },
+                "unit": {
+                  "type": "string",
+                  "const": "dag-node"
+                },
+                "from": {
+                  "type": "string",
+                  "const": "paused"
+                },
+                "to": {
+                  "type": "string",
+                  "const": "running"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "checkpoint": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "restored"
+                        },
+                        "restoredNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "totalNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "decision": {
+                          "type": "string",
+                          "const": "skipped"
+                        },
+                        "restoredNodes": {
+                          "type": "number",
+                          "const": 0
+                        },
+                        "totalNodes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "fingerprint": {
+                          "type": "string",
+                          "enum": [
+                            "matched",
+                            "changed",
+                            "checkpoint-missing",
+                            "workspace-unavailable"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "decision",
+                        "restoredNodes",
+                        "fingerprint"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "schemaVersion",
+                "ts",
+                "path",
+                "kind",
+                "unit",
+                "from",
+                "to",
+                "checkpoint"
+              ],
+              "additionalProperties": false
+            }
+          ]
         },
-        "resumeCommand": {
-          "type": "string"
-        },
-        "acknowledgement": {
+        {
           "type": "object",
           "properties": {
-            "name": {
-              "type": "string",
-              "minLength": 1
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
             },
-            "prompt": {
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "lifecycle-transition"
+            },
+            "unit": {
+              "type": "string",
+              "const": "workstream"
+            },
+            "from": {
+              "type": "string",
+              "enum": [
+                "created",
+                "active",
+                "fan-out",
+                "review",
+                "accepted",
+                "rejected",
+                "escalated",
+                "merged",
+                "paused",
+                "closed"
+              ]
+            },
+            "to": {
+              "type": "string",
+              "enum": [
+                "created",
+                "active",
+                "fan-out",
+                "review",
+                "accepted",
+                "rejected",
+                "escalated",
+                "merged",
+                "paused",
+                "closed"
+              ]
+            },
+            "reason": {
               "type": "string"
             }
           },
           "required": [
-            "name",
-            "prompt"
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "to"
           ],
           "additionalProperties": false
         },
-        "checkpoint": {
+        {
           "type": "object",
           "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
             "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "lifecycle-transition"
+            },
+            "unit": {
+              "type": "string",
+              "const": "artifact"
+            },
+            "from": {
+              "type": "string",
+              "enum": [
+                "captured",
+                "scoped",
+                "in-progress",
+                "review",
+                "accepted",
+                "rejected",
+                "completed",
+                "superseded"
+              ]
+            },
+            "to": {
+              "type": "string",
+              "enum": [
+                "captured",
+                "scoped",
+                "in-progress",
+                "review",
+                "accepted",
+                "rejected",
+                "completed",
+                "superseded"
+              ]
+            },
+            "reason": {
               "type": "string"
-            },
-            "decision": {
-              "type": "string",
-              "enum": [
-                "restored",
-                "skipped"
-              ]
-            },
-            "restoredNodes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "totalNodes": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "fingerprint": {
-              "type": "string",
-              "enum": [
-                "matched",
-                "changed",
-                "checkpoint-missing",
-                "workspace-unavailable"
-              ]
             }
           },
           "required": [
+            "schemaVersion",
+            "ts",
             "path",
-            "decision",
-            "restoredNodes",
-            "fingerprint"
+            "kind",
+            "unit",
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "lifecycle-transition"
+            },
+            "unit": {
+              "type": "string",
+              "const": "handoff"
+            },
+            "from": {
+              "type": "string",
+              "enum": [
+                "created",
+                "accepted",
+                "completed",
+                "rejected"
+              ]
+            },
+            "to": {
+              "type": "string",
+              "enum": [
+                "created",
+                "accepted",
+                "completed",
+                "rejected"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "to"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "schemaVersion": {
+              "type": "number",
+              "const": 1
+            },
+            "ts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "metadata": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "lifecycle-transition"
+            },
+            "unit": {
+              "type": "string",
+              "const": "trigger"
+            },
+            "from": {
+              "type": "string",
+              "enum": [
+                "ingress",
+                "dispatch",
+                "consumed",
+                "rejected"
+              ]
+            },
+            "to": {
+              "type": "string",
+              "enum": [
+                "ingress",
+                "dispatch",
+                "consumed",
+                "rejected"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "ts",
+            "path",
+            "kind",
+            "unit",
+            "to"
           ],
           "additionalProperties": false
         }
-      },
-      "required": [
-        "schemaVersion",
-        "ts",
-        "path",
-        "kind",
-        "unit",
-        "to"
-      ],
-      "additionalProperties": false
+      ]
     }
   ],
   "$defs": {

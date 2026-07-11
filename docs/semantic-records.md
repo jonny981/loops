@@ -40,11 +40,19 @@ The kinds are:
 | coordination | `handoff`, `trigger-invocation` |
 
 The runtime projects facts it already owns: dispatches, completions, gate
-verdicts and evidence, review routing, advisor consultations, proof, pauses,
-checkpoint restores, and run start or finish. Benchmark, refusal, capability
-gap, handoff, trigger, cost, and preflight shapes are contracts for their owning
-layers. Defining them does not add a scheduler, queue, trigger engine, or new
-job type.
+verdicts and evidence from loops, DAG `when` checks, and `gateJob`, review
+routing, advisor consultations, proof, pauses, checkpoint restores, and run
+start or finish. Benchmark, refusal, capability gap, handoff, trigger, cost,
+and preflight shapes are contracts for their owning layers. Defining them does
+not add a scheduler, queue, trigger engine, or new job type.
+
+Execution lifecycle records use `run`, `job`, `loop`, or `dag-node`. Their
+allowed transitions are `created` to `running`, `running` to a terminal state
+or `paused`, and checkpoint-backed `paused` to `running`. Acknowledgements and
+resume commands belong only to pauses; checkpoint details belong only to
+resumes. Reserved layers use bounded vocabularies: workstreams, artifacts,
+handoffs, and triggers cannot introduce arbitrary state names into v1. Their
+owning features remain responsible for enforcing causal transition graphs.
 
 ## Validate and query
 
@@ -82,7 +90,9 @@ the six unversioned kinds that release wrote: `dispatch`, `completion`,
 `surfacing`, `revision-emitted`, `revision-routed`, and `proof`. The reader adds
 `schemaVersion: 1` and the enclosing registry run id in memory, validates the
 result, and leaves the archive unchanged. Unversioned records of any other kind
-are rejected.
+are rejected. A legacy line carrying v1 envelope fields such as `runId` or
+`metadata` is also rejected, so an archive cannot spoof its enclosing registry
+identity.
 
 Versioned records never pass through the legacy adapter. A v1 record is
 validated as written, and a future-version record is not interpreted as v1.
@@ -92,3 +102,12 @@ cannot break the supervised run or its other records.
 Run `npm run schema:write` after intentionally changing the Zod source for a
 new contract. `npm run schema:check` and `prepack` fail when the checked-in JSON
 artifact differs from the runtime schema.
+
+### TypeScript migration from 0.7.0
+
+Code that constructs `SemanticRunRecord` values must add `schemaVersion: 1`
+and satisfy the unit-specific fields. In particular, job dispatches and
+completions require `label`; DAG-node dispatches require `node` and `attempt`;
+loop completions require `iterations`. Code with an exhaustive `kind` switch
+must handle the expanded v1 union. Stored 0.7.0 JSONL should continue through
+`readSemanticRecords` rather than being rewritten in place.

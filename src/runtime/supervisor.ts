@@ -156,16 +156,22 @@ export function startSupervisor(input: {
       usage: { inputTokens: 0, outputTokens: 0, calls: 0 },
     },
   };
-  semanticRecorder.write({
-    schemaVersion: SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
-    runId: input.runId,
-    kind: 'lifecycle-transition',
-    ts: startedAt,
-    path: [],
-    unit: 'run',
-    to: 'running',
-    reason: 'supervision started',
-  });
+  let lifecycleStarted = false;
+  const writeRunStart = () => {
+    if (lifecycleStarted) return;
+    semanticRecorder.write({
+      schemaVersion: SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
+      runId: input.runId,
+      kind: 'lifecycle-transition',
+      ts: startedAt,
+      path: [],
+      unit: 'run',
+      from: 'created',
+      to: 'running',
+      reason: 'supervision started',
+    });
+    lifecycleStarted = true;
+  };
   const proofs: ProofRecord[] = [];
   const active = new Map<string, CurrentWork>();
 
@@ -199,6 +205,10 @@ export function startSupervisor(input: {
 
   const sink = (event: LoopEvent) => {
     if (!NOISE.has(event.kind)) {
+      if (!lifecycleStarted) {
+        if (event.kind === 'runtime:restore') lifecycleStarted = true;
+        else writeRunStart();
+      }
       try {
         appendFileSync(eventsPath, `${JSON.stringify(event)}\n`);
       } catch {
@@ -214,6 +224,14 @@ export function startSupervisor(input: {
       case 'loop:condition':
         status.live.lastGate = {
           which: event.which,
+          met: event.result.met,
+          confidence: event.result.confidence,
+          reason: event.result.reason,
+        };
+        break;
+      case 'condition:result':
+        status.live.lastGate = {
+          which: event.label,
           met: event.result.met,
           confidence: event.result.confidence,
           reason: event.result.reason,
@@ -289,6 +307,7 @@ export function startSupervisor(input: {
 
   const finish = (outcome: Outcome) => {
     const endedAt = Date.now();
+    writeRunStart();
     status.status = outcome.status;
     status.endedAt = endedAt;
     status.live.current = undefined;
@@ -547,6 +566,8 @@ function renderEvent(event: LoopEvent): string {
       return `${at}· iteration ${event.iteration}`;
     case 'loop:condition':
       return `${at}· ${event.which} ${event.result.met ? 'met' : 'not met'}: ${event.result.reason}`;
+    case 'condition:result':
+      return `${at}· ${event.label} ${event.result.met ? 'met' : 'not met'}: ${event.result.reason}`;
     case 'loop:review':
       return `${at}· review: ${event.outcome.status}${event.outcome.late ? ' late' : ''}`;
     case 'loop:end':

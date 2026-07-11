@@ -481,21 +481,33 @@ export interface ProofRecord {
 export type ConditionKind = 'start' | 'until' | 'stopOn';
 
 export type LoopEvent =
-  | {
+  | ({
       kind: 'runtime:restore';
       ts: number;
       path: string[];
       checkpoint: string;
-      decision: 'restored' | 'skipped';
-      restoredNodes: number;
-      totalNodes?: number;
       reason: string;
-      fingerprint:
-        | 'matched'
-        | 'changed'
-        | 'checkpoint-missing'
-        | 'workspace-unavailable';
-    }
+    } & (
+      | {
+          decision: 'restored';
+          restoredNodes: number;
+          totalNodes: number;
+          fingerprint:
+            | 'matched'
+            | 'checkpoint-missing'
+            | 'workspace-unavailable';
+        }
+      | {
+          decision: 'skipped';
+          restoredNodes: 0;
+          totalNodes?: number;
+          fingerprint:
+            | 'matched'
+            | 'changed'
+            | 'checkpoint-missing'
+            | 'workspace-unavailable';
+        }
+    ))
   | {
       kind: 'loop:start';
       ts: number;
@@ -511,6 +523,15 @@ export type LoopEvent =
       which: ConditionKind;
       /** The enclosing loop iteration; 0 for its start gate. */
       iteration?: number;
+      result: ConditionResult;
+    }
+  | {
+      /** A Condition executed outside loop start/stop/until control flow. */
+      kind: 'condition:result';
+      ts: number;
+      path: string[];
+      label: string;
+      iteration: number;
       result: ConditionResult;
     }
   | {

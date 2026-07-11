@@ -96,8 +96,12 @@ export function semanticRecordsFromEvent(
   event: LoopEvent,
   runId?: string,
 ): SemanticRunRecord[] {
+  if (runId !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(runId))
+    throw new TypeError(`invalid semantic record runId: ${runId}`);
   switch (event.kind) {
     case 'runtime:restore':
+      if (event.decision === 'restored' && event.restoredNodes <= 0)
+        throw new TypeError('restored checkpoint must contain at least one node');
       return [
         {
           ...recordBase(event, runId),
@@ -106,13 +110,22 @@ export function semanticRecordsFromEvent(
           from: 'paused',
           to: 'running',
           reason: event.reason,
-          checkpoint: {
-            path: event.checkpoint,
-            decision: event.decision,
-            restoredNodes: event.restoredNodes,
-            totalNodes: event.totalNodes,
-            fingerprint: event.fingerprint,
-          },
+          checkpoint:
+            event.decision === 'restored'
+              ? {
+                  path: event.checkpoint,
+                  decision: event.decision,
+                  restoredNodes: event.restoredNodes,
+                  totalNodes: event.totalNodes,
+                  fingerprint: event.fingerprint,
+                }
+              : {
+                  path: event.checkpoint,
+                  decision: event.decision,
+                  restoredNodes: event.restoredNodes,
+                  totalNodes: event.totalNodes,
+                  fingerprint: event.fingerprint,
+                },
         },
       ];
     case 'loop:condition':
@@ -122,6 +135,19 @@ export function semanticRecordsFromEvent(
           kind: 'gate-verdict',
           gate: event.which,
           iteration: event.iteration ?? 0,
+          met: event.result.met,
+          reason: event.result.reason,
+          confidence: event.result.confidence,
+          output: event.result.output,
+        },
+      ];
+    case 'condition:result':
+      return [
+        {
+          ...recordBase(event, runId),
+          kind: 'gate-verdict',
+          gate: event.label,
+          iteration: event.iteration,
           met: event.result.met,
           reason: event.result.reason,
           confidence: event.result.confidence,
@@ -145,7 +171,7 @@ export function semanticRecordsFromEvent(
             kind: 'dispatch',
             unit: 'dag-node',
             node: event.node,
-            attempt: event.attempt,
+            attempt: event.attempt ?? 1,
           },
         ];
       // 'done' or 'skip': the node-boundary completion. This is the ONLY
@@ -161,7 +187,7 @@ export function semanticRecordsFromEvent(
               unit: 'dag-node',
               label: event.node,
               outcome: outcomeSummary(event.outcome),
-              attempt: event.attempt,
+              attempt: event.attempt ?? 1,
             },
           ]
         : [];
@@ -209,7 +235,7 @@ export function semanticRecordsFromEvent(
         {
           ...recordBase(event, runId),
           kind: 'lifecycle-transition',
-          unit: 'job',
+          unit: 'loop',
           from: 'running',
           to: 'paused',
           reason: event.reason,
@@ -346,9 +372,11 @@ export function formatSemanticRecord(record: SemanticRunRecord): string {
   const at = record.path.length ? `${record.path.join(' › ')} ` : '';
   switch (record.kind) {
     case 'dispatch':
-      return `${at}dispatch ${record.unit}${record.label ? ` ${record.label}` : ''}${record.node ? ` ${record.node}` : ''}`;
+      return record.unit === 'job'
+        ? `${at}dispatch job ${record.label}`
+        : `${at}dispatch dag-node ${record.node}`;
     case 'completion':
-      return `${at}completion ${record.unit}${record.label ? ` ${record.label}` : ''}: ${record.outcome.status}${record.outcome.summary ? ` — ${record.outcome.summary}` : ''}`;
+      return `${at}completion ${record.unit}${'label' in record ? ` ${record.label}` : ''}: ${record.outcome.status}${record.outcome.summary ? ` — ${record.outcome.summary}` : ''}`;
     case 'surfacing':
       return `${at}surfacing ${record.source} ${record.decision}${record.severity ? ` [${record.severity}]` : ''}: ${record.reason}`;
     case 'revision-emitted':
@@ -376,7 +404,7 @@ export function formatSemanticRecord(record: SemanticRunRecord): string {
     case 'preflight-classification':
       return `${at}preflight ${record.result.engine}${record.result.model ? `/${record.result.model}` : ''}: ${record.result.ok ? 'pass' : record.result.failure} - ${record.result.detail}`;
     case 'lifecycle-transition':
-      return `${at}lifecycle ${record.unit} ${record.from ? `${record.from} -> ` : ''}${record.to}${record.reason ? `: ${record.reason}` : ''}`;
+      return `${at}lifecycle ${record.unit} ${'from' in record && record.from ? `${record.from} -> ` : ''}${record.to}${record.reason ? `: ${record.reason}` : ''}`;
   }
 }
 
@@ -400,9 +428,9 @@ export function makeSemanticRecorder(
 
   const write = (record: unknown) => {
     if (!enabled) return;
-    const parsed = safeParseSemanticRunRecord(record);
-    if (!parsed.success) return;
     try {
+      const parsed = safeParseSemanticRunRecord(record);
+      if (!parsed.success) return;
       appendFileSync(path, `${JSON.stringify(parsed.data)}\n`);
     } catch {
       /* best-effort: semantic records must never break the run */
@@ -412,7 +440,11 @@ export function makeSemanticRecorder(
   return {
     write,
     sink(event) {
-      for (const record of semanticRecordsFromEvent(event, runId)) write(record);
+      try {
+        for (const record of semanticRecordsFromEvent(event, runId)) write(record);
+      } catch {
+        /* best-effort: semantic projection must never break the run */
+      }
     },
   };
 }

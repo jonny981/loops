@@ -761,6 +761,14 @@ export function gateJob(label: string, condition: ConditionInput): Job {
       timeoutMs: ctx.timeoutMs,
     });
     const r = await cond(ctx, ctx.lastOutcome);
+    ctx.emit({
+      kind: 'condition:result',
+      ts: Date.now(),
+      path: [...ctx.path],
+      label,
+      iteration: ctx.iteration,
+      result: r,
+    });
     const outcome: Outcome = {
       status: r.met ? 'pass' : 'fail',
       confidence: r.confidence,

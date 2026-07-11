@@ -329,20 +329,30 @@ export async function run(
             : currentFingerprint === undefined
               ? 'workspace-unavailable'
               : 'matched';
-        restoreEvent = {
-          kind: 'runtime:restore',
-          ts: Date.now(),
-          path: [],
-          checkpoint: options.resumeFrom,
-          decision: restoredNodes > 0 ? 'restored' : 'skipped',
-          restoredNodes,
-          totalNodes,
-          reason:
-            restoredNodes > 0
-              ? `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom}`
-              : `restoring nothing from ${options.resumeFrom}: no checkpointed DAG nodes match the current graph`,
-          fingerprint,
-        };
+        restoreEvent =
+          restoredNodes > 0
+            ? {
+                kind: 'runtime:restore',
+                ts: Date.now(),
+                path: [],
+                checkpoint: options.resumeFrom,
+                decision: 'restored',
+                restoredNodes,
+                totalNodes,
+                reason: `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom}`,
+                fingerprint,
+              }
+            : {
+                kind: 'runtime:restore',
+                ts: Date.now(),
+                path: [],
+                checkpoint: options.resumeFrom,
+                decision: 'skipped',
+                restoredNodes: 0,
+                totalNodes,
+                reason: `restoring nothing from ${options.resumeFrom}: no checkpointed DAG nodes match the current graph`,
+                fingerprint,
+              };
       }
     } catch (e) {
       throw new LoopError({
@@ -393,7 +403,7 @@ export async function run(
   const resolveEngine = (ref?: EngineRef): Engine =>
     registry.create(ref, defaultEngine);
 
-  if (restoreEvent) emit(restoreEvent);
+  if (restoreEvent) emit({ ...restoreEvent, ts: Date.now() });
 
   // The root workspace is the substrate the whole run reads and writes. Branch
   // resolution is best-effort: a non-git cwd just leaves `branch` undefined.

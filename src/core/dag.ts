@@ -383,10 +383,16 @@ export function dag(config: DagConfig): Job {
                   phase: 'done',
                 };
               if (node.when) {
-                const r = await toCondition(node.when)(
-                  nodeCtx(name),
-                  undefined,
-                );
+                const conditionCtx = nodeCtx(name);
+                const r = await toCondition(node.when)(conditionCtx, undefined);
+                parent.emit({
+                  kind: 'condition:result',
+                  ts: ts(),
+                  path: [...conditionCtx.path],
+                  label: 'when',
+                  iteration: conditionCtx.iteration,
+                  result: r,
+                });
                 if (!r.met)
                   return {
                     outcome: {

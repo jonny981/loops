@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import {
   dag,
   fnJob,
+  gateJob,
+  humanGate,
+  humanGateKey,
   kickback,
   loop,
   predicate,
@@ -15,8 +18,9 @@ import {
   runEventsPath,
   runSemanticRecordsPath,
   semanticRecordsFromEvent,
+  sequence,
 } from '../src/api.ts';
-import type { LoopEvent, SemanticRunRecord } from '../src/api.ts';
+import type { Condition, LoopEvent, SemanticRunRecord } from '../src/api.ts';
 import { parseSemanticRunRecord } from '../src/runtime/semantic-schema.ts';
 
 function readRecords(runId: string): SemanticRunRecord[] {
@@ -54,6 +58,7 @@ describe('semantic run records', () => {
       runId,
       kind: 'lifecycle-transition',
       unit: 'run',
+      from: 'created',
       to: 'running',
     });
     expect(records.at(-1)).toMatchObject({
@@ -325,7 +330,7 @@ describe('semantic run records', () => {
       }),
       expect.objectContaining({
         kind: 'lifecycle-transition',
-        unit: 'job',
+        unit: 'loop',
         from: 'running',
         to: 'paused',
         metadata: { code: 'QUOTA' },
@@ -345,6 +350,139 @@ describe('semantic run records', () => {
       }),
     ]);
     expect(records.every((record) => parseSemanticRunRecord(record))).toBe(true);
+    expect(() => semanticRecordsFromEvent(events[0]!, '../invalid')).toThrow();
+  });
+
+  it('records verdicts from dag when conditions and gate jobs', async () => {
+    const whenCondition: Condition = async () => ({
+      met: false,
+      reason: 'optional node disabled',
+      confidence: 1,
+      output: 'WHEN_EVIDENCE',
+    });
+    const qualityCondition: Condition = async () => ({
+      met: true,
+      reason: 'quality accepted',
+      confidence: 0.95,
+      output: 'GATE_EVIDENCE',
+    });
+    const result = await run(
+      dag({
+        name: 'condition-surfaces',
+        nodes: {
+          optional: {
+            when: whenCondition,
+            job: fnJob('optional', async () => ({ status: 'pass' })),
+          },
+          quality: gateJob('quality-check', qualityCondition),
+        },
+      }),
+      { supervise: true },
+    );
+
+    const verdicts = readRecords(result.runId!).filter(
+      (record): record is Extract<SemanticRunRecord, { kind: 'gate-verdict' }> =>
+        record.kind === 'gate-verdict',
+    );
+    expect(verdicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ['condition-surfaces', 'optional'],
+          gate: 'when',
+          iteration: 0,
+          met: false,
+          confidence: 1,
+          output: 'WHEN_EVIDENCE',
+        }),
+        expect.objectContaining({
+          path: ['condition-surfaces', 'quality'],
+          gate: 'quality-check',
+          iteration: 0,
+          met: true,
+          confidence: 0.95,
+          output: 'GATE_EVIDENCE',
+        }),
+      ]),
+    );
+  });
+
+  it('writes a coherent resumed lifecycle in timestamp order', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'loops-semantic-resume-'));
+    const checkpoint = join(workspace, 'checkpoint.json');
+    const build = () =>
+      sequence(
+        'resume-contract',
+        fnJob('prepare', async () => ({ status: 'pass' })),
+        humanGate({ name: 'approve' }),
+      );
+
+    try {
+      const paused = await run(build(), {
+        cwd: workspace,
+        checkpoint,
+        supervise: true,
+        runId: 'semantic-paused-a1b2c3',
+      });
+      expect(paused.outcome.status).toBe('paused');
+
+      const resumed = await run(build(), {
+        cwd: workspace,
+        resumeFrom: checkpoint,
+        state: { [humanGateKey('approve')]: true },
+        supervise: true,
+        runId: 'semantic-resumed-a1b2c3',
+      });
+      expect(resumed.outcome.status).toBe('pass');
+
+      const records = readRecords(resumed.runId!);
+      expect(records[0]).toMatchObject({
+        kind: 'lifecycle-transition',
+        unit: 'run',
+        from: 'paused',
+        to: 'running',
+        checkpoint: { decision: 'restored', restoredNodes: 1 },
+      });
+      expect(records.map((record) => record.ts)).toEqual(
+        [...records.map((record) => record.ts)].sort((a, b) => a - b),
+      );
+      expect(
+        records.filter(
+          (record) =>
+            record.kind === 'lifecycle-transition' &&
+            record.unit === 'run' &&
+            record.from === 'created' &&
+            record.to === 'running',
+        ),
+      ).toHaveLength(0);
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps semantic validation best-effort for cyclic proof payloads', async () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const result = await run(
+      fnJob('cyclic-proof', async (ctx) => {
+        ctx.emit({
+          kind: 'proof',
+          ts: Date.now(),
+          path: [...ctx.path],
+          name: 'cyclic',
+          artifact: { kind: 'json', data: cyclic as never },
+        });
+        return { status: 'pass', summary: 'work completed' };
+      }),
+      { supervise: true },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    const records = readRecords(result.runId!);
+    expect(records.some((record) => record.kind === 'proof')).toBe(false);
+    expect(records.at(-1)).toMatchObject({
+      kind: 'lifecycle-transition',
+      to: 'pass',
+    });
   });
 
   it('adapts known legacy lines while skipping torn, invalid, and unsupported records', async () => {
@@ -369,6 +507,7 @@ describe('semantic run records', () => {
           ts: 2,
           path: ['v1'],
           unit: 'job',
+          label: 'v1',
           outcome: { status: 'pass' },
         }),
         JSON.stringify({

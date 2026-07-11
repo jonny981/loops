@@ -68,6 +68,8 @@ describe('semantic run record schema v1', () => {
     expect(semanticRunRecordJsonSchema.$id).toBe(
       'urn:loops-adk:semantic-run-record:v1',
     );
+    expect(semanticRunRecordJsonSchema).toHaveProperty('oneOf');
+    expect(semanticRunRecordJsonSchema).not.toHaveProperty('anyOf');
     expect(SEMANTIC_RUN_RECORD_KINDS).toEqual([
       'dispatch',
       'completion',
@@ -220,6 +222,83 @@ describe('semantic run record schema v1', () => {
       expect(safeParseSemanticRunRecord(value).success).toBe(false);
       expect(() => fromJsonSchema.parse(value)).toThrow();
     }
+
+    const contradictoryRecords = [
+      {
+        schemaVersion: 1,
+        kind: 'dispatch',
+        ts: 1,
+        path: [],
+        unit: 'dag-node',
+        attempt: 1,
+      },
+      {
+        schemaVersion: 1,
+        kind: 'completion',
+        ts: 1,
+        path: [],
+        unit: 'dag',
+        iterations: 2,
+        outcome: { status: 'pass' },
+      },
+      {
+        schemaVersion: 1,
+        kind: 'lifecycle-transition',
+        ts: 1,
+        path: [],
+        unit: 'run',
+        from: 'pass',
+        to: 'running',
+      },
+      {
+        schemaVersion: 1,
+        kind: 'lifecycle-transition',
+        ts: 1,
+        path: [],
+        unit: 'run',
+        from: 'running',
+        to: 'pass',
+        acknowledgement: { name: 'approve', prompt: 'Approve' },
+      },
+      {
+        schemaVersion: 1,
+        kind: 'lifecycle-transition',
+        ts: 1,
+        path: [],
+        unit: 'run',
+        from: 'paused',
+        to: 'running',
+        checkpoint: {
+          path: 'checkpoint.json',
+          decision: 'restored',
+          restoredNodes: 0,
+          totalNodes: 0,
+          fingerprint: 'matched',
+        },
+      },
+    ];
+    for (const value of contradictoryRecords) {
+      expect(safeParseSemanticRunRecord(value).success).toBe(false);
+      expect(() => fromJsonSchema.parse(value)).toThrow();
+    }
+
+    const reservedLifecycleRecords = [
+      { unit: 'workstream', from: 'active', to: 'review' },
+      { unit: 'artifact', from: 'captured', to: 'scoped' },
+      { unit: 'handoff', from: 'created', to: 'accepted' },
+      { unit: 'trigger', from: 'ingress', to: 'dispatch' },
+      { unit: 'loop', from: 'running', to: 'paused' },
+    ].map((transition) => ({
+      schemaVersion: 1,
+      kind: 'lifecycle-transition',
+      ts: 1,
+      path: [],
+      ...transition,
+    }));
+    for (const value of reservedLifecycleRecords) {
+      expect(safeParseSemanticRunRecord(value).success).toBe(true);
+      expect(() => fromJsonSchema.parse(value)).not.toThrow();
+    }
   });
 
   it('adapts only known unversioned 0.7.0 records without mutating the archive', () => {
@@ -248,6 +327,7 @@ describe('semantic run record schema v1', () => {
       ts: 1,
       path: [],
       unit: 'job',
+      label: 'versioned',
     } as const;
     expect(adaptSemanticRunRecord(versioned, 'ignored-a1b2c3')).toEqual(versioned);
 
@@ -270,6 +350,19 @@ describe('semantic run record schema v1', () => {
         path: [],
         unit: 'job',
       }),
+    ).toThrow();
+    expect(() =>
+      adaptSemanticRunRecord(
+        {
+          kind: 'dispatch',
+          ts: 1,
+          path: [],
+          unit: 'job',
+          label: 'legacy',
+          runId: 'spoofed-run',
+        },
+        'registry-run',
+      ),
     ).toThrow();
   });
 });

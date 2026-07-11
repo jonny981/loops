@@ -27,8 +27,9 @@ heading, dated, before the tag is pushed.
 
 - Supervised `semantic.jsonl` records carry `schemaVersion: 1` and the run id,
   are validated at write and read boundaries, and include runtime-owned gate,
-  advisor, pause, restore, and run lifecycle facts. `readSemanticRecords`
-  adapts the six unversioned 0.7.0 kinds in memory without rewriting archives.
+  advisor, pause, restore, and run lifecycle facts. Gate verdicts cover loop,
+  DAG `when`, and `gateJob` conditions. `readSemanticRecords` adapts the six
+  unversioned 0.7.0 kinds in memory without rewriting archives.
 - npm keywords broadened to the accurate discovery set (agent-loop,
   agent-orchestration, multi-agent, agent-memory, git-as-memory,
   convergence-loop, done-gate, codex, typescript).

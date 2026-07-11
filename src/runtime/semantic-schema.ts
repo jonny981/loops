@@ -182,20 +182,40 @@ const costReportSchema = z
   })
   .strict();
 
-const dispatchRecordSchema = record('dispatch', {
-  unit: z.enum(['job', 'dag-node']),
-  label: z.string().optional(),
-  node: z.string().optional(),
-  attempt: nonnegativeInt.positive().optional(),
-});
+const dispatchRecordSchema = z.discriminatedUnion('unit', [
+  record('dispatch', {
+    unit: z.literal('job'),
+    label: z.string(),
+  }),
+  record('dispatch', {
+    unit: z.literal('dag-node'),
+    node: z.string(),
+    attempt: nonnegativeInt.positive(),
+  }),
+]);
 
-const completionRecordSchema = record('completion', {
-  unit: z.enum(['job', 'loop', 'dag', 'dag-node']),
-  label: z.string().optional(),
-  outcome: semanticOutcomeSchema,
-  iterations: nonnegativeInt.optional(),
-  attempt: nonnegativeInt.positive().optional(),
-});
+const completionRecordSchema = z.discriminatedUnion('unit', [
+  record('completion', {
+    unit: z.literal('job'),
+    label: z.string(),
+    outcome: semanticOutcomeSchema,
+  }),
+  record('completion', {
+    unit: z.literal('loop'),
+    outcome: semanticOutcomeSchema,
+    iterations: nonnegativeInt,
+  }),
+  record('completion', {
+    unit: z.literal('dag'),
+    outcome: semanticOutcomeSchema,
+  }),
+  record('completion', {
+    unit: z.literal('dag-node'),
+    label: z.string(),
+    outcome: semanticOutcomeSchema,
+    attempt: nonnegativeInt.positive(),
+  }),
+]);
 
 const surfacingRecordSchema = record('surfacing', {
   source: z.enum(['loop-review', 'dag-kickback']),
@@ -359,30 +379,34 @@ const preflightClassificationRecordSchema = record(
   },
 );
 
-const lifecycleStateSchema = z.enum([
-  'running',
+const terminalLifecycleStateSchema = z.enum([
   'pass',
   'fail',
   'aborted',
   'exhausted',
-  'paused',
 ]);
-
-const lifecycleTransitionRecordSchema = record('lifecycle-transition', {
-  unit: z.enum(['run', 'job', 'dag-node']),
-  from: lifecycleStateSchema.optional(),
-  to: lifecycleStateSchema,
-  reason: z.string().optional(),
-  resumeCommand: z.string().optional(),
-  acknowledgement: z
-    .object({ name: z.string().min(1), prompt: z.string() })
-    .strict()
-    .optional(),
-  checkpoint: z
+const acknowledgementSchema = z
+  .object({ name: z.string().min(1), prompt: z.string() })
+  .strict();
+const checkpointSchema = z.discriminatedUnion('decision', [
+  z
     .object({
       path: z.string(),
-      decision: z.enum(['restored', 'skipped']),
-      restoredNodes: nonnegativeInt,
+      decision: z.literal('restored'),
+      restoredNodes: nonnegativeInt.positive(),
+      totalNodes: nonnegativeInt.positive(),
+      fingerprint: z.enum([
+        'matched',
+        'checkpoint-missing',
+        'workspace-unavailable',
+      ]),
+    })
+    .strict(),
+  z
+    .object({
+      path: z.string(),
+      decision: z.literal('skipped'),
+      restoredNodes: z.literal(0),
       totalNodes: nonnegativeInt.optional(),
       fingerprint: z.enum([
         'matched',
@@ -391,9 +415,109 @@ const lifecycleTransitionRecordSchema = record('lifecycle-transition', {
         'workspace-unavailable',
       ]),
     })
-    .strict()
-    .optional(),
-});
+    .strict(),
+]);
+const workstreamLifecycleStateSchema = z.enum([
+  'created',
+  'active',
+  'fan-out',
+  'review',
+  'accepted',
+  'rejected',
+  'escalated',
+  'merged',
+  'paused',
+  'closed',
+]);
+const artifactLifecycleStateSchema = z.enum([
+  'captured',
+  'scoped',
+  'in-progress',
+  'review',
+  'accepted',
+  'rejected',
+  'completed',
+  'superseded',
+]);
+const handoffLifecycleStateSchema = z.enum([
+  'created',
+  'accepted',
+  'completed',
+  'rejected',
+]);
+const triggerLifecycleStateSchema = z.enum([
+  'ingress',
+  'dispatch',
+  'consumed',
+  'rejected',
+]);
+
+function executionLifecycleRecord<
+  const U extends 'run' | 'job' | 'loop' | 'dag-node',
+>(unit: U) {
+  return z.discriminatedUnion('from', [
+    record('lifecycle-transition', {
+      unit: z.literal(unit),
+      from: z.literal('created'),
+      to: z.literal('running'),
+      reason: z.string().optional(),
+    }),
+    z.discriminatedUnion('to', [
+      record('lifecycle-transition', {
+        unit: z.literal(unit),
+        from: z.literal('running'),
+        to: z.literal('paused'),
+        reason: z.string().optional(),
+        resumeCommand: z.string().optional(),
+        acknowledgement: acknowledgementSchema.optional(),
+      }),
+      record('lifecycle-transition', {
+        unit: z.literal(unit),
+        from: z.literal('running'),
+        to: terminalLifecycleStateSchema,
+        reason: z.string().optional(),
+      }),
+    ]),
+    record('lifecycle-transition', {
+      unit: z.literal(unit),
+      from: z.literal('paused'),
+      to: z.literal('running'),
+      reason: z.string().optional(),
+      checkpoint: checkpointSchema,
+    }),
+  ]);
+}
+
+const lifecycleTransitionRecordSchema = z.discriminatedUnion('unit', [
+  executionLifecycleRecord('run'),
+  executionLifecycleRecord('job'),
+  executionLifecycleRecord('loop'),
+  executionLifecycleRecord('dag-node'),
+  record('lifecycle-transition', {
+    unit: z.literal('workstream'),
+    from: workstreamLifecycleStateSchema.optional(),
+    to: workstreamLifecycleStateSchema,
+    reason: z.string().optional(),
+  }),
+  record('lifecycle-transition', {
+    unit: z.literal('artifact'),
+    from: artifactLifecycleStateSchema.optional(),
+    to: artifactLifecycleStateSchema,
+    reason: z.string().optional(),
+  }),
+  record('lifecycle-transition', {
+    unit: z.literal('handoff'),
+    from: handoffLifecycleStateSchema.optional(),
+    to: handoffLifecycleStateSchema,
+    reason: z.string().optional(),
+  }),
+  record('lifecycle-transition', {
+    unit: z.literal('trigger'),
+    from: triggerLifecycleStateSchema.optional(),
+    to: triggerLifecycleStateSchema,
+    reason: z.string().optional(),
+  }),
+]);
 
 export const semanticRunRecordSchema = z.discriminatedUnion('kind', [
   dispatchRecordSchema,
@@ -461,14 +585,17 @@ export function adaptSemanticRunRecord(
 
   let candidate = value;
   if (value.schemaVersion === undefined) {
-    if (typeof value.kind !== 'string' || !LEGACY_KINDS.has(value.kind))
+    if (
+      typeof value.kind !== 'string' ||
+      !LEGACY_KINDS.has(value.kind) ||
+      'runId' in value ||
+      'metadata' in value
+    )
       return parseSemanticRunRecord(value);
     candidate = {
       ...value,
       schemaVersion: SEMANTIC_RUN_RECORD_SCHEMA_VERSION,
-      ...(suppliedRunId !== undefined && value.runId === undefined
-        ? { runId: suppliedRunId }
-        : {}),
+      ...(suppliedRunId !== undefined ? { runId: suppliedRunId } : {}),
     };
   }
 

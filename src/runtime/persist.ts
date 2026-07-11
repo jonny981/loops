@@ -86,6 +86,7 @@ function thinEvent(event: LoopEvent): unknown {
     case 'proof':
       return { ...event, artifact: thinProofArtifact(event.artifact) };
     case 'loop:condition':
+    case 'condition:result':
       return {
         ...event,
         result: event.result.output === undefined
