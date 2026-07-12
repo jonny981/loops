@@ -11,6 +11,8 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-12
+
 ### Added
 
 - Stable semantic run record v1: a strict public Zod contract and shipped Draft
