@@ -293,6 +293,7 @@ export type {
   Usage,
 } from './engines/engine.ts';
 export { isEngine, SUBAGENT_TOOLS } from './engines/engine.ts';
+export { settleOnExit, EXIT_DRAIN_MS } from './engines/settle.ts';
 export { EngineRegistry, type EngineFactory } from './engines/registry.ts';
 export { MockEngine, mockVerdict, type MockResponder } from './engines/mock.ts';
 

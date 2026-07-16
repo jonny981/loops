@@ -100,6 +100,9 @@ src/core/
 src/engines/
   engine.ts           Engine interface + EngineOptions (permissionMode,
                       minToolIntervalMs) + toolPacer
+  settle.ts           settleOnExit: bound a CLI engine's await to process exit,
+                      not stream close — an orphaned helper holding the
+                      inherited stdio pipes must not pin a completed turn
   claude-cli.ts       `claude` subprocess via execa; exported buildClaudeArgs()
   agent-sdk.ts        @anthropic-ai/claude-agent-sdk; the only engine honoring
                       minToolIntervalMs (it mediates tool calls in-process)
@@ -153,7 +156,8 @@ src/env/
   mock.ts             scripted, offline environment — for tests/examples
 src/tui/              Ink TUI (App.tsx, model.ts, theme.ts)
 bin/loops.mjs         the bin shim (see "Running" below)
-examples/*.loop.ts    runnable definition files (mock engine = offline)
+examples/*.loop.ts    runnable definition files (mock engine = offline;
+                      engine-smoke.loop.ts is the one live-engine smoke)
 tests/                vitest
 ```
 

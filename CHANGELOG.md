@@ -11,6 +11,24 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+### Fixed
+
+- CLI-backed engines (`codex`, `claude-cli`) resolve when the engine process
+  exits instead of waiting for its stdio streams to close. An orphaned helper
+  that inherited the engine's pipes (an MCP transport worker, a hook-spawned
+  process) could hold them open indefinitely, so a completed turn never
+  resolved back to the loop — and in that state neither the engine timeout nor
+  an abort could settle the run. `settleOnExit` (exported for custom
+  CLI-backed engines) races the subprocess promise against the process's own
+  exit, gives buffered protocol output a bounded drain window
+  (`EXIT_DRAIN_MS`), then releases the pinned pipe readers.
+
+### Added
+
+- `examples/engine-smoke.loop.ts`: a live loop-level smoke — an engine leaf's
+  reply must feed back through the gate (`LOOPS_SMOKE_ENGINE` selects the
+  lane). Complements `loops preflight`, which proves the engine lane alone.
+
 ## [0.9.0] - 2026-07-16
 
 ### Added

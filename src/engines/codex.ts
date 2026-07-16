@@ -21,6 +21,7 @@ import type {
   EngineOptions,
 } from './engine.ts';
 import { modelFor, requestEnv } from './engine.ts';
+import { settleOnExit } from './settle.ts';
 import { LoopError } from '../core/errors.ts';
 import { scrubCapture } from '../core/redact.ts';
 
@@ -67,16 +68,21 @@ export class CodexEngine implements Engine {
     const startedAt = Date.now();
 
     try {
-      const sub = await execa(this.opts.cliBinary ?? 'codex', args, {
-        // execa merges this over `process.env` (`extendEnv` default); undefined
-        // is inert, so a request with no env changes nothing.
-        env,
-        input: prompt,
-        cancelSignal: signal,
-        forceKillAfterDelay: 5000,
-        reject: false,
-        timeout: hardTimeout,
-      });
+      // Settled on process exit, not stream close: codex spawns MCP transport
+      // workers and hook processes that inherit its stdio, and an orphan
+      // holding the pipes would otherwise pin this await forever (see settle.ts).
+      const sub = await settleOnExit(
+        execa(this.opts.cliBinary ?? 'codex', args, {
+          // execa merges this over `process.env` (`extendEnv` default); undefined
+          // is inert, so a request with no env changes nothing.
+          env,
+          input: prompt,
+          cancelSignal: signal,
+          forceKillAfterDelay: 5000,
+          reject: false,
+          timeout: hardTimeout,
+        }),
+      );
       if (signal.aborted)
         throw new LoopError({ code: 'ABORTED', phase: 'engine', message: 'codex run aborted' });
 

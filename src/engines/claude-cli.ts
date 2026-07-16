@@ -16,6 +16,7 @@ import {
   type EngineOptions,
 } from './engine.ts';
 import { mapMessage, newAccumulator } from './message-map.ts';
+import { settleOnExit } from './settle.ts';
 import { LoopError } from '../core/errors.ts';
 import { scrubCapture } from '../core/redact.ts';
 
@@ -273,7 +274,11 @@ export class ClaudeCliEngine implements Engine {
       }
     });
 
-    const result = await sub;
+    // Settled on process exit, not stream close: the CLI's MCP servers inherit
+    // its stdio, and an orphan holding the pipes would otherwise pin this
+    // await forever (see settle.ts). The final stream-json line lands before
+    // exit, so the bounded drain preserves it.
+    const result = await settleOnExit(sub);
     if (buffer) flush(buffer);
 
     if (signal.aborted)
