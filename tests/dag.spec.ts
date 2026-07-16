@@ -634,9 +634,11 @@ describe('dag', () => {
 
   it('skips malformed nested outcomes in the signal-abort repro checkpoint', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'loops-dag-signal-repro-'));
+    // Sanitized from the supplied field artifact. The malformed nested entries
+    // are preserved while the large downstream outcome payload is omitted.
     const checkpoint = join(
       process.cwd(),
-      'wip/repro-signal-abort-checkpoint-2026-07-10.ckpt',
+      'tests/fixtures/signal-abort-malformed-checkpoint.json',
     );
     const events: LoopEvent[] = [];
     const ran: string[] = [];

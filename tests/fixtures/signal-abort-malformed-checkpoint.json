@@ -1,0 +1,85 @@
+{
+  "ts": 1783698277185,
+  "state": {
+    "recordDir": "fixture",
+    "depth": "dev",
+    "hasDevice": false
+  },
+  "dags": {
+    "[\"oem-integrate-sigenergy\"]": {
+      "nodes": {
+        "preconditions": {
+          "phase": "done",
+          "outcome": {
+            "status": "pass",
+            "summary": "fixture pass"
+          },
+          "attempt": 1
+        },
+        "ground-oem-record": {
+          "phase": "done",
+          "outcome": {
+            "status": "pass",
+            "summary": "fixture pass"
+          },
+          "attempt": 1
+        },
+        "credential-scan": {
+          "phase": "done",
+          "outcome": {
+            "status": "pass",
+            "summary": "fixture pass"
+          },
+          "attempt": 1
+        },
+        "lint-format": {
+          "phase": "done",
+          "outcome": {
+            "status": "pass",
+            "summary": "fixture pass",
+            "data": {
+              "step-0": {
+                "status": "pass",
+                "summary": "fixture pass"
+              },
+              "step-1": {
+                "status": "pass",
+                "summary": "fixture pass"
+              },
+              "step-2": {
+                "status": "pass",
+                "summary": "fixture pass"
+              },
+              "step-3": {
+                "status": "pass",
+                "summary": "fixture pass"
+              }
+            }
+          },
+          "attempt": 1
+        }
+      }
+    },
+    "[\"oem-integrate-sigenergy\",\"lint-format\",\"lint-format\"]": {
+      "nodes": {
+        "step-0": {
+          "phase": "done",
+          "attempt": 1
+        },
+        "step-1": {
+          "phase": "done",
+          "attempt": 1
+        },
+        "step-2": {
+          "phase": "done",
+          "attempt": 1
+        },
+        "step-3": {
+          "phase": "done",
+          "attempt": 1
+        }
+      }
+    }
+  },
+  "workspaceFingerprint": "acbe10434f797c178d20fbf308d52316a3f8de9d3939ca6d728ed445eec6f0ea"
+}
