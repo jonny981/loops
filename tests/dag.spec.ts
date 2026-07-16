@@ -761,6 +761,73 @@ describe('dag', () => {
     expect(checkpointEnvelope.diagnostics.skippedEntries).toBe(0);
   });
 
+  it('skips non-positive and unsafe checkpoint attempts while preserving valid siblings', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-invalid-attempts-'));
+    const checkpoint = join(dir, 'invalid-attempts.ckpt.json');
+    const record = (attempt: number) => ({
+      phase: 'done',
+      attempt,
+      outcome: { status: 'pass', summary: 'cached' },
+    });
+    writeFileSync(
+      checkpoint,
+      JSON.stringify({
+        state: {},
+        dags: {
+          [JSON.stringify(['invalid-attempts'])]: {
+            nodes: {
+              valid: {
+                phase: 'done',
+                attempt: 2,
+                outcome: {
+                  status: 'pass',
+                  data: { downstream: { staysOpaque: true } },
+                },
+              },
+              zero: record(0),
+              negative: record(-1),
+              fractional: record(1.5),
+              unsafe: record(Number.MAX_SAFE_INTEGER + 1),
+            },
+          },
+        },
+      }),
+    );
+
+    const checkpointEnvelope = loadCheckpointEnvelope(checkpoint);
+    const nodes =
+      checkpointEnvelope.control.resumeDags![
+        JSON.stringify(['invalid-attempts'])
+      ]!.nodes;
+
+    expect(nodes).toEqual({
+      valid: {
+        phase: 'done',
+        attempt: 2,
+        outcome: {
+          status: 'pass',
+          data: { downstream: { staysOpaque: true } },
+        },
+      },
+    });
+    expect(checkpointEnvelope.diagnostics.skippedEntries).toBe(4);
+    expect(checkpointEnvelope.diagnostics.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: expect.stringContaining('zero') }),
+        expect.objectContaining({ path: expect.stringContaining('negative') }),
+        expect.objectContaining({ path: expect.stringContaining('fractional') }),
+        expect.objectContaining({ path: expect.stringContaining('unsafe') }),
+      ]),
+    );
+    expect(checkpointEnvelope.diagnostics.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: 'expected a positive safe integer',
+        }),
+      ]),
+    );
+  });
+
   it('skips a malformed cached revision before max-kickback routing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'loops-dag-invalid-revision-'));
     const checkpoint = join(dir, 'invalid-revision.ckpt.json');
@@ -942,6 +1009,64 @@ describe('dag', () => {
         restoredNodes: 0,
         totalNodes: 1,
         reason: expect.stringMatching(/workspaceFingerprint.*expected a string/),
+      }),
+    );
+  });
+
+  it('runs fresh when a trusted checkpoint fingerprint is not canonical', async () => {
+    const repo = await tmpRepo();
+    const checkpoint = join(repo, 'invalid-fingerprint.ckpt.json');
+    const events: LoopEvent[] = [];
+    let runs = 0;
+    writeFileSync(
+      checkpoint,
+      JSON.stringify({
+        state: {},
+        workspaceFingerprint: 'trust-me',
+        dags: {
+          [JSON.stringify(['invalid-fingerprint-string'])]: {
+            nodes: {
+              work: {
+                phase: 'done',
+                outcome: { status: 'pass', summary: 'cached' },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await run(
+      dag({
+        name: 'invalid-fingerprint-string',
+        nodes: {
+          work: fnJob('work', async () => {
+            runs += 1;
+            return { status: 'pass' as const };
+          }),
+        },
+      }),
+      {
+        ...mockOpts,
+        cwd: repo,
+        resumeFrom: checkpoint,
+        resumeTrustWorkspace: true,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    expect(runs).toBe(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'skipped',
+        fingerprint: 'changed',
+        restoredNodes: 0,
+        totalNodes: 1,
+        reason: expect.stringMatching(
+          /workspaceFingerprint.*64 lowercase hexadecimal characters/,
+        ),
       }),
     );
   });

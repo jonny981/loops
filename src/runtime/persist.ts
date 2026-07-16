@@ -306,14 +306,19 @@ export function loadCheckpointEnvelope(path: string): CheckpointEnvelope {
   let workspaceFingerprint: string | undefined;
   let workspaceFingerprintValid = true;
   if (parsed.workspaceFingerprint !== undefined) {
-    if (typeof parsed.workspaceFingerprint === 'string')
+    if (
+      typeof parsed.workspaceFingerprint === 'string' &&
+      /^[0-9a-f]{64}$/.test(parsed.workspaceFingerprint)
+    ) {
       workspaceFingerprint = parsed.workspaceFingerprint;
-    else {
+    } else {
       workspaceFingerprintValid = false;
       addCheckpointDiagnostic(
         diagnostics,
         'workspaceFingerprint',
-        'expected a string',
+        typeof parsed.workspaceFingerprint === 'string'
+          ? 'expected 64 lowercase hexadecimal characters'
+          : 'expected a string',
       );
     }
   }
@@ -392,12 +397,13 @@ function parseCheckpointDags(
       if (
         nodeValue.attempt !== undefined &&
         (typeof nodeValue.attempt !== 'number' ||
-          !Number.isFinite(nodeValue.attempt))
+          !Number.isSafeInteger(nodeValue.attempt) ||
+          nodeValue.attempt <= 0)
       ) {
         addCheckpointDiagnostic(
           diagnostics,
           `${nodePath}.attempt`,
-          'expected a finite number',
+          'expected a positive safe integer',
         );
         continue;
       }
