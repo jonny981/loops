@@ -25,6 +25,27 @@ import { settleOnExit } from './settle.ts';
 import { LoopError } from '../core/errors.ts';
 import { scrubCapture } from '../core/redact.ts';
 
+const DIAGNOSTIC_MAX = 700;
+const DIAGNOSTIC_HEAD = 180;
+
+function diagnosticCapture(
+  stderr: unknown,
+  stdout: unknown,
+  env: Record<string, string> | undefined,
+): string {
+  const raw = [stderr, stdout]
+    .filter(
+      (value): value is string =>
+        typeof value === 'string' && value.length > 0,
+    )
+    .join('\n');
+  const scrubbed = scrubCapture(raw, env).trim();
+  if (scrubbed.length <= DIAGNOSTIC_MAX) return scrubbed;
+  const marker = '\n[diagnostic middle truncated]\n';
+  const tail = DIAGNOSTIC_MAX - DIAGNOSTIC_HEAD - marker.length;
+  return `${scrubbed.slice(0, DIAGNOSTIC_HEAD)}${marker}${scrubbed.slice(-tail)}`;
+}
+
 export function buildCodexArgs(
   req: AgentRequest,
   opts: EngineOptions,
@@ -92,25 +113,21 @@ export class CodexEngine implements Engine {
       } catch {
         /* no final message written */
       }
-      const stderr =
-        typeof sub.stderr === 'string'
-          ? scrubCapture(sub.stderr, env, 300)
-          : '';
+      const diagnostic = diagnosticCapture(sub.stderr, sub.stdout, env);
       let warning: string | undefined;
       if (sub.failed && (sub.timedOut || !text))
         throw new LoopError({
           code: sub.timedOut ? 'TIMEOUT' : 'ENGINE',
           phase: 'engine',
-          // `scrubCapture` redacts (env values verbatim, then shape patterns,
-          // both on the FULL stream, before the cut) so a secret split at the
-          // slice boundary cannot survive.
+          // The combined streams are scrubbed in full before the middle cut,
+          // so provider diagnostics survive without exposing a split secret.
           message: `codex exited ${sub.exitCode ?? '?'}${
-            stderr ? `: ${stderr}` : ''
+            diagnostic ? `: ${diagnostic}` : ''
           }`,
         });
       if (sub.failed) {
         warning = `codex completed but exited ${sub.exitCode ?? '?'} during teardown${
-          stderr ? `: ${stderr}` : ''
+          diagnostic ? `: ${diagnostic}` : ''
         }`;
       }
 

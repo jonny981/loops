@@ -8,6 +8,7 @@ import { truncate } from './text.ts';
 
 const PATTERNS: RegExp[] = [
   /sk-ant-[A-Za-z0-9_-]{8,}/g, // Anthropic keys
+  /\bsk-(?!ant-)[A-Za-z0-9_-]{8,}/g, // OpenAI-style keys
   /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, // emails
   /\b(api[_-]?key|token|secret|password|authorization|bearer)\b\s*[=:]\s*\S+/gi, // key=value creds
 ];

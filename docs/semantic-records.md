@@ -46,6 +46,11 @@ start or finish. Benchmark, refusal, capability gap, handoff, trigger, cost,
 and preflight shapes are contracts for their owning layers. Defining them does
 not add a scheduler, queue, trigger engine, or new job type.
 
+The semantic v1 preflight failure vocabulary is frozen. A producer recording a
+newer live engine classification, such as `invalid-config` or `transient`, must
+encode `unknown` in the v1 `failure` field and retain the specific diagnosis in
+`detail` or record metadata.
+
 Execution lifecycle records use `run`, `job`, `loop`, or `dag-node`. Their
 allowed transitions are `created` to `running`, `running` to a terminal state
 or `paused`, and checkpoint-backed `paused` to `running`. Acknowledgements and

@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { agentJob, run } from '../src/api.ts';
 import { modelFor } from '../src/engines/engine.ts';
 import { buildCodexArgs, CodexEngine } from '../src/engines/codex.ts';
+import { preflightEngine } from '../src/engines/preflight.ts';
 import { cleanupRepos, tmpRepo } from './git-helpers.ts';
 
 afterAll(cleanupRepos);
@@ -170,6 +171,32 @@ process.exit(1);
         new AbortController().signal,
       ),
     ).rejects.toMatchObject({ code: 'ENGINE' });
+  });
+
+  it('retains a trailing Codex configuration diagnostic for preflight', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-codex-stub-'));
+    const bin = join(dir, 'codex-stub.mjs');
+    const secret = 'sk-proj-codex-diagnostic-secret';
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+process.stderr.write('OpenAI Codex v0.144.4\\n' + 'startup detail '.repeat(40));
+process.stdout.write(${JSON.stringify(secret)} + " HTTP 400: Invalid value: 'max'. Supported values are: none, low, high, xhigh\\n");
+process.exit(1);
+`,
+    );
+    chmodSync(bin, 0o755);
+
+    const result = await preflightEngine('codex', {
+      engineOptions: { cliBinary: bin },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failure).toBe('invalid-config');
+    expect(result.detail).toContain("Invalid value: 'max'");
+    expect(result.detail).toContain('Supported values');
+    expect(result.detail).toContain('[redacted]');
+    expect(result.detail).not.toContain(secret);
   });
 
   it('passes grounded working memory through Codex stdin', async () => {

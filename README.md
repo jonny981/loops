@@ -328,7 +328,7 @@ agentCheck({
 
 **Builders:** `predicate`, `bodyPassed`, `minConfidence`, `commandSucceeds` (a shell command exits 0), `all`, `any`, `not`, `quorum` (k-of-n), `agentCheck` (model judge), `always`, `never`, and `gateJob` (lift a condition into a `Job`, e.g. a reviewer).
 
-Three **hardening gates** close the ways an agent can technically satisfy a gate while betraying it, at zero model cost: `ratchet` (a measured metric may only hold or improve, against a runtime-owned baseline written only in the improving direction — the loop can't loosen its own bar), `writeScope` (every changed file must match a declared glob — lane-keeping for nodes sharing a repo), and `sampled` (run an expensive judge on a deterministic sha256 bucket of iterations, so a `quorum` at `rate: 0.25` really runs every ~4th iteration, reproducibly). Recipes for each are in [docs/patterns.md](docs/patterns.md#hardening-gates--keep-the-loop-honest-without-spending-a-model-call).
+Three **hardening gates** close the ways an agent can technically satisfy a gate while betraying it, at zero model cost: `ratchet` (a measured metric may only hold or improve, against a runtime-owned baseline written only in the improving direction), `writeScope` (pending changes introduced since loop entry must match declared write lanes, with strict absolute mode available), and `sampled` (run an expensive judge on a deterministic sha256 bucket of iterations, so a `quorum` at `rate: 0.25` really runs every ~4th iteration, reproducibly). Recipes for each are in [docs/patterns.md](docs/patterns.md#hardening-gates--keep-the-loop-honest-without-spending-a-model-call).
 
 ### The gate briefs the next attempt
 
@@ -528,7 +528,7 @@ remains an engine failure.
 
 ### Dead lanes: fallback chains and preflight
 
-Because `Engine` is one method, "try the next provider when this one is dead" is just another engine — no runner support needed. `fallbackEngine` reroutes on **lane-dead** failures only (a bad key, an empty balance, a missing binary, an unknown model — the things that will not heal within a run) and latches a dead lane so it isn't retried fifty iterations in a row. Rate limits, quotas, and the token budget stay owned by the [`onLimit` policy](#rate-limits-quotas-and-budgets-wait-or-resume) — a fallback that silently swallowed a quota would bypass the wait/checkpoint machinery. Opt in via `on: ['quota']` if you genuinely want a quota to hop providers instead of pausing.
+Because `Engine` is one method, "try the next provider when this one is dead" is just another engine. `fallbackEngine` reroutes on **lane-dead** failures only (a bad key, an empty balance, a missing binary, an unknown model, or invalid configuration) and latches a dead lane so it is not retried fifty iterations in a row. Rate limits, quotas, and the token budget stay owned by the [`onLimit` policy](#rate-limits-quotas-and-budgets-wait-or-resume). Transient provider failures are not latched; the calling job or loop retry policy decides when to retry them. Opt in via `on: ['quota']` if you genuinely want a quota to hop providers instead of pausing.
 
 ```ts
 import { run, fallbackEngine } from '@loops-adk/core';
@@ -541,7 +541,7 @@ await run(job, {
 });
 ```
 
-`loops preflight` is the online counterpart to the offline `loops validate`: one deliberately tiny live turn per engine (a few tokens), through the same interface the run will use, so a dead lane surfaces **before** iteration 1 spends anything — classified (`auth | billing | missing-cli | model-unavailable | …`), so "your key is dead" and "the CLI isn't installed" are distinct, actionable answers.
+`loops preflight` is the online counterpart to the offline `loops validate`: one deliberately tiny live turn per engine (a few tokens), through the same interface the run will use, so a dead lane surfaces **before** iteration 1 spends anything. Failures are classified (`auth | billing | missing-cli | model-unavailable | invalid-config | quota | transient | …`), so a stale CLI setting, an exhausted allowance, and a provider 5xx lead to different operator actions.
 
 ```bash
 loops validate feature.loop.ts        # offline: the recipe loads (zero spend)

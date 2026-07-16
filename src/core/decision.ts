@@ -1,5 +1,6 @@
 import type { Condition, Job, JobContext, Outcome } from './types.ts';
 import { parseHandoff } from './job.ts';
+import { isInfrastructureError } from './errors.ts';
 
 export interface LastGateBriefOptions {
   maxOutputChars?: number;
@@ -109,6 +110,12 @@ export function confidenceCondition(
   const token = opts.token ?? 'confidence';
   return async (ctx: JobContext) => {
     const outcome = await job(ctx);
+    if (
+      outcome.error &&
+      (ctx.signal.aborted || isInfrastructureError(outcome.error))
+    ) {
+      throw outcome.error;
+    }
     const output = outcomeText(outcome);
     const raw = lastDecisionLine(output, token);
     const acceptedNa =

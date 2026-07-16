@@ -377,6 +377,15 @@ describe('claude-cli limit classification', () => {
     expect(err?.retryable).toBe(false);
   });
 
+  it('classifies Claude session limits as reset-aware QUOTA', () => {
+    const err = classifyCliLimit(
+      "You've hit your session limit · resets 12am (Europe/London)",
+    );
+    expect(err?.code).toBe('QUOTA');
+    expect(err?.resetAt).toBeGreaterThan(Date.now());
+    expect(err?.retryable).toBe(true);
+  });
+
   it('classifies a plain rate limit as RATE_LIMIT', () => {
     const err = classifyCliLimit('Error: rate limit exceeded (429)');
     expect(err?.code).toBe('RATE_LIMIT');

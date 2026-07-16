@@ -189,6 +189,23 @@ describe('semantic run record schema v1', () => {
       safeParseSemanticRunRecord({ ...valid, metadata: { invalid: () => undefined } })
         .success,
     ).toBe(false);
+    for (const failure of ['invalid-config', 'transient']) {
+      expect(
+        safeParseSemanticRunRecord({
+          schemaVersion: 1,
+          kind: 'preflight-classification',
+          ts: 1,
+          path: [],
+          result: {
+            engine: 'codex',
+            ok: false,
+            failure,
+            detail: 'newer live classification',
+            latencyMs: 1,
+          },
+        }).success,
+      ).toBe(false);
+    }
     expect(() => parseSemanticRunRecord(valid)).not.toThrow();
 
     const trustedChangedWorkspaceRestore = {

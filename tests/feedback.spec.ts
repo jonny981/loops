@@ -15,6 +15,7 @@ import {
   reviewContext,
   revisionRequest,
   feedbackBlock,
+  confidenceCondition,
   normalizeFeedbackSeverity,
   isRequiredFeedbackSeverity,
   appendLedger,
@@ -276,6 +277,36 @@ describe('feedback protocol', () => {
     expect(outcome.status).toBe('paused');
     expect(outcome.error?.code).toBe('RATE_LIMIT');
     expect(outcome.revision?.findings).toBeUndefined();
+    expect((outcome.data as { errors: unknown[] }).errors).toHaveLength(1);
+  });
+
+  it('pauses when confidenceCondition wraps an infrastructure failure', async () => {
+    const limit = new LoopError({
+      code: 'QUOTA',
+      message: "You've hit your session limit",
+    });
+    const reviewer = fnJob('limited-reviewer', async () => ({
+      status: 'fail',
+      summary: limit.message,
+      error: limit,
+    }));
+
+    const { outcome } = await run(
+      reviewPanel({
+        reviewers: [
+          {
+            name: 'wrapped-reviewer',
+            review: confidenceCondition(reviewer),
+          },
+        ],
+      }),
+      { engine: 'mock', engines: { mock: () => new MockEngine(() => '') } },
+    );
+
+    expect(outcome.status).toBe('paused');
+    expect(outcome.error).toBe(limit);
+    expect(outcome.revision).toBeUndefined();
+    expect((outcome.data as { findings: unknown[] }).findings).toHaveLength(0);
     expect((outcome.data as { errors: unknown[] }).errors).toHaveLength(1);
   });
 

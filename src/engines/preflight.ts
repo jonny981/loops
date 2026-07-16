@@ -22,7 +22,7 @@ export interface PreflightResult {
   engine: string;
   model?: string;
   ok: boolean;
-  /** Set when the probe failed, classified. */
+  /** Set when the probe failed, using the live engine-failure vocabulary. */
   failure?: EngineFailureKind;
   /** One line of evidence: the reply, or the error message. */
   detail: string;

@@ -25,6 +25,17 @@ describe('classifyEngineFailure', () => {
     expect(classifyEngineFailure(new Error('model claude-opus-9 not found'))).toBe('model-unavailable');
     expect(classifyEngineFailure(new Error('monthly usage limit reached'))).toBe('quota');
     expect(classifyEngineFailure(new Error('429 Too Many Requests'))).toBe('rate-limit');
+    expect(
+      classifyEngineFailure(
+        new Error("HTTP 400: Invalid value: 'max'. Supported values are: high, xhigh"),
+      ),
+    ).toBe('invalid-config');
+    expect(classifyEngineFailure(new Error('503 Service Unavailable'))).toBe(
+      'transient',
+    );
+    expect(classifyEngineFailure(new Error('599 upstream failure'))).toBe(
+      'transient',
+    );
     expect(classifyEngineFailure(new Error('request timed out after 60s'))).toBe('timeout');
     expect(classifyEngineFailure(new Error('something exploded'))).toBe('unknown');
   });
@@ -39,8 +50,10 @@ describe('classifyEngineFailure', () => {
   it('keeps lane-dead separate from limits', () => {
     expect(LANE_DEAD_FAILURES.has('auth')).toBe(true);
     expect(LANE_DEAD_FAILURES.has('missing-cli')).toBe(true);
+    expect(LANE_DEAD_FAILURES.has('invalid-config')).toBe(true);
     expect(LANE_DEAD_FAILURES.has('rate-limit')).toBe(false);
     expect(LANE_DEAD_FAILURES.has('quota')).toBe(false);
+    expect(LANE_DEAD_FAILURES.has('transient')).toBe(false);
   });
 });
 

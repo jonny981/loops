@@ -1,10 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { globToRegExp, ratchet, sampled, writeScope } from '../src/core/guards.ts';
+import { all, loop, run } from '../src/api.ts';
 import type { JobContext } from '../src/core/types.ts';
 
 let workspace: string;
@@ -32,6 +39,26 @@ function ctx(): JobContext {
 
 function ctxAt(iteration: number): JobContext {
   return { ...ctx(), iteration } as JobContext;
+}
+
+function makeTrackedFileDirty(repo: string): void {
+  execFileSync('git', ['init', '-q'], { cwd: repo });
+  writeFileSync(join(repo, 'notes.md'), 'clean\n');
+  execFileSync('git', ['add', 'notes.md'], { cwd: repo });
+  execFileSync(
+    'git',
+    [
+      '-c',
+      'user.name=Loops Test',
+      '-c',
+      'user.email=test@loops.dev',
+      'commit',
+      '-qm',
+      'init',
+    ],
+    { cwd: repo },
+  );
+  writeFileSync(join(repo, 'notes.md'), 'pre-existing\n');
 }
 
 /** A metric emitter: prints noise, then `{"metrics":{"errors":N}}`. */
@@ -162,6 +189,109 @@ describe('writeScope', () => {
       const covered = await writeScope(['src/**', '*.md'])(repoCtx, undefined);
       expect(covered.met).toBe(true);
       expect(covered.reason).toContain('inside scope');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores untouched pre-existing dirt at loop entry', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'guards-repo-')));
+    try {
+      makeTrackedFileDirty(repo);
+
+      const { outcome } = await run(
+        loop({
+          name: 'scoped-fix',
+          max: 1,
+          body: async () => {
+            mkdirSync(join(repo, 'src'), { recursive: true });
+            writeFileSync(join(repo, 'src', 'fix.ts'), 'export {};\n');
+            return { status: 'pass', summary: 'fixed' };
+          },
+          until: [all(writeScope(['src/**']))],
+        }),
+        { cwd: repo },
+      );
+
+      expect(outcome.status).toBe('pass');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('catches a body changing a file that was already dirty at loop entry', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'guards-repo-')));
+    let finalReason = '';
+    try {
+      makeTrackedFileDirty(repo);
+
+      const { outcome } = await run(
+        loop({
+          name: 'scoped-fix',
+          max: 1,
+          body: async () => {
+            writeFileSync(join(repo, 'notes.md'), 'changed by body\n');
+            writeFileSync(join(repo, 'stray.txt'), 'new stray\n');
+            return { status: 'pass', summary: 'fixed' };
+          },
+          until: writeScope(['src/**']),
+          onComplete: (_outcome, context) => {
+            finalReason = context.lastGate?.reason ?? '';
+          },
+        }),
+        { cwd: repo },
+      );
+
+      expect(outcome.status).toBe('exhausted');
+      expect(finalReason).toContain('notes.md');
+      expect(finalReason).toContain('stray.txt');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps absolute workspace checking as an explicit mode', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'guards-repo-')));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      writeFileSync(join(repo, 'notes.md'), 'pre-existing\n');
+
+      const { outcome } = await run(
+        loop({
+          name: 'strict-scope',
+          max: 1,
+          body: async () => ({ status: 'pass', summary: 'no changes' }),
+          until: writeScope(['src/**'], { mode: 'absolute' }),
+        }),
+        { cwd: repo },
+      );
+
+      expect(outcome.status).toBe('exhausted');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('batches content probes for a large dirty set', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'guards-repo-')));
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      mkdirSync(join(repo, 'src'));
+      for (let index = 0; index < 205; index += 1) {
+        writeFileSync(join(repo, 'src', `${index}.ts`), `export const n = ${index};\n`);
+      }
+      const repoContext = {
+        ...ctx(),
+        workspace: { dir: repo },
+      } as unknown as JobContext;
+
+      const result = await writeScope(['src/**'], { mode: 'absolute' })(
+        repoContext,
+        undefined,
+      );
+
+      expect(result.met).toBe(true);
+      expect(result.reason).toContain('205 changed file(s)');
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

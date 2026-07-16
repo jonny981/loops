@@ -39,7 +39,9 @@ import { scrubCapture } from '../core/redact.ts';
 export function classifyCliLimit(text: string): LoopError | undefined {
   const lower = text.toLowerCase();
   const isUsage =
-    /usage limit|out of credits|insufficient credits|quota|billing/.test(lower);
+    /usage limit|session limit|out of credits|insufficient credits|quota|billing/.test(
+      lower,
+    );
   const isRate = /rate limit|rate-limit|too many requests|429/.test(lower);
   if (!isUsage && !isRate) return undefined;
 

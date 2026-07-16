@@ -22,6 +22,7 @@
  */
 
 import type {
+  Condition,
   ConditionResult,
   JobContext,
   LoopConfig,
@@ -29,7 +30,7 @@ import type {
   Job,
 } from './types.ts';
 import { childContext } from './context.ts';
-import { toCondition } from './condition.ts';
+import { prepareCondition } from './condition.ts';
 import { setMeta, jobMeta, describeConditions } from './describe.ts';
 import { commitJob, type CommitJobConfig } from './job.ts';
 import { LoopError, type LoopPhase } from './errors.ts';
@@ -79,9 +80,6 @@ export function loop(config: LoopConfig): Job {
       code: 'CONFIG',
       message: 'loop() requires a non-empty name',
     });
-  const start = config.start ? toCondition(config.start) : undefined;
-  const until = config.until ? toCondition(config.until) : undefined;
-  const stopOn = config.stopOn ? toCondition(config.stopOn) : undefined;
   const onError = config.retry?.onError ?? 'continue';
   const noProgress = resolveNoProgress(config.noProgress);
 
@@ -164,7 +162,7 @@ export function loop(config: LoopConfig): Job {
 
     // Evaluate a gate, classifying any throw with the gate's phase.
     const gate = async (
-      cond: NonNullable<typeof until>,
+      cond: Condition,
       which: LoopPhase,
       ctx: JobContext,
       last: Outcome | undefined,
@@ -182,6 +180,13 @@ export function loop(config: LoopConfig): Job {
     };
 
     try {
+      const entryContext = ctxAt(0);
+      const [start, until, stopOn] = await Promise.all([
+        config.start ? prepareCondition(config.start, entryContext) : undefined,
+        config.until ? prepareCondition(config.until, entryContext) : undefined,
+        config.stopOn ? prepareCondition(config.stopOn, entryContext) : undefined,
+      ]);
+
       // 1. start gate
       if (start) {
         const r = await gate(start, 'start', ctxAt(0), undefined);

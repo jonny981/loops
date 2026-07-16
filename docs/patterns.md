@@ -278,11 +278,15 @@ export const cleanup = loop({
 });
 ```
 
-**`writeScope` — every changed file must match a declared glob.** The cheap
-lane-keeping gate for DAG nodes that share one repo without worktree isolation:
-declare where a node may write, and a stray edit outside that scope fails the
-gate deterministically, naming the files. A clean tree passes; a workspace that
-is not a git repository fails closed.
+**`writeScope`: every pending change introduced by the loop must match a
+declared glob.** The cheap lane-keeping gate for DAG nodes that share one repo
+without worktree isolation: declare where a node may write, and a staged,
+unstaged, or untracked edit outside that scope fails deterministically, naming
+the files. The default compares with a content-aware snapshot from loop entry,
+so untouched pre-existing dirt is ignored but a body edit to an already-dirty
+file is caught. Pass `{ mode: 'absolute' }` to require the complete pending
+workspace state to fit the scope. A workspace that is not a git repository
+fails closed.
 
 ```ts
 import { dag, writeScope } from '@loops-adk/core';

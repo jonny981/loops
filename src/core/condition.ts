@@ -68,6 +68,37 @@ export function toCondition(
   return coerceOne(input);
 }
 
+type ConditionPreparation = (
+  ctx: JobContext,
+) => Condition | Promise<Condition>;
+
+const conditionPreparations = new WeakMap<Function, ConditionPreparation>();
+
+/** Internal lifecycle hook for conditions that need state from loop entry. */
+export function withConditionPreparation(
+  condition: Condition,
+  prepare: ConditionPreparation,
+): Condition {
+  conditionPreparations.set(condition, prepare);
+  return condition;
+}
+
+/** Prepare a condition tree once for one loop invocation. */
+export async function prepareCondition(
+  input: ConditionInput,
+  ctx: JobContext,
+  combine: 'all' | 'any' = 'all',
+): Promise<Condition> {
+  if (Array.isArray(input)) {
+    const prepared = await Promise.all(
+      input.map((item) => prepareCondition(item, ctx, combine)),
+    );
+    return combine === 'any' ? any(...prepared) : all(...prepared);
+  }
+  const prepare = conditionPreparations.get(input);
+  return prepare ? prepare(ctx) : toCondition(input, combine);
+}
+
 /**
  * A single function input is ambiguous at the type level (a `Condition` and a
  * `RawPredicate` are both 2-arg functions), so we disambiguate at call time by
@@ -231,7 +262,7 @@ export const never: Condition = async () => ({ met: false, reason: 'never' });
 /** Inverts a condition. The inner result's `output` is carried through unchanged. */
 export function not(c: ConditionInput): Condition {
   const cond = toCondition(c);
-  return async (ctx, last) => {
+  const condition: Condition = async (ctx, last) => {
     const r = await cond(ctx, last);
     return {
       met: !r.met,
@@ -240,6 +271,9 @@ export function not(c: ConditionInput): Condition {
       output: r.output,
     };
   };
+  return withConditionPreparation(condition, async (ctx) =>
+    not(await prepareCondition(c, ctx)),
+  );
 }
 
 /**
@@ -248,7 +282,7 @@ export function not(c: ConditionInput): Condition {
  */
 export function all(...inputs: ConditionInput[]): Condition {
   const conds = inputs.map((i) => toCondition(i));
-  return async (ctx, last) => {
+  const condition: Condition = async (ctx, last) => {
     const results: ConditionResult[] = [];
     for (const c of conds) {
       const r = await c(ctx, last);
@@ -265,6 +299,9 @@ export function all(...inputs: ConditionInput[]): Condition {
       reason: `all(${results.map((r) => r.reason).join(' & ')})`,
     };
   };
+  return withConditionPreparation(condition, async (ctx) =>
+    all(...(await Promise.all(inputs.map((input) => prepareCondition(input, ctx))))),
+  );
 }
 
 /**
@@ -274,7 +311,7 @@ export function all(...inputs: ConditionInput[]): Condition {
  */
 export function any(...inputs: ConditionInput[]): Condition {
   const conds = inputs.map((i) => toCondition(i));
-  return async (ctx, last) => {
+  const condition: Condition = async (ctx, last) => {
     const reasons: string[] = [];
     let output: string | undefined;
     for (const c of conds) {
@@ -291,6 +328,9 @@ export function any(...inputs: ConditionInput[]): Condition {
     }
     return { met: false, reason: `any(${reasons.join(' | ')})`, output };
   };
+  return withConditionPreparation(condition, async (ctx) =>
+    any(...(await Promise.all(inputs.map((input) => prepareCondition(input, ctx))))),
+  );
 }
 
 /**
@@ -309,7 +349,7 @@ export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
       message: `quorum requires 1 <= k <= inputs (got k=${k}, n=${inputs.length})`,
     });
   const conds = inputs.map((i) => toCondition(i));
-  return setLabel(async (ctx, last) => {
+  const condition: Condition = setLabel(async (ctx, last) => {
     const settled = await Promise.allSettled(conds.map((c) => c(ctx, last)));
     const engineErrors = settled
       .filter(
@@ -355,6 +395,12 @@ export function quorum(k: number, ...inputs: ConditionInput[]): Condition {
       output: met ? undefined : output,
     };
   }, `quorum ${k}/${inputs.length}`);
+  return withConditionPreparation(condition, async (ctx) =>
+    quorum(
+      k,
+      ...(await Promise.all(inputs.map((input) => prepareCondition(input, ctx)))),
+    ),
+  );
 }
 
 // ── Agent-validated condition ──────────────────────────────────────────────

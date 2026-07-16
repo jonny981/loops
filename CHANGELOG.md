@@ -11,6 +11,32 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+### Added
+
+- Engine preflight distinguishes invalid configuration from transient provider
+  failures. Invalid configuration is lane-dead; transient 5xx failures remain
+  retryable by the caller. The frozen semantic record v1 vocabulary is
+  unchanged.
+
+### Changed
+
+- `writeScope` compares staged, unstaged, and untracked state with a
+  content-aware snapshot from loop entry, so untouched pre-existing dirt cannot
+  wedge a scoped fix. A body edit to an already-dirty file is still detected.
+  `mode: 'absolute'` retains strict pending-state checking, and failed reasons
+  name up to three paths.
+
+### Fixed
+
+- `confidenceCondition` preserves infrastructure failures from its wrapped job,
+  allowing `reviewPanel` to pause instead of scoring provider errors as review
+  blocks. Claude CLI session-limit messages are classified as reset-aware quota
+  failures rather than generic engine exits.
+- Codex failures retain a bounded, redacted head and tail from both output
+  streams, so preflight keeps trailing configuration diagnostics instead of
+  reporting an unexplained `unknown` failure. OpenAI-style keys are redacted
+  even when inherited outside the request environment.
+
 ## [0.9.1] - 2026-07-16
 
 ### Fixed

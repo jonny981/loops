@@ -7,11 +7,11 @@
  * Semantics, deliberately narrow:
  *
  * - It falls back only on **lane-dead** failures (`LANE_DEAD_FAILURES`: auth,
- *   billing, missing CLI, unknown model) — the ones that will not heal within
- *   a run. Rate limits, quotas, and the token budget stay owned by the
- *   runner's `onLimit` policy (wait / checkpoint-and-resume); swallowing them
- *   here would silently bypass that machinery. Opt in via `on` if you really
- *   want a quota to hop providers instead of pausing.
+ *   billing, missing CLI, unknown model, invalid configuration), the ones that
+ *   will not heal within a run. Rate limits, quotas, and the token budget stay
+ *   owned by the runner's `onLimit` policy (wait / checkpoint-and-resume);
+ *   swallowing them here would silently bypass that machinery. Opt in via
+ *   `on` if you really want a quota to hop providers instead of pausing.
  * - A lane that failed dead is **latched** for the rest of the run: a missing
  *   binary does not get retried fifty iterations in a row.
  * - Aborts never fall back, and a chain with every lane latched fails with
