@@ -11,6 +11,8 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-16
+
 ### Fixed
 
 - `lastDecisionLine(text, token, values)` returns the matched token in the
