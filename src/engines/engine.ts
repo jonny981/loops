@@ -42,6 +42,10 @@ export interface AgentRequest {
    * it ignore it (anthropic-api: no subprocess).
    */
   env?: Record<string, string>;
+  /**
+   * Soft timeout for this engine invocation. Streaming does not reset it; each
+   * later worker, advisor, or fallback invocation receives its own window.
+   */
   timeoutMs?: number;
   /**
    * Extra hard-timeout window after `timeoutMs`. Engines may accept a completed

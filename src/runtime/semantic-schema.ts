@@ -397,6 +397,7 @@ const checkpointSchema = z.discriminatedUnion('decision', [
       totalNodes: nonnegativeInt.positive(),
       fingerprint: z.enum([
         'matched',
+        'changed',
         'checkpoint-missing',
         'workspace-unavailable',
       ]),

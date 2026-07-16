@@ -292,8 +292,8 @@ describe('semantic run records', () => {
         decision: 'restored',
         restoredNodes: 2,
         totalNodes: 3,
-        reason: 'restored 2/3 nodes',
-        fingerprint: 'matched',
+        reason: 'restored 2/3 nodes from an explicitly trusted changed workspace',
+        fingerprint: 'changed',
       },
     ];
 
@@ -345,7 +345,7 @@ describe('semantic run records', () => {
           decision: 'restored',
           restoredNodes: 2,
           totalNodes: 3,
-          fingerprint: 'matched',
+          fingerprint: 'changed',
         },
       }),
     ]);

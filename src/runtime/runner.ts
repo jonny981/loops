@@ -127,6 +127,12 @@ export interface RunOptions {
   /** Restore shared run state written by a prior `checkpoint` before starting. */
   resumeFrom?: string;
   /**
+   * Reuse checkpointed green DAG nodes when the checkpoint has a valid but
+   * different workspace fingerprint. This is an explicit operator trust
+   * decision; the default remains a fresh run for changed workspaces.
+   */
+  resumeTrustWorkspace?: boolean;
+  /**
    * How a loop reacts to a rate limit / quota / token budget. Default `auto`:
    * wait out a known reset within `maxWaitMs`, else checkpoint and exit with a
    * resume command (the `paused` status, exit code 75). `wait` waits any known
@@ -308,6 +314,10 @@ export async function run(
         signal: controller.signal,
         excludePaths: uniquePaths([options.resumeFrom, options.checkpoint]),
       });
+      const workspaceChanged =
+        currentFingerprint !== undefined &&
+        checkpoint.workspaceFingerprint !== undefined &&
+        checkpoint.workspaceFingerprint !== currentFingerprint;
       if (!checkpoint.workspaceFingerprintValid) {
         checkpointControl.resumeDags = undefined;
         checkpointControl.dags = {};
@@ -325,11 +335,7 @@ export async function run(
           ),
           fingerprint: 'changed',
         };
-      } else if (
-        currentFingerprint !== undefined &&
-        checkpoint.workspaceFingerprint !== undefined &&
-        checkpoint.workspaceFingerprint !== currentFingerprint
-      ) {
+      } else if (workspaceChanged && !options.resumeTrustWorkspace) {
         checkpointControl.resumeDags = undefined;
         checkpointControl.dags = {};
         restoreEvent = {
@@ -358,11 +364,16 @@ export async function run(
         const restoredNodes = countCheckpointNodes(checkpointControl.resumeDags);
         const totalNodes = checkpointNodes;
         const fingerprint =
-          checkpoint.workspaceFingerprint === undefined
-            ? 'checkpoint-missing'
-            : currentFingerprint === undefined
-              ? 'workspace-unavailable'
-              : 'matched';
+          workspaceChanged
+            ? 'changed'
+            : checkpoint.workspaceFingerprint === undefined
+              ? 'checkpoint-missing'
+              : currentFingerprint === undefined
+                ? 'workspace-unavailable'
+                : 'matched';
+        const restoreReason = workspaceChanged
+          ? `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom} after an explicitly trusted changed workspace`
+          : `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom}`;
         restoreEvent =
           restoredNodes > 0
             ? {
@@ -374,7 +385,7 @@ export async function run(
                 restoredNodes,
                 totalNodes,
                 reason: withCheckpointDiagnostics(
-                  `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom}`,
+                  restoreReason,
                   checkpoint.diagnostics,
                 ),
                 fingerprint,

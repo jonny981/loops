@@ -95,6 +95,7 @@ export default defineJob(
 
 describe('running a loop from outside the package tree', () => {
   let dir: string;
+  const extraDirs: string[] = [];
 
   beforeAll(() => {
     // An out-of-tree recipe in its own ES module scope (what a consumer repo has).
@@ -105,7 +106,12 @@ describe('running a loop from outside the package tree', () => {
     writeFileSync(join(dir, 'env-shaped.loop.ts'), ENV_SHAPED_RECIPE);
   });
 
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+    for (const extraDir of extraDirs) {
+      rmSync(extraDir, { recursive: true, force: true });
+    }
+  });
 
   it('runs an out-of-tree recipe to convergence', async () => {
     const { code, out } = await loops(
@@ -459,6 +465,115 @@ export default defineJob(fnJob('yaml-config', async (ctx) => ({
     expect(JSON.parse(readFileSync(resume, 'utf8'))).toHaveProperty('ts');
     expect(existsSync(configured)).toBe(false);
   }, 30_000);
+
+  it('requires --resume when --resume-trust-workspace is set', async () => {
+    const result = await loops(
+      [
+        'run',
+        join(dir, 'params.loop.ts'),
+        '--resume-trust-workspace',
+        '--no-record',
+        '--oem',
+        'Sigenergy',
+      ],
+      dir,
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.out).toContain('--resume-trust-workspace requires --resume');
+  }, 30_000);
+
+  it('plumbs --resume-trust-workspace into changed-workspace DAG restore', async () => {
+    const trustedDir = mkdtempSync(join(tmpdir(), 'loops-trusted-resume-'));
+    extraDirs.push(trustedDir);
+    const recipe = join(trustedDir, 'trusted.loop.ts');
+    const checkpoint = join(trustedDir, 'trusted.ckpt.json');
+    const countFile = join(trustedDir, 'setup-count.txt');
+    writeFileSync(join(trustedDir, 'package.json'), '{"type":"module"}\n');
+    writeFileSync(
+      recipe,
+      `import { defineJob, dag, fnJob } from '${apiUrl}';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+const countFile = ${JSON.stringify(countFile)};
+export default defineJob(dag({
+  name: 'trusted-cli-resume',
+  nodes: {
+    setup: fnJob('setup', async () => {
+      const count = existsSync(countFile) ? Number(readFileSync(countFile, 'utf8')) : 0;
+      writeFileSync(countFile, String(count + 1));
+      return { status: 'pass' };
+    }),
+    gate: {
+      needs: ['setup'],
+      job: fnJob('gate', async () => process.env.RESUMED === '1'
+        ? { status: 'pass' }
+        : { status: 'paused', summary: 'pause for recovery fix' }),
+    },
+  },
+}));
+`,
+    );
+    await exec('git', ['init', '-b', 'main'], { cwd: trustedDir });
+    await exec('git', ['config', 'user.email', 'test@loops.dev'], {
+      cwd: trustedDir,
+    });
+    await exec('git', ['config', 'user.name', 'Loops Test'], {
+      cwd: trustedDir,
+    });
+    await exec('git', ['config', 'commit.gpgsign', 'false'], {
+      cwd: trustedDir,
+    });
+    await exec('git', ['add', '-A'], { cwd: trustedDir });
+    await exec('git', ['commit', '-m', 'chore: init'], { cwd: trustedDir });
+
+    const first = await loops(
+      [
+        'run',
+        recipe,
+        '--checkpoint',
+        checkpoint,
+        '--json',
+        '--no-record',
+      ],
+      trustedDir,
+    );
+    expect(first.code).toBe(75);
+    expect(readFileSync(countFile, 'utf8')).toBe('1');
+
+    writeFileSync(join(trustedDir, 'fix.txt'), 'substantive recovery fix\n');
+    await exec('git', ['add', '-A'], { cwd: trustedDir });
+    await exec('git', ['commit', '-m', 'fix: repair interrupted run'], {
+      cwd: trustedDir,
+    });
+
+    const resumed = await loops(
+      [
+        'run',
+        recipe,
+        '--resume',
+        checkpoint,
+        '--resume-trust-workspace',
+        '--json',
+        '--no-record',
+      ],
+      trustedDir,
+      { RESUMED: '1' },
+    );
+    expect(resumed.code).toBe(0);
+    expect(readFileSync(countFile, 'utf8')).toBe('1');
+    const events = resumed.out
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { kind: string });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'restored',
+        fingerprint: 'changed',
+      }),
+    );
+  }, 45_000);
 
   it('restores checkpointed DAG nodes after a SIGTERM-killed CLI run', async () => {
     const recipe = join(dir, 'sigterm-restore.loop.ts');

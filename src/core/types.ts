@@ -494,6 +494,7 @@ export type LoopEvent =
           totalNodes: number;
           fingerprint:
             | 'matched'
+            | 'changed'
             | 'checkpoint-missing'
             | 'workspace-unavailable';
         }

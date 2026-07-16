@@ -80,6 +80,7 @@ interface RunFlags {
   record?: string | false;
   checkpoint?: string;
   resume?: string;
+  resumeTrustWorkspace?: boolean;
   supervise?: boolean;
   runId?: string;
   prices?: string;
@@ -793,6 +794,9 @@ async function execute(
   ) {
     flags.checkpoint = flags.resume;
   }
+  if (flags.resumeTrustWorkspace && !flags.resume) {
+    throw new Error('--resume-trust-workspace requires --resume');
+  }
 
   const { job, title, params } = file
     ? await loadJob(file)
@@ -919,6 +923,7 @@ async function execute(
     recordTo,
     checkpoint: flags.checkpoint,
     resumeFrom: flags.resume,
+    resumeTrustWorkspace: flags.resumeTrustWorkspace,
     supervise: flags.supervise,
     runId: flags.runId,
     cost,
@@ -1286,6 +1291,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option(
       '--resume <path>',
       'restore run state from a prior --checkpoint file',
+    )
+    .option(
+      '--resume-trust-workspace',
+      'reuse checkpointed green DAG nodes after an explicit workspace change',
     )
     .option(
       '--on-limit <policy>',

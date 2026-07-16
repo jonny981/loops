@@ -2,6 +2,7 @@ import { afterAll, describe, it, expect } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 
 import {
   run,
@@ -465,6 +466,65 @@ describe('dag', () => {
     expect(upstreamRuns).toBe(2);
   });
 
+  it('restores checkpointed nodes across a fix commit only when the changed workspace is explicitly trusted', async () => {
+    const repo = await tmpRepo();
+    const checkpoint = join(repo, 'ckpt.json');
+    const events: LoopEvent[] = [];
+    let upstreamRuns = 0;
+
+    const build = () =>
+      dag({
+        name: 'trusted-resume',
+        nodes: {
+          upstream: fnJob('upstream', async () => {
+            upstreamRuns += 1;
+            writeFileSync(join(repo, 'artifact.txt'), `run=${upstreamRuns}\n`);
+            return { status: 'pass' as const };
+          }),
+          gate: {
+            needs: ['upstream'],
+            job: fnJob('gate', async (ctx) =>
+              ctx.state.resume
+                ? { status: 'pass' as const }
+                : { status: 'paused' as const, summary: 'pause after upstream' },
+            ),
+          },
+        },
+      });
+
+    const first = await run(build(), { ...mockOpts, cwd: repo, checkpoint });
+    expect(first.outcome.status).toBe('paused');
+    expect(upstreamRuns).toBe(1);
+
+    writeFileSync(join(repo, 'fix.txt'), 'substantive recovery fix\n');
+    await execa('git', ['add', '-A'], { cwd: repo });
+    await execa('git', ['commit', '-m', 'fix: repair interrupted run'], {
+      cwd: repo,
+    });
+
+    const second = await run(build(), {
+      ...mockOpts,
+      cwd: repo,
+      checkpoint,
+      resumeFrom: checkpoint,
+      resumeTrustWorkspace: true,
+      state: { resume: true },
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(second.outcome.status).toBe('pass');
+    expect(upstreamRuns).toBe(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'restored',
+        fingerprint: 'changed',
+        restoredNodes: 1,
+        reason: expect.stringMatching(/explicitly trusted changed workspace/i),
+      }),
+    );
+  });
+
   it('does skip checkpointed nodes when the checkpoint file is inside the workspace', async () => {
     const repo = await tmpRepo();
     const checkpoint = join(repo, 'ckpt.json');
@@ -828,7 +888,7 @@ describe('dag', () => {
     );
   });
 
-  it('runs fresh when a checkpoint fingerprint has an invalid type', async () => {
+  it('runs fresh when a checkpoint fingerprint has an invalid type even if changed-workspace trust is enabled', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'loops-dag-invalid-fingerprint-'));
     const checkpoint = join(dir, 'invalid-fingerprint.ckpt.json');
     const events: LoopEvent[] = [];
@@ -865,6 +925,7 @@ describe('dag', () => {
         ...mockOpts,
         cwd: dir,
         resumeFrom: checkpoint,
+        resumeTrustWorkspace: true,
         onEvent: (event) => events.push(event),
       },
     );

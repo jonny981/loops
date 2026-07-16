@@ -109,6 +109,10 @@ export interface AgentJobConfig {
    * Engines that spawn no subprocess ignore it.
    */
   env?: Record<string, string>;
+  /**
+   * Soft timeout for each worker or fallback invocation. Advisor consults
+   * inherit it unless overridden; each invocation receives its own window.
+   */
   timeoutMs?: number;
   /** Extra hard-timeout window after `timeoutMs` for completed final results. */
   timeoutGraceMs?: number;

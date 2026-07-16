@@ -2312,6 +2312,7 @@
                           "type": "string",
                           "enum": [
                             "matched",
+                            "changed",
                             "checkpoint-missing",
                             "workspace-unavailable"
                           ]
@@ -2673,6 +2674,7 @@
                           "type": "string",
                           "enum": [
                             "matched",
+                            "changed",
                             "checkpoint-missing",
                             "workspace-unavailable"
                           ]
@@ -3034,6 +3036,7 @@
                           "type": "string",
                           "enum": [
                             "matched",
+                            "changed",
                             "checkpoint-missing",
                             "workspace-unavailable"
                           ]
@@ -3395,6 +3398,7 @@
                           "type": "string",
                           "enum": [
                             "matched",
+                            "changed",
                             "checkpoint-missing",
                             "workspace-unavailable"
                           ]

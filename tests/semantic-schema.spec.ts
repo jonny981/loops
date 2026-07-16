@@ -191,6 +191,29 @@ describe('semantic run record schema v1', () => {
     ).toBe(false);
     expect(() => parseSemanticRunRecord(valid)).not.toThrow();
 
+    const trustedChangedWorkspaceRestore = {
+      schemaVersion: 1,
+      kind: 'lifecycle-transition',
+      ts: 1,
+      path: [],
+      unit: 'run',
+      from: 'paused',
+      to: 'running',
+      checkpoint: {
+        path: 'checkpoint.json',
+        decision: 'restored',
+        restoredNodes: 1,
+        totalNodes: 2,
+        fingerprint: 'changed',
+      },
+    };
+    expect(safeParseSemanticRunRecord(trustedChangedWorkspaceRestore).success).toBe(
+      true,
+    );
+    expect(() =>
+      fromJsonSchema.parse(trustedChangedWorkspaceRestore),
+    ).not.toThrow();
+
     const contradictoryPreflight = [
       {
         schemaVersion: 1,
