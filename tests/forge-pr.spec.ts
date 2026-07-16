@@ -1,6 +1,10 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { execa } from 'execa';
-import { writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -11,12 +15,14 @@ import {
   forgeChecks,
   consolidate,
   fnJob,
+  GhForge,
   MockForge,
   MockEngine,
   buildCreateArgs,
   buildEditArgs,
   buildMergeArgs,
   buildViewArgs,
+  buildCheckStateArgs,
   buildChecksArgs,
 } from '../src/api.ts';
 import type { PrRef, RunOptions } from '../src/api.ts';
@@ -42,6 +48,41 @@ const mockOpts = (forge: MockForge, cwd: string, body = 'SYNTH BODY'): RunOption
   forge,
   cwd,
 });
+
+async function runGhChecks(
+  stateOutput: string,
+  exits: { state?: number; checks?: number } = {},
+): Promise<{ passed: boolean; calls: string[][] }> {
+  const dir = tmpBareDir();
+  const bin = join(dir, 'gh-stub.mjs');
+  const callsFile = join(dir, 'calls.jsonl');
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(args) + '\\n');
+if (args[1] === 'view') {
+  process.stdout.write(${JSON.stringify(stateOutput)});
+  process.exit(${exits.state ?? 0});
+}
+if (args[1] === 'checks') process.exit(${exits.checks ?? 0});
+process.exit(2);
+`,
+  );
+  chmodSync(bin, 0o755);
+
+  const passed = await new GhForge(bin).checksPass(
+    { number: 9, url: 'u' },
+    { cwd: dir },
+  );
+  const calls = readFileSync(callsFile, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as string[]);
+  return { passed, calls };
+}
 
 describe('gh argv builders', () => {
   it('create passes base/head/title and reads the body from stdin', () => {
@@ -88,6 +129,109 @@ describe('gh argv builders', () => {
     expect(buildChecksArgs({ number: 9, url: 'u' })).toEqual([
       'pr', 'checks', '9', '--required',
     ]);
+  });
+
+  it('requests mergeability and the complete status rollup for a PR', () => {
+    expect(buildCheckStateArgs({ number: 9, url: 'u' })).toEqual([
+      'pr', 'view', '9', '--json',
+      'mergeable,mergeStateStatus,statusCheckRollup',
+    ]);
+  });
+});
+
+describe('MockForge checksPass', () => {
+  const pr: PrRef = { number: 9, url: 'u' };
+
+  it('passes for a mergeable PR with a check run and green required checks', async () => {
+    const forge = new MockForge({ mergeable: true, checkRuns: 1, checks: true });
+    await expect(forge.checksPass(pr, { cwd: '.' })).resolves.toBe(true);
+  });
+
+  it('fails when the PR is not mergeable', async () => {
+    const forge = new MockForge({ mergeable: false, checkRuns: 1, checks: true });
+    await expect(forge.checksPass(pr, { cwd: '.' })).resolves.toBe(false);
+  });
+
+  it('fails when no GitHub Actions check run exists', async () => {
+    const forge = new MockForge({ mergeable: true, checkRuns: 0, checks: true });
+    await expect(forge.checksPass(pr, { cwd: '.' })).resolves.toBe(false);
+  });
+
+  it('fails when a required check is red', async () => {
+    const forge = new MockForge({ mergeable: true, checkRuns: 1, checks: false });
+    await expect(forge.checksPass(pr, { cwd: '.' })).resolves.toBe(false);
+  });
+});
+
+describe('GhForge checksPass', () => {
+  const pr: PrRef = { number: 9, url: 'u' };
+  const stateArgs = buildCheckStateArgs(pr);
+  const checksArgs = buildChecksArgs(pr);
+
+  it('runs required checks after mergeability and CheckRun guards pass', async () => {
+    const { passed, calls } = await runGhChecks(
+      JSON.stringify({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        statusCheckRollup: [
+          { __typename: 'CheckRun', name: 'test' },
+          { __typename: 'StatusContext', context: 'Vercel' },
+        ],
+      }),
+    );
+
+    expect(passed).toBe(true);
+    expect(calls).toEqual([stateArgs, checksArgs]);
+  });
+
+  it('rejects a non-mergeable PR without running required checks', async () => {
+    const { passed, calls } = await runGhChecks(
+      JSON.stringify({
+        mergeable: 'CONFLICTING',
+        mergeStateStatus: 'DIRTY',
+        statusCheckRollup: [{ __typename: 'CheckRun', name: 'test' }],
+      }),
+    );
+
+    expect(passed).toBe(false);
+    expect(calls).toEqual([stateArgs]);
+  });
+
+  it('rejects an external-only status rollup without running required checks', async () => {
+    const { passed, calls } = await runGhChecks(
+      JSON.stringify({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        statusCheckRollup: [
+          { __typename: 'StatusContext', context: 'Vercel' },
+        ],
+      }),
+    );
+
+    expect(passed).toBe(false);
+    expect(calls).toEqual([stateArgs]);
+  });
+
+  it('fails closed when the state query fails or returns invalid JSON', async () => {
+    const queryFailure = await runGhChecks('', { state: 1 });
+    const parseFailure = await runGhChecks('not json');
+
+    expect(queryFailure).toEqual({ passed: false, calls: [stateArgs] });
+    expect(parseFailure).toEqual({ passed: false, calls: [stateArgs] });
+  });
+
+  it('rejects red required checks after the state guards pass', async () => {
+    const { passed, calls } = await runGhChecks(
+      JSON.stringify({
+        mergeable: 'MERGEABLE',
+        mergeStateStatus: 'CLEAN',
+        statusCheckRollup: [{ __typename: 'CheckRun', name: 'test' }],
+      }),
+      { checks: 1 },
+    );
+
+    expect(passed).toBe(false);
+    expect(calls).toEqual([stateArgs, checksArgs]);
   });
 });
 

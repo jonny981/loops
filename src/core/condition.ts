@@ -169,10 +169,12 @@ export function commandSucceeds(
 }
 
 /**
- * True when the branch's open PR has all required checks green — a synchronous
- * "CI is green" gate over the `Forge`. Use it as `mergeJob`'s `when`, or anywhere a
- * `Condition` is taken, for the blocking path; prefer `mergeJob({ auto: true })` to
- * hand the same gate to GitHub non-blockingly. No PR / no branch → not met.
+ * True when the branch's open PR is mergeable, its status rollup contains a
+ * `CheckRun`, and all required checks are green. `CheckRun` presence is a trust
+ * proxy that CI ran, not proof of a particular configured workflow. Use this as
+ * `mergeJob`'s `when`, or anywhere a `Condition` is taken, for the blocking path;
+ * prefer `mergeJob({ auto: true })` to hand the gate to GitHub non-blockingly.
+ * No PR / no branch → not met.
  */
 export function forgeChecks(): Condition {
   return async (ctx) => {

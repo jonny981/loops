@@ -178,6 +178,7 @@ export {
   buildCreateArgs,
   buildEditArgs,
   buildMergeArgs,
+  buildCheckStateArgs,
   buildChecksArgs,
   type Forge,
   type PrRef,

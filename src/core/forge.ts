@@ -74,7 +74,11 @@ export interface Forge {
   createPr(input: PrInput, opts: ForgeOpts): Promise<PrRef>;
   editPr(pr: PrRef, patch: PrPatch, opts: ForgeOpts): Promise<void>;
   mergePr(pr: PrRef, opts: MergeOptions): Promise<void>;
-  /** True when the PR's required checks are all green (for a synchronous gate). */
+  /**
+   * True when the PR is mergeable, its status rollup contains a `CheckRun`, and
+   * all required checks are green. `CheckRun` presence is a trust proxy that CI
+   * ran, not proof of a particular configured workflow.
+   */
   checksPass(pr: PrRef, opts: ForgeOpts): Promise<boolean>;
 }
 
@@ -132,6 +136,16 @@ export function buildMergeArgs(pr: PrRef, opts: MergeOptions): string[] {
 
 export function buildChecksArgs(pr: PrRef): string[] {
   return ['pr', 'checks', String(pr.number), '--required'];
+}
+
+export function buildCheckStateArgs(pr: PrRef): string[] {
+  return [
+    'pr',
+    'view',
+    String(pr.number),
+    '--json',
+    'mergeable,mergeStateStatus,statusCheckRollup',
+  ];
 }
 
 // ── GhForge — the default adapter ────────────────────────────────────────────
@@ -219,6 +233,26 @@ export class GhForge implements Forge {
   }
 
   async checksPass(pr: PrRef, opts: ForgeOpts): Promise<boolean> {
+    const state = await gh(this.bin, buildCheckStateArgs(pr), opts);
+    if (state.exitCode !== 0) return false;
+    try {
+      const parsed = JSON.parse(state.stdout) as {
+        mergeable?: unknown;
+        statusCheckRollup?: unknown;
+      };
+      const hasCheckRun =
+        Array.isArray(parsed.statusCheckRollup) &&
+        parsed.statusCheckRollup.some(
+          (entry) =>
+            typeof entry === 'object' &&
+            entry !== null &&
+            (entry as { __typename?: unknown }).__typename === 'CheckRun',
+        );
+      if (parsed.mergeable !== 'MERGEABLE' || !hasCheckRun) return false;
+    } catch {
+      return false;
+    }
+
     const r = await gh(this.bin, buildChecksArgs(pr), opts);
     return r.exitCode === 0; // 0 = all required checks green
   }
@@ -231,6 +265,10 @@ export interface MockForgeOptions {
   existing?: Record<string, PrRef>;
   /** What `checksPass` returns. Default true. */
   checks?: boolean;
+  /** Whether the PR is mergeable. Default true. */
+  mergeable?: boolean;
+  /** Number of `CheckRun` entries in the status rollup. Default 1. */
+  checkRuns?: number;
 }
 
 /** Records every call and keeps a tiny in-memory PR store. No network. */
@@ -278,8 +316,12 @@ export class MockForge implements Forge {
     });
   }
 
-  async checksPass(): Promise<boolean> {
+  async checksPass(_pr: PrRef, _opts: ForgeOpts): Promise<boolean> {
     this.calls.push({ method: 'checksPass', args: {} });
-    return this.opts.checks ?? true;
+    return (
+      (this.opts.mergeable ?? true) &&
+      (this.opts.checkRuns ?? 1) > 0 &&
+      (this.opts.checks ?? true)
+    );
   }
 }
