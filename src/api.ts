@@ -224,7 +224,12 @@ export {
   type LastDecisionLineOptions,
   type LastGateBriefOptions,
 } from './core/decision.ts';
-export { promptBank, type PromptBank, type PromptVars } from './core/prompt-bank.ts';
+export {
+  promptBank,
+  type PromptBank,
+  type PromptBankOptions,
+  type PromptVars,
+} from './core/prompt-bank.ts';
 
 // The read side — grounding the next fresh context in the branch-local commit log
 export {
