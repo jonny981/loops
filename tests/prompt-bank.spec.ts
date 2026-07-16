@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,5 +101,52 @@ describe('promptBank', () => {
     expect(() => promptBank(dir, { fragmentsDir: join(dir, 'fragments') })).toThrow(
       /fragments directory must be relative/,
     );
+  });
+
+  it('rejects a configured fragments directory symlink that resolves outside the bank', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-prompts-'));
+    const outside = mkdtempSync(join(tmpdir(), 'loops-prompts-outside-'));
+    symlinkSync(outside, join(dir, 'fragments'), 'dir');
+
+    expect(() => promptBank(dir, { fragmentsDir: 'fragments' })).toThrow(
+      /fragments directory resolves outside prompt bank/,
+    );
+  });
+
+  it('rejects a nested fragment symlink that resolves outside the fragments directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-prompts-'));
+    const outside = mkdtempSync(join(tmpdir(), 'loops-prompts-outside-'));
+    mkdirSync(join(dir, 'fragments'));
+    writeFileSync(join(dir, 'task.md'), '{{> wrapper}}');
+    writeFileSync(join(dir, 'fragments', 'wrapper.md'), '{{> footer}}');
+    writeFileSync(join(outside, 'footer.md'), 'escaped');
+    symlinkSync(join(outside, 'footer.md'), join(dir, 'fragments', 'footer.md'));
+
+    expect(() => promptBank(dir, { fragmentsDir: 'fragments' }).render('task')).toThrow(
+      /fragment resolves outside configured fragments directory: footer/,
+    );
+  });
+
+  it('retains root template symlink behavior with a configured fragments directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-prompts-'));
+    const outside = mkdtempSync(join(tmpdir(), 'loops-prompts-outside-'));
+    mkdirSync(join(dir, 'fragments'));
+    writeFileSync(join(outside, 'task.md'), 'Root\n{{> footer}}');
+    writeFileSync(join(dir, 'fragments', 'footer.md'), 'Fragment');
+    symlinkSync(join(outside, 'task.md'), join(dir, 'task.md'));
+
+    expect(promptBank(dir, { fragmentsDir: 'fragments' }).render('task')).toBe(
+      'Root\nFragment',
+    );
+  });
+
+  it('retains default fragment symlink behavior', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-prompts-'));
+    const outside = mkdtempSync(join(tmpdir(), 'loops-prompts-outside-'));
+    writeFileSync(join(dir, 'task.md'), '{{> footer}}');
+    writeFileSync(join(outside, 'footer.md'), 'legacy');
+    symlinkSync(join(outside, 'footer.md'), join(dir, 'footer.md'));
+
+    expect(promptBank(dir).render('task')).toBe('legacy');
   });
 });

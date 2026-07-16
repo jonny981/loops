@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 export type PromptVars = Record<string, string | number | boolean>;
@@ -17,12 +17,16 @@ interface CachedTemplate {
   text: string;
 }
 
+function isContained(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
 function templatePath(dir: string, name: string): string {
   if (isAbsolute(name)) throw new Error(`prompt template name must be relative: ${name}`);
   const file = /\.[A-Za-z0-9]+$/.test(name) ? name : `${name}.md`;
   const path = resolve(dir, file);
-  const rel = relative(resolve(dir), path);
-  if (rel === '..' || rel.startsWith(`..${sep}`)) {
+  if (!isContained(resolve(dir), path)) {
     throw new Error(`prompt template escapes prompt bank: ${name}`);
   }
   return path;
@@ -31,8 +35,7 @@ function templatePath(dir: string, name: string): string {
 function fragmentsRoot(root: string, dir: string): string {
   if (isAbsolute(dir)) throw new Error(`prompt fragments directory must be relative: ${dir}`);
   const path = resolve(root, dir);
-  const rel = relative(root, path);
-  if (rel === '..' || rel.startsWith(`..${sep}`)) {
+  if (!isContained(root, path)) {
     throw new Error(`prompt fragments directory escapes prompt bank: ${dir}`);
   }
   return path;
@@ -50,6 +53,16 @@ export function promptBank(dir: string, options: PromptBankOptions = {}): Prompt
   const root = resolve(dir);
   const fragments =
     options.fragmentsDir === undefined ? root : fragmentsRoot(root, options.fragmentsDir);
+  const protectedFragments =
+    options.fragmentsDir === undefined ? undefined : realpathSync(fragments);
+  if (
+    protectedFragments !== undefined &&
+    !isContained(realpathSync(root), protectedFragments)
+  ) {
+    throw new Error(
+      `prompt fragments directory resolves outside prompt bank: ${options.fragmentsDir}`,
+    );
+  }
   const cache = new Map<string, CachedTemplate>();
 
   const load = (path: string): string => {
@@ -67,8 +80,16 @@ export function promptBank(dir: string, options: PromptBankOptions = {}): Prompt
     vars: PromptVars,
     used: Set<string>,
     stack: Array<{ name: string; path: string }>,
+    isFragment: boolean,
   ): string => {
-    const path = templatePath(sourceDir, name);
+    const declaredPath = templatePath(sourceDir, name);
+    const path =
+      isFragment && protectedFragments ? realpathSync(declaredPath) : declaredPath;
+    if (isFragment && protectedFragments && !isContained(protectedFragments, path)) {
+      throw new Error(
+        `prompt fragment resolves outside configured fragments directory: ${name}`,
+      );
+    }
     if (stack.some((entry) => entry.path === path)) {
       throw new Error(
         `prompt include cycle: ${[...stack.map((entry) => entry.name), name].join(' -> ')}`,
@@ -77,7 +98,7 @@ export function promptBank(dir: string, options: PromptBankOptions = {}): Prompt
     const source = load(path);
     return source.replace(/{{\s*(>?)\s*([A-Za-z0-9_.-]+)\s*}}/g, (_m, include, key) => {
       if (include) {
-        return renderTemplate(key, fragments, vars, used, [...stack, { name, path }]);
+        return renderTemplate(key, fragments, vars, used, [...stack, { name, path }], true);
       }
       if (!(key in vars)) {
         throw new Error(`prompt "${name}" has unresolved placeholder "{{${key}}}"`);
@@ -90,7 +111,7 @@ export function promptBank(dir: string, options: PromptBankOptions = {}): Prompt
   return {
     render(name: string, vars: PromptVars = {}) {
       const used = new Set<string>();
-      const rendered = renderTemplate(name, root, vars, used, []);
+      const rendered = renderTemplate(name, root, vars, used, [], false);
       const unused = Object.keys(vars).filter((key) => !used.has(key));
       if (unused.length) {
         throw new Error(`prompt "${name}" received unused var(s): ${unused.join(', ')}`);
