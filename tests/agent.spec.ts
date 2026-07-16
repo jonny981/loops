@@ -17,7 +17,7 @@ import {
   stageAll,
   commit,
 } from '../src/api.ts';
-import type { Engine, RunOptions, AgentRequest } from '../src/api.ts';
+import type { Engine, RunOptions, AgentRequest, LoopEvent } from '../src/api.ts';
 import { requestEnv } from '../src/engines/engine.ts';
 import { tmpRepo, cleanupRepos } from './git-helpers.ts';
 
@@ -31,6 +31,18 @@ function capturing(): { engine: MockEngine; req: () => AgentRequest } {
     return 'done';
   });
   return { engine, req: () => seen! };
+}
+
+function warnedEngine(text: string, warning: string): Engine {
+  return {
+    name: 'warned',
+    async run(_req, onEvent) {
+      const usage = { inputTokens: 1, outputTokens: 1 };
+      if (text) onEvent({ type: 'text', delta: text });
+      onEvent({ type: 'usage', usage, model: 'warned' });
+      return { text, usage, model: 'warned', stopReason: 'end_turn', warning };
+    },
+  };
 }
 
 describe('AgentDef', () => {
@@ -213,6 +225,24 @@ describe('AgentDef', () => {
     });
   });
 
+  it('keeps a warned work result and emits one warning without an error', async () => {
+    const repo = await tmpRepo();
+    const events: LoopEvent[] = [];
+    const { outcome } = await run(agentJob({ prompt: 'go', engine: 'warned' }), {
+      engine: 'warned',
+      engines: { warned: warnedEngine('completed work', 'transport teardown failed') },
+      cwd: repo,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(outcome.status).toBe('pass');
+    expect(outcome.summary).toBe('completed work');
+    expect(
+      events.filter((event) => event.kind === 'log' && event.level === 'warn'),
+    ).toMatchObject([{ message: 'transport teardown failed' }]);
+    expect(events.filter((event) => event.kind === 'error')).toHaveLength(0);
+  });
+
   it('reader role grounds the turn without appending the handoff instruction', async () => {
     const repo = await tmpRepo();
     mkdirSync(join(repo, '.loops'), { recursive: true });
@@ -281,6 +311,42 @@ describe('AgentDef', () => {
       timeoutGraceMs: 200,
       leaf: true,
     });
+  });
+
+  it('emits a warning from a completed advisor consult', async () => {
+    const repo = await tmpRepo();
+    let workerCalls = 0;
+    const worker = new MockEngine(() => {
+      workerCalls += 1;
+      return workerCalls === 1
+        ? '<consult_advisor><question>Which design?</question></consult_advisor>'
+        : 'final answer';
+    });
+    const events: LoopEvent[] = [];
+
+    const { outcome } = await run(
+      agentJob({
+        label: 'worker',
+        prompt: 'build',
+        engine: 'worker',
+        advisor: { engine: 'advisor', maxCalls: 1 },
+      }),
+      {
+        engine: 'worker',
+        engines: {
+          worker,
+          advisor: warnedEngine('Use the smaller design.', 'advisor teardown failed'),
+        },
+        cwd: repo,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(outcome.status).toBe('pass');
+    expect(
+      events.filter((event) => event.kind === 'log' && event.level === 'warn'),
+    ).toMatchObject([{ message: 'advisor teardown failed' }]);
+    expect(events.filter((event) => event.kind === 'error')).toHaveLength(0);
   });
 
   it('only treats a whole reply consult block as an advisor request', async () => {
@@ -390,6 +456,27 @@ describe('AgentDef', () => {
       LOOPS_LEAF_ID: 'agent-check/0',
       LOOPS_LEAF_LABEL: 'agent-check',
     });
+  });
+
+  it('keeps a warned judge result and emits one warning without an error', async () => {
+    const repo = await tmpRepo();
+    const events: LoopEvent[] = [];
+    const verdict = JSON.stringify({ verdict: 'yes', confidence: 1, reason: 'ok' });
+    const { outcome } = await run(
+      gateJob('review', agentCheck({ question: 'Is it correct?', engine: 'warned' })),
+      {
+        engine: 'warned',
+        engines: { warned: warnedEngine(verdict, 'judge teardown failed') },
+        cwd: repo,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(outcome.status).toBe('pass');
+    expect(
+      events.filter((event) => event.kind === 'log' && event.level === 'warn'),
+    ).toMatchObject([{ message: 'judge teardown failed' }]);
+    expect(events.filter((event) => event.kind === 'error')).toHaveLength(0);
   });
 
   it('agentJob spills provider-limit failures to a fallback route', async () => {

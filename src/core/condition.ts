@@ -31,7 +31,7 @@ import { resolveSystem, type AgentDef } from './agent.ts';
 import { GhForge } from './forge.ts';
 import { truncate } from './text.ts';
 import { redactSecrets, redactEnvValues, scrubCapture } from './redact.ts';
-import { loopsRequestMeta } from './engine-meta.ts';
+import { logEngineWarning, loopsRequestMeta } from './engine-meta.ts';
 
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
@@ -665,6 +665,7 @@ export function agentCheck(config: AgentCheckConfig): Condition {
       // start/until/stopOn/review gate and cannot know which.
       throw LoopError.from(e, { code: 'ENGINE', path: ctx.path });
     }
+    logEngineWarning(ctx, result, env);
 
     // A judge's reply flows into `reason`/`output` (persisted records), and a
     // tool-using judge may echo the pinned vars it was handed — scrub their

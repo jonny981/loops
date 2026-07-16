@@ -1,4 +1,5 @@
-import type { AgentRequest } from '../engines/engine.ts';
+import type { AgentRequest, AgentResult } from '../engines/engine.ts';
+import { scrubCapture } from './redact.ts';
 import type { JobContext } from './types.ts';
 
 function leafId(ctx: JobContext, label: string): string {
@@ -21,4 +22,14 @@ export function loopsRequestMeta(
     label,
     iteration: ctx.iteration,
   };
+}
+
+/** Surface a completed engine turn's non-fatal backend warning through run logs. */
+export function logEngineWarning(
+  ctx: JobContext,
+  result: Pick<AgentResult, 'warning'>,
+  env?: Record<string, string>,
+): void {
+  if (!result.warning) return;
+  ctx.log(scrubCapture(result.warning, env, 1000), 'warn');
 }

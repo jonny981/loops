@@ -39,7 +39,7 @@ import {
   kickback,
   revisionRequest,
 } from './feedback.ts';
-import { loopsRequestMeta } from './engine-meta.ts';
+import { logEngineWarning, loopsRequestMeta } from './engine-meta.ts';
 import {
   briefBlock,
   curateContext,
@@ -481,6 +481,7 @@ async function runAdvisorConsult(
     },
     ctx.signal,
   );
+  logEngineWarning(ctx, result, redactionEnv);
   const reply = scrubCapture(result.text, redactionEnv).trim();
   ctx.emit({
     kind: 'advisor:consult',
@@ -688,6 +689,7 @@ export function agentJob(config: AgentJobConfig): Job {
             },
             ctx.signal,
           );
+          logEngineWarning(ctx, result, env);
           const advisor = config.advisor;
           const capturedText = scrubCapture(result.text, env);
           const consult = advisor ? parseAdvisorRequest(capturedText) : undefined;

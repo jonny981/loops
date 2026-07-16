@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, describe, it, expect } from 'vitest';
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   writeFileSync,
@@ -8,8 +9,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { agentJob, run } from '../src/api.ts';
 import { modelFor } from '../src/engines/engine.ts';
 import { buildCodexArgs, CodexEngine } from '../src/engines/codex.ts';
+import { cleanupRepos, tmpRepo } from './git-helpers.ts';
+
+afterAll(cleanupRepos);
 
 describe('buildCodexArgs', () => {
   it('defaults to a read-only ephemeral exec and writes the last message', () => {
@@ -111,5 +116,93 @@ writeFileSync(out, 'stub final');
 
     expect(result.text).toBe('stub final');
     expect(readFileSync(stdinFile, 'utf8')).toBe('system rules\n\n---\n\ndo the work');
+  });
+
+  it('preserves a completed result when the subprocess fails during teardown', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-codex-stub-'));
+    const bin = join(dir, 'codex-stub.mjs');
+    const secret = 'teardown-secret-value';
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+
+const args = process.argv.slice(2);
+const out = args[args.indexOf('-o') + 1];
+writeFileSync(out, 'completed work');
+console.error('transport teardown failed: ' + process.env.SECRET_TOKEN);
+process.exit(1);
+`,
+    );
+    chmodSync(bin, 0o755);
+
+    const events: Array<{ type: string }> = [];
+    const result = await new CodexEngine({ cliBinary: bin }).run(
+      { prompt: 'do the work', env: { SECRET_TOKEN: secret } },
+      (event) => events.push(event),
+      new AbortController().signal,
+    );
+
+    expect(result.text).toBe('completed work');
+    expect(result.warning).toContain('codex completed but exited 1 during teardown');
+    expect(result.warning).toContain('[redacted]');
+    expect(result.warning).not.toContain(secret);
+    expect(events.filter((event) => event.type === 'text')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'usage')).toHaveLength(1);
+  });
+
+  it('fails a non-zero exit that did not write a completed result', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-codex-stub-'));
+    const bin = join(dir, 'codex-stub.mjs');
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+console.error('transport failed before completion');
+process.exit(1);
+`,
+    );
+    chmodSync(bin, 0o755);
+
+    await expect(
+      new CodexEngine({ cliBinary: bin }).run(
+        { prompt: 'do the work' },
+        () => {},
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({ code: 'ENGINE' });
+  });
+
+  it('passes grounded working memory through Codex stdin', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, '.loops'), { recursive: true });
+    writeFileSync(join(repo, '.loops', 'ledger.md'), 'seeded codex memory\n');
+
+    const dir = mkdtempSync(join(tmpdir(), 'loops-codex-stub-'));
+    const bin = join(dir, 'codex-stub.mjs');
+    const stdinFile = join(dir, 'stdin.txt');
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const args = process.argv.slice(2);
+const out = args[args.indexOf('-o') + 1];
+writeFileSync(${JSON.stringify(stdinFile)}, readFileSync(0, 'utf8'));
+writeFileSync(out, 'grounded result');
+`,
+    );
+    chmodSync(bin, 0o755);
+
+    const engine = new CodexEngine({ cliBinary: bin });
+    const { outcome } = await run(
+      agentJob({ label: 'codex-worker', prompt: 'DO THE CODEX TASK', ground: true }),
+      { engine: 'codex', engines: { codex: engine }, cwd: repo },
+    );
+
+    const stdin = readFileSync(stdinFile, 'utf8');
+    expect(outcome.status).toBe('pass');
+    expect(stdin).toContain('## Working memory (this run so far)');
+    expect(stdin).toContain('seeded codex memory');
+    expect(stdin).toContain('DO THE CODEX TASK');
   });
 });

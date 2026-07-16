@@ -72,6 +72,8 @@ export interface AgentResult {
   usage: Usage;
   model: string;
   stopReason?: string;
+  /** Non-fatal backend warning emitted after a complete result was available. */
+  warning?: string;
   /** True when the turn completed after its soft timeout but inside grace. */
   late?: boolean;
   /** Backend-native final payload, for escape-hatch inspection. */

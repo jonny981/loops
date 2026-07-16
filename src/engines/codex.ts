@@ -86,7 +86,12 @@ export class CodexEngine implements Engine {
       } catch {
         /* no final message written */
       }
-      if (sub.failed)
+      const stderr =
+        typeof sub.stderr === 'string'
+          ? scrubCapture(sub.stderr, env, 300)
+          : '';
+      let warning: string | undefined;
+      if (sub.failed && (sub.timedOut || !text))
         throw new LoopError({
           code: sub.timedOut ? 'TIMEOUT' : 'ENGINE',
           phase: 'engine',
@@ -94,11 +99,14 @@ export class CodexEngine implements Engine {
           // both on the FULL stream, before the cut) so a secret split at the
           // slice boundary cannot survive.
           message: `codex exited ${sub.exitCode ?? '?'}${
-            typeof sub.stderr === 'string'
-              ? `: ${scrubCapture(sub.stderr, env, 300)}`
-              : ''
+            stderr ? `: ${stderr}` : ''
           }`,
         });
+      if (sub.failed) {
+        warning = `codex completed but exited ${sub.exitCode ?? '?'} during teardown${
+          stderr ? `: ${stderr}` : ''
+        }`;
+      }
 
       // codex bills a separate (GPT-5) account, so its tokens are out-of-band for
       // the loops token budget; report zero rather than conflate providers.
@@ -110,6 +118,7 @@ export class CodexEngine implements Engine {
         usage,
         model: model ?? 'codex',
         stopReason: 'end_turn',
+        warning,
         late:
           (typeof req.timeoutMs === 'number' &&
             Date.now() - startedAt > req.timeoutMs),
