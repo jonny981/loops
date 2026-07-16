@@ -22,6 +22,7 @@ import {
   makeCheckpointer,
   loadCheckpointEnvelope,
   flushCheckpoint,
+  type CheckpointDiagnostics,
 } from './persist.ts';
 import { startSupervisor, newRunId, type Supervisor } from './supervisor.ts';
 import { jobMeta } from '../core/describe.ts';
@@ -187,7 +188,7 @@ function restorableCheckpointDags(
         ([name, node]) =>
           nodes.has(name) &&
           node.phase === 'done' &&
-          node.outcome.status === 'pass',
+          node.outcome?.status === 'pass',
       ),
     );
     if (Object.keys(kept).length) filtered[key] = { nodes: kept };
@@ -226,6 +227,19 @@ function mergeDagShapeKeys(
 
 function uniquePaths(paths: Array<string | undefined>): string[] {
   return [...new Set(paths.filter((path): path is string => path !== undefined))];
+}
+
+function withCheckpointDiagnostics(
+  reason: string,
+  diagnostics: CheckpointDiagnostics,
+): string {
+  if (diagnostics.skippedEntries === 0) return reason;
+  const count = diagnostics.skippedEntries;
+  const details = diagnostics.entries
+    .map((entry) => `${entry.path}: ${entry.reason}`)
+    .join('; ');
+  const omitted = count - diagnostics.entries.length;
+  return `${reason}; skipped ${count} malformed checkpoint ${count === 1 ? 'entry' : 'entries'}${details ? `: ${details}` : ''}${omitted > 0 ? `; ${omitted} more omitted` : ''}`;
 }
 
 export async function run(
@@ -294,7 +308,24 @@ export async function run(
         signal: controller.signal,
         excludePaths: uniquePaths([options.resumeFrom, options.checkpoint]),
       });
-      if (
+      if (!checkpoint.workspaceFingerprintValid) {
+        checkpointControl.resumeDags = undefined;
+        checkpointControl.dags = {};
+        restoreEvent = {
+          kind: 'runtime:restore',
+          ts: Date.now(),
+          path: [],
+          checkpoint: options.resumeFrom,
+          decision: 'skipped',
+          restoredNodes: 0,
+          totalNodes: checkpointNodes,
+          reason: withCheckpointDiagnostics(
+            `restoring nothing from ${options.resumeFrom}: checkpoint workspace fingerprint is invalid`,
+            checkpoint.diagnostics,
+          ),
+          fingerprint: 'changed',
+        };
+      } else if (
         currentFingerprint !== undefined &&
         checkpoint.workspaceFingerprint !== undefined &&
         checkpoint.workspaceFingerprint !== currentFingerprint
@@ -309,7 +340,10 @@ export async function run(
           decision: 'skipped',
           restoredNodes: 0,
           totalNodes: checkpointNodes,
-          reason: `restoring nothing from ${options.resumeFrom}: workspace fingerprint changed`,
+          reason: withCheckpointDiagnostics(
+            `restoring nothing from ${options.resumeFrom}: workspace fingerprint changed`,
+            checkpoint.diagnostics,
+          ),
           fingerprint: 'changed',
         };
       } else {
@@ -322,7 +356,7 @@ export async function run(
           shape,
         ) ?? {};
         const restoredNodes = countCheckpointNodes(checkpointControl.resumeDags);
-        const totalNodes = countCheckpointNodes(checkpointControl.resumeDags);
+        const totalNodes = checkpointNodes;
         const fingerprint =
           checkpoint.workspaceFingerprint === undefined
             ? 'checkpoint-missing'
@@ -339,7 +373,10 @@ export async function run(
                 decision: 'restored',
                 restoredNodes,
                 totalNodes,
-                reason: `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom}`,
+                reason: withCheckpointDiagnostics(
+                  `restored ${restoredNodes}/${totalNodes} nodes from ${options.resumeFrom}`,
+                  checkpoint.diagnostics,
+                ),
                 fingerprint,
               }
             : {
@@ -350,7 +387,10 @@ export async function run(
                 decision: 'skipped',
                 restoredNodes: 0,
                 totalNodes,
-                reason: `restoring nothing from ${options.resumeFrom}: no checkpointed DAG nodes match the current graph`,
+                reason: withCheckpointDiagnostics(
+                  `restoring nothing from ${options.resumeFrom}: no checkpointed DAG nodes match the current graph`,
+                  checkpoint.diagnostics,
+                ),
                 fingerprint,
               };
       }

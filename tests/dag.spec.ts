@@ -16,6 +16,7 @@ import {
 } from '../src/api.ts';
 import type { LoopEvent, Outcome, RunOptions } from '../src/api.ts';
 import { MockEngine } from '../src/api.ts';
+import { loadCheckpointEnvelope } from '../src/runtime/persist.ts';
 import { cleanupRepos, tmpRepo } from './git-helpers.ts';
 
 afterAll(cleanupRepos);
@@ -571,6 +572,206 @@ describe('dag', () => {
     );
   });
 
+  it('skips malformed nested outcomes in the signal-abort repro checkpoint', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-signal-repro-'));
+    const checkpoint = join(
+      process.cwd(),
+      'wip/repro-signal-abort-checkpoint-2026-07-10.ckpt',
+    );
+    const events: LoopEvent[] = [];
+    const ran: string[] = [];
+    const fresh = (name: string) => pass(ran, name);
+
+    const result = await run(
+      dag({
+        name: 'oem-integrate-sigenergy',
+        nodes: {
+          preconditions: fresh('preconditions'),
+          'ground-oem-record': fresh('ground-oem-record'),
+          'credential-scan': fresh('credential-scan'),
+          'lint-format': sequence(
+            'lint-format',
+            fresh('lint-step-0'),
+            fresh('lint-step-1'),
+            fresh('lint-step-2'),
+            fresh('lint-step-3'),
+          ),
+        },
+      }),
+      {
+        ...mockOpts,
+        cwd: dir,
+        resumeFrom: checkpoint,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    expect(ran).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'restored',
+        restoredNodes: 4,
+        reason: expect.stringContaining(
+          'skipped 4 malformed checkpoint entries',
+        ),
+      }),
+    );
+    const restore = events.find((event) => event.kind === 'runtime:restore');
+    expect(restore?.reason).toContain('step-0');
+    expect(restore?.reason).toContain('outcome');
+  });
+
+  it('runs fresh and reports an invalid checkpoint document', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-invalid-checkpoint-'));
+    const checkpoint = join(dir, 'invalid.ckpt.json');
+    const events: LoopEvent[] = [];
+    let runs = 0;
+    writeFileSync(checkpoint, '{"dags":');
+
+    const result = await run(
+      dag({
+        name: 'invalid-checkpoint',
+        nodes: {
+          work: fnJob('work', async () => {
+            runs += 1;
+            return { status: 'pass' as const };
+          }),
+        },
+      }),
+      {
+        ...mockOpts,
+        cwd: dir,
+        resumeFrom: checkpoint,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    expect(runs).toBe(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'skipped',
+        reason: expect.stringMatching(
+          /skipped 1 malformed checkpoint entry.*invalid JSON/,
+        ),
+      }),
+    );
+  });
+
+  it('preserves prototype-sensitive DAG and node names while parsing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-prototype-names-'));
+    const checkpoint = join(dir, 'prototype-names.ckpt.json');
+    const record = {
+      phase: 'done',
+      outcome: { status: 'pass', summary: 'cached' },
+    };
+    writeFileSync(
+      checkpoint,
+      JSON.stringify({
+        state: {},
+        dags: Object.fromEntries([
+          ['__proto__', { nodes: { ordinary: record } }],
+          [
+            JSON.stringify(['prototype-resume']),
+            {
+              nodes: Object.fromEntries([
+                ['__proto__', record],
+                ['sibling', record],
+              ]),
+            },
+          ],
+        ]),
+      }),
+    );
+
+    const checkpointEnvelope = loadCheckpointEnvelope(checkpoint);
+    const dags = checkpointEnvelope.control.resumeDags!;
+    expect(Object.hasOwn(dags, '__proto__')).toBe(true);
+    expect(Object.hasOwn(dags['["prototype-resume"]']!.nodes, '__proto__')).toBe(
+      true,
+    );
+    expect(Object.hasOwn(dags['["prototype-resume"]']!.nodes, 'sibling')).toBe(
+      true,
+    );
+    expect(checkpointEnvelope.diagnostics.skippedEntries).toBe(0);
+  });
+
+  it('skips a malformed cached revision before max-kickback routing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-invalid-revision-'));
+    const checkpoint = join(dir, 'invalid-revision.ckpt.json');
+    const events: LoopEvent[] = [];
+    let producerRuns = 0;
+    let siblingRuns = 0;
+    writeFileSync(
+      checkpoint,
+      JSON.stringify({
+        state: {},
+        dags: {
+          [JSON.stringify(['invalid-revision'])]: {
+            nodes: {
+              producer: {
+                phase: 'done',
+                outcome: {
+                  status: 'pass',
+                  revision: {
+                    target: { unexpected: true },
+                    reason: 'retry producer',
+                  },
+                },
+              },
+              sibling: {
+                phase: 'done',
+                outcome: { status: 'pass', summary: 'cached sibling' },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await run(
+      dag({
+        name: 'invalid-revision',
+        maxKickbacks: 1,
+        nodes: {
+          producer: fnJob('producer', async () => {
+            producerRuns += 1;
+            return { status: 'pass' as const };
+          }),
+          sibling: fnJob('sibling', async () => {
+            siblingRuns += 1;
+            return { status: 'pass' as const };
+          }),
+        },
+      }),
+      {
+        ...mockOpts,
+        cwd: dir,
+        resumeFrom: checkpoint,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    expect(producerRuns).toBe(1);
+    expect(siblingRuns).toBe(0);
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ kind: 'dag:kickback' }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'restored',
+        restoredNodes: 1,
+        totalNodes: 1,
+        reason: expect.stringMatching(/revision.*target/),
+      }),
+    );
+  });
+
   it('skips aborted-run DAG restore when the workspace fingerprint changed', async () => {
     const repo = await tmpRepo();
     const checkpoint = join(repo, 'ckpt.json');
@@ -623,6 +824,61 @@ describe('dag', () => {
         kind: 'runtime:restore',
         decision: 'skipped',
         fingerprint: 'changed',
+      }),
+    );
+  });
+
+  it('runs fresh when a checkpoint fingerprint has an invalid type', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-invalid-fingerprint-'));
+    const checkpoint = join(dir, 'invalid-fingerprint.ckpt.json');
+    const events: LoopEvent[] = [];
+    let runs = 0;
+    writeFileSync(
+      checkpoint,
+      JSON.stringify({
+        state: {},
+        workspaceFingerprint: { sha: 'not-a-string' },
+        dags: {
+          [JSON.stringify(['invalid-fingerprint'])]: {
+            nodes: {
+              work: {
+                phase: 'done',
+                outcome: { status: 'pass', summary: 'cached' },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await run(
+      dag({
+        name: 'invalid-fingerprint',
+        nodes: {
+          work: fnJob('work', async () => {
+            runs += 1;
+            return { status: 'pass' as const };
+          }),
+        },
+      }),
+      {
+        ...mockOpts,
+        cwd: dir,
+        resumeFrom: checkpoint,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    expect(runs).toBe(1);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'skipped',
+        fingerprint: 'changed',
+        restoredNodes: 0,
+        totalNodes: 1,
+        reason: expect.stringMatching(/workspaceFingerprint.*expected a string/),
       }),
     );
   });
@@ -731,7 +987,7 @@ describe('dag', () => {
         kind: 'runtime:restore',
         decision: 'skipped',
         restoredNodes: 0,
-        totalNodes: 0,
+        totalNodes: 1,
       }),
     );
     expect(events).toContainEqual(
@@ -739,6 +995,63 @@ describe('dag', () => {
         kind: 'dag:node',
         node: 'upstream',
         cached: false,
+      }),
+    );
+  });
+
+  it('reports valid checkpoint nodes that do not match the current graph', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-partial-restore-'));
+    const checkpoint = join(dir, 'partial.ckpt.json');
+    const events: LoopEvent[] = [];
+    let matchingRuns = 0;
+    writeFileSync(
+      checkpoint,
+      JSON.stringify({
+        state: {},
+        dags: {
+          [JSON.stringify(['partial-restore'])]: {
+            nodes: {
+              matching: {
+                phase: 'done',
+                outcome: { status: 'pass', summary: 'cached' },
+              },
+              removed: {
+                phase: 'done',
+                outcome: { status: 'pass', summary: 'old graph' },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await run(
+      dag({
+        name: 'partial-restore',
+        nodes: {
+          matching: fnJob('matching', async () => {
+            matchingRuns += 1;
+            return { status: 'pass' as const };
+          }),
+        },
+      }),
+      {
+        ...mockOpts,
+        cwd: dir,
+        resumeFrom: checkpoint,
+        onEvent: (event) => events.push(event),
+      },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    expect(matchingRuns).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: 'runtime:restore',
+        decision: 'restored',
+        restoredNodes: 1,
+        totalNodes: 2,
+        reason: expect.stringContaining('restored 1/2 nodes'),
       }),
     );
   });
@@ -775,5 +1088,36 @@ describe('dag', () => {
     const node = saved.dags?.['["non-json-cache"]']?.nodes?.upstream;
     expect(node?.outcome?.status).toBe('pass');
     expect(node?.outcome?.data).toEqual({});
+  });
+
+  it('preserves repeated nested outcomes in checkpoint snapshots', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-dag-nested-alias-'));
+    const checkpoint = join(dir, 'nested-alias.ckpt.json');
+
+    const result = await run(
+      dag({
+        name: 'nested-alias',
+        nodes: {
+          before: fnJob('before', async () => ({ status: 'pass' as const })),
+          nested: {
+            needs: ['before'],
+            job: sequence(
+              'nested',
+              fnJob('one', async () => ({ status: 'pass' as const })),
+              fnJob('two', async () => ({ status: 'pass' as const })),
+            ),
+          },
+        },
+      }),
+      { ...mockOpts, cwd: dir, checkpoint },
+    );
+
+    expect(result.outcome.status).toBe('pass');
+    const saved = JSON.parse(readFileSync(checkpoint, 'utf8')) as {
+      dags?: Record<string, { nodes?: Record<string, { outcome?: Outcome }> }>;
+    };
+    const nested = saved.dags?.['["nested-alias","nested","nested"]'];
+    expect(nested?.nodes?.['step-0']?.outcome?.status).toBe('pass');
+    expect(nested?.nodes?.['step-1']?.outcome?.status).toBe('pass');
   });
 });

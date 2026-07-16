@@ -21,9 +21,14 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
+import { z } from 'zod';
 
-import type { CheckpointControl, LoopEvent } from '../core/types.ts';
-import type { Outcome } from '../core/types.ts';
+import type {
+  CheckpointControl,
+  CheckpointDagNode,
+  LoopEvent,
+  Outcome,
+} from '../core/types.ts';
 
 /** High-frequency transcript deltas, excluded from the record. */
 const NOISE: ReadonlySet<LoopEvent['kind']> = new Set([
@@ -39,6 +44,66 @@ const CHECKPOINT_AT: ReadonlySet<LoopEvent['kind']> = new Set([
   'dag:end',
   'job:end',
 ]);
+
+const MAX_CHECKPOINT_DIAGNOSTICS = 8;
+const MAX_CHECKPOINT_DIAGNOSTIC_PATH_CHARS = 240;
+const MAX_CHECKPOINT_DIAGNOSTIC_REASON_CHARS = 160;
+
+const checkpointFeedbackDecisionSchema = z.enum([
+  'accepted',
+  'rejected',
+  'deferred',
+  'escalated',
+]);
+const checkpointFeedbackFindingSchema = z
+  .object({
+    reviewer: z.string().optional(),
+    severity: z
+      .enum([
+        'block',
+        'should-fix',
+        'nice-to-have',
+        'approve',
+        'blocking',
+        'advisory',
+      ])
+      .optional(),
+    decision: checkpointFeedbackDecisionSchema.optional(),
+    scope: z.string().optional(),
+    evidence: z.string(),
+    recommendation: z.string().optional(),
+  })
+  .passthrough();
+const checkpointRevisionSchema = z
+  .object({
+    target: z.string().optional(),
+    reason: z.string(),
+    findings: z.array(checkpointFeedbackFindingSchema).optional(),
+    rerun: z.literal('target-and-dependents').optional(),
+    source: z.string().optional(),
+    decision: checkpointFeedbackDecisionSchema.optional(),
+  })
+  .passthrough();
+const checkpointStallSchema = z
+  .object({
+    window: z.number(),
+    iterations: z.array(z.number()),
+    reason: z.string(),
+    evidence: z.array(z.string()),
+  })
+  .passthrough();
+const checkpointOutcomeSchema = z
+  .object({
+    status: z.enum(['pass', 'fail', 'aborted', 'exhausted', 'paused']),
+    confidence: z.number().min(0).max(1).optional(),
+    late: z.boolean().optional(),
+    summary: z.string().optional(),
+    data: z.unknown().optional(),
+    error: z.never().optional(),
+    stall: checkpointStallSchema.optional(),
+    revision: checkpointRevisionSchema.optional(),
+  })
+  .passthrough();
 
 interface RecorderOptions {
   thin?: boolean;
@@ -160,7 +225,7 @@ export function flushCheckpoint(
   }
 }
 
-function toJsonSafe(value: unknown, seen = new WeakSet<object>()): unknown {
+function toJsonSafe(value: unknown, ancestors = new WeakSet<object>()): unknown {
   if (value === null) return null;
   switch (typeof value) {
     case 'string':
@@ -168,59 +233,236 @@ function toJsonSafe(value: unknown, seen = new WeakSet<object>()): unknown {
       return value;
     case 'number':
       return Number.isFinite(value) ? value : undefined;
-    case 'object':
-      if (seen.has(value)) return undefined;
-      seen.add(value);
-      if (Array.isArray(value)) {
-        return value.map((item) => toJsonSafe(item, seen));
+    case 'object': {
+      if (ancestors.has(value)) return undefined;
+      ancestors.add(value);
+      try {
+        if (Array.isArray(value)) {
+          return value.map((item) => toJsonSafe(item, ancestors));
+        }
+        if (Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+        return Object.fromEntries(
+          Object.entries(value)
+            .map(
+              ([key, item]) => [key, toJsonSafe(item, ancestors)] as const,
+            )
+            .filter(([, item]) => item !== undefined),
+        );
+      } finally {
+        ancestors.delete(value);
       }
-      if (Object.getPrototypeOf(value) !== Object.prototype) return undefined;
-      return Object.fromEntries(
-        Object.entries(value)
-          .map(([key, item]) => [key, toJsonSafe(item, seen)] as const)
-          .filter(([, item]) => item !== undefined),
-      );
+    }
     default:
       return undefined;
   }
+}
+
+export interface CheckpointDiagnostic {
+  path: string;
+  reason: string;
+}
+
+export interface CheckpointDiagnostics {
+  skippedEntries: number;
+  entries: CheckpointDiagnostic[];
 }
 
 export interface CheckpointEnvelope {
   state: Record<string, unknown>;
   control: CheckpointControl;
   workspaceFingerprint?: string;
+  workspaceFingerprintValid: boolean;
+  diagnostics: CheckpointDiagnostics;
 }
 
 export function loadCheckpointEnvelope(path: string): CheckpointEnvelope {
-  const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-  const state =
-    parsed &&
-    typeof parsed === 'object' &&
-    'state' in parsed &&
-    (parsed as { state: unknown }).state &&
-    typeof (parsed as { state: unknown }).state === 'object'
-      ? (parsed as { state: Record<string, unknown> }).state
-      : {};
-  const dags =
-    parsed &&
-    typeof parsed === 'object' &&
-    'dags' in parsed &&
-    (parsed as { dags: unknown }).dags &&
-    typeof (parsed as { dags: unknown }).dags === 'object'
-      ? ((parsed as { dags: CheckpointControl['dags'] }).dags ?? {})
-      : {};
-  const workspaceFingerprint =
-    parsed &&
-    typeof parsed === 'object' &&
-    typeof (parsed as { workspaceFingerprint?: unknown }).workspaceFingerprint ===
-      'string'
-      ? (parsed as { workspaceFingerprint: string }).workspaceFingerprint
-      : undefined;
+  const diagnostics: CheckpointDiagnostics = { skippedEntries: 0, entries: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    addCheckpointDiagnostic(
+      diagnostics,
+      'checkpoint',
+      `invalid JSON: ${error.message}`,
+    );
+    return checkpointEnvelope({}, {}, undefined, true, diagnostics);
+  }
+
+  if (!isPlainRecord(parsed)) {
+    addCheckpointDiagnostic(diagnostics, 'checkpoint', 'expected an object');
+    return checkpointEnvelope({}, {}, undefined, true, diagnostics);
+  }
+
+  let state: Record<string, unknown> = {};
+  if (parsed.state !== undefined) {
+    if (isPlainRecord(parsed.state)) state = parsed.state;
+    else
+      addCheckpointDiagnostic(diagnostics, 'state', 'expected an object');
+  }
+
+  const dags = parseCheckpointDags(parsed.dags, diagnostics);
+  let workspaceFingerprint: string | undefined;
+  let workspaceFingerprintValid = true;
+  if (parsed.workspaceFingerprint !== undefined) {
+    if (typeof parsed.workspaceFingerprint === 'string')
+      workspaceFingerprint = parsed.workspaceFingerprint;
+    else {
+      workspaceFingerprintValid = false;
+      addCheckpointDiagnostic(
+        diagnostics,
+        'workspaceFingerprint',
+        'expected a string',
+      );
+    }
+  }
+
+  return checkpointEnvelope(
+    state,
+    dags,
+    workspaceFingerprint,
+    workspaceFingerprintValid,
+    diagnostics,
+  );
+}
+
+function checkpointEnvelope(
+  state: Record<string, unknown>,
+  dags: CheckpointControl['dags'],
+  workspaceFingerprint: string | undefined,
+  workspaceFingerprintValid: boolean,
+  diagnostics: CheckpointDiagnostics,
+): CheckpointEnvelope {
   return {
     state,
-    control: { resumeDags: cloneCheckpointDags(dags), dags: cloneCheckpointDags(dags) },
+    control: {
+      resumeDags: cloneCheckpointDags(dags),
+      dags: cloneCheckpointDags(dags),
+    },
     workspaceFingerprint,
+    workspaceFingerprintValid,
+    diagnostics,
   };
+}
+
+function parseCheckpointDags(
+  value: unknown,
+  diagnostics: CheckpointDiagnostics,
+): CheckpointControl['dags'] {
+  if (value === undefined) return {};
+  if (!isPlainRecord(value)) {
+    addCheckpointDiagnostic(diagnostics, 'dags', 'expected an object');
+    return {};
+  }
+
+  const dags: CheckpointControl['dags'] = Object.create(null);
+  for (const [dagName, dagValue] of Object.entries(value)) {
+    const dagPath = `dags[${JSON.stringify(dagName)}]`;
+    if (!isPlainRecord(dagValue) || !isPlainRecord(dagValue.nodes)) {
+      addCheckpointDiagnostic(
+        diagnostics,
+        dagPath,
+        'expected an object with a nodes object',
+      );
+      continue;
+    }
+
+    const nodes: Record<string, CheckpointDagNode> = Object.create(null);
+    for (const [nodeName, nodeValue] of Object.entries(dagValue.nodes)) {
+      const nodePath = `${dagPath}.nodes[${JSON.stringify(nodeName)}]`;
+      if (!isPlainRecord(nodeValue)) {
+        addCheckpointDiagnostic(diagnostics, nodePath, 'expected an object');
+        continue;
+      }
+      if (nodeValue.phase !== 'done' && nodeValue.phase !== 'skip') {
+        addCheckpointDiagnostic(
+          diagnostics,
+          `${nodePath}.phase`,
+          'expected "done" or "skip"',
+        );
+        continue;
+      }
+      const outcome = parseCheckpointOutcome(
+        nodeValue.outcome,
+        `${nodePath}.outcome`,
+        diagnostics,
+      );
+      if (!outcome) continue;
+      if (
+        nodeValue.attempt !== undefined &&
+        (typeof nodeValue.attempt !== 'number' ||
+          !Number.isFinite(nodeValue.attempt))
+      ) {
+        addCheckpointDiagnostic(
+          diagnostics,
+          `${nodePath}.attempt`,
+          'expected a finite number',
+        );
+        continue;
+      }
+
+      nodes[nodeName] = {
+        phase: nodeValue.phase,
+        outcome,
+        ...(nodeValue.attempt === undefined
+          ? {}
+          : { attempt: nodeValue.attempt as number }),
+      };
+    }
+    dags[dagName] = { nodes };
+  }
+  return dags;
+}
+
+function parseCheckpointOutcome(
+  value: unknown,
+  path: string,
+  diagnostics: CheckpointDiagnostics,
+): Outcome | undefined {
+  const parsed = checkpointOutcomeSchema.safeParse(value);
+  if (parsed.success) return parsed.data as Outcome;
+  const issue = parsed.error.issues[0]!;
+  addCheckpointDiagnostic(
+    diagnostics,
+    issue.path.reduce<string>(
+      (issuePath, part) =>
+        typeof part === 'number'
+          ? `${issuePath}[${part}]`
+          : `${issuePath}.${String(part)}`,
+      path,
+    ),
+    issue.message,
+  );
+  return undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function addCheckpointDiagnostic(
+  diagnostics: CheckpointDiagnostics,
+  path: string,
+  reason: string,
+): void {
+  diagnostics.skippedEntries += 1;
+  if (diagnostics.entries.length >= MAX_CHECKPOINT_DIAGNOSTICS) return;
+  diagnostics.entries.push({
+    path: boundText(path, MAX_CHECKPOINT_DIAGNOSTIC_PATH_CHARS),
+    reason: boundText(reason, MAX_CHECKPOINT_DIAGNOSTIC_REASON_CHARS),
+  });
+}
+
+function boundText(text: string, maxChars: number): string {
+  return text.length <= maxChars
+    ? text
+    : `${text.slice(0, maxChars - 3)}...`;
 }
 
 function cloneCheckpointDags(
