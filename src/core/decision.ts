@@ -6,8 +6,26 @@ export interface LastGateBriefOptions {
 }
 
 export interface ConfidenceConditionOptions {
+  /**
+   * Units used by `threshold`. `fraction` uses 0..1 (default 0.8), while
+   * `percent` uses 0..100 (default 80). Reported confidence stays normalized
+   * to 0..1 in both modes.
+   */
+  scale?: 'fraction' | 'percent';
   threshold?: number;
   token?: string;
+  /** Accept an exact, case-insensitive `n/a` token when the wrapped job passes. */
+  allowNa?: boolean;
+  /** Use the full work output as the condition reason when it is nonempty. */
+  reason?: 'concise' | 'output';
+}
+
+export interface LastDecisionLineOptions {
+  /**
+   * `closing` requires the token to be the final nonblank line. `last-match`
+   * permits trailing prose and selects the last line-anchored token.
+   */
+  mode?: 'closing' | 'last-match';
 }
 
 function stripHandoff(text: string): string {
@@ -22,21 +40,35 @@ export function lastDecisionLine(
   text: string,
   token: string,
   values?: readonly string[],
+  opts: LastDecisionLineOptions = {},
 ): string | undefined {
   const work = stripHandoff(text);
   const tag = escapeRegExp(token);
   const allowed = values?.map((value) => value.toLowerCase());
-  const line = work
+  const lines = work
     .split(/\r?\n/)
     .map((item) => item.trim())
-    .filter(Boolean)
-    .at(-1);
+    .filter(Boolean);
+  const valueFromLine = (line: string): string | undefined => {
+    const xml = new RegExp(`^<${tag}>\\s*([^<]+?)\\s*</${tag}>$`, 'i').exec(line);
+    const colon = new RegExp(`^${tag}\\s*:\\s*(.+?)\\s*$`, 'i').exec(line);
+    return (xml?.[1] ?? colon?.[1])?.trim();
+  };
+
+  if (opts.mode === 'last-match') {
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const value = valueFromLine(lines[index]!);
+      if (!value) continue;
+      if (allowed && !allowed.includes(value.toLowerCase())) return undefined;
+      return value;
+    }
+    return undefined;
+  }
+
+  const line = lines.at(-1);
   if (!line) return undefined;
-  const xml = new RegExp(`^<${tag}>\\s*([^<]+?)\\s*</${tag}>$`, 'i').exec(line);
-  const colon = new RegExp(`^${tag}\\s*:\\s*(.+?)\\s*$`, 'i').exec(line);
-  const value = (xml?.[1] ?? colon?.[1])?.trim();
-  if (!value) return undefined;
-  if (allowed && !allowed.includes(value.toLowerCase())) return undefined;
+  const value = valueFromLine(line);
+  if (!value || (allowed && !allowed.includes(value.toLowerCase()))) return undefined;
   return value;
 }
 
@@ -67,20 +99,32 @@ export function confidenceCondition(
   job: Job,
   opts: ConfidenceConditionOptions = {},
 ): Condition {
-  const threshold = opts.threshold ?? 0.8;
+  const scale = opts.scale ?? 'fraction';
+  const threshold = opts.threshold ?? (scale === 'percent' ? 80 : 0.8);
+  const normalizedThreshold = scale === 'percent' ? threshold / 100 : threshold;
   const token = opts.token ?? 'confidence';
   return async (ctx: JobContext) => {
     const outcome = await job(ctx);
     const output = outcomeText(outcome);
-    const confidence = confidenceFromText(output, token);
-    const met = outcome.status === 'pass' && confidence !== undefined && confidence >= threshold;
+    const raw = lastDecisionLine(output, token);
+    const acceptedNa =
+      outcome.status === 'pass' && opts.allowNa === true && raw?.toLowerCase() === 'n/a';
+    const confidence = acceptedNa ? 1 : confidenceFromText(output, token);
+    const met =
+      outcome.status === 'pass' &&
+      confidence !== undefined &&
+      (acceptedNa || confidence >= normalizedThreshold);
+    const conciseReason = acceptedNa
+      ? `${token} n/a accepted`
+      : confidence === undefined
+        ? `missing ${token} decision token`
+        : scale === 'percent'
+          ? `${token} ${(confidence * 100).toFixed(2)}% ${met ? 'meets' : 'below'} threshold ${threshold.toFixed(2)}%`
+          : `${token} ${confidence.toFixed(2)} ${met ? 'meets' : 'below'} threshold ${threshold.toFixed(2)}`;
     return {
       met,
       confidence: confidence ?? 0,
-      reason:
-        confidence === undefined
-          ? `missing ${token} decision token`
-          : `${token} ${confidence.toFixed(2)} ${met ? 'meets' : 'below'} threshold ${threshold.toFixed(2)}`,
+      reason: opts.reason === 'output' && output ? output : conciseReason,
       output,
     };
   };

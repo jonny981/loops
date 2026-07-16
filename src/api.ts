@@ -221,6 +221,7 @@ export {
   lastDecisionLine,
   lastGateBrief,
   type ConfidenceConditionOptions,
+  type LastDecisionLineOptions,
   type LastGateBriefOptions,
 } from './core/decision.ts';
 export { promptBank, type PromptBank, type PromptVars } from './core/prompt-bank.ts';
