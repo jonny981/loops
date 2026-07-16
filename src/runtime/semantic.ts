@@ -100,8 +100,30 @@ export function semanticRecordsFromEvent(
     throw new TypeError(`invalid semantic record runId: ${runId}`);
   switch (event.kind) {
     case 'runtime:restore':
-      if (event.decision === 'restored' && event.restoredNodes <= 0)
-        throw new TypeError('restored checkpoint must contain at least one node');
+      if (event.decision === 'restored') {
+        if (event.restoredNodes <= 0)
+          throw new TypeError('restored checkpoint must contain at least one node');
+        // Semantic record v1 cannot represent a restored changed workspace.
+        // Omit the transition rather than emit an invalid or misleading record.
+        if (event.fingerprint === 'changed') return [];
+        return [
+          {
+            ...recordBase(event, runId),
+            kind: 'lifecycle-transition',
+            unit: 'run',
+            from: 'paused',
+            to: 'running',
+            reason: event.reason,
+            checkpoint: {
+              path: event.checkpoint,
+              decision: event.decision,
+              restoredNodes: event.restoredNodes,
+              totalNodes: event.totalNodes,
+              fingerprint: event.fingerprint,
+            },
+          },
+        ];
+      }
       return [
         {
           ...recordBase(event, runId),
@@ -110,22 +132,13 @@ export function semanticRecordsFromEvent(
           from: 'paused',
           to: 'running',
           reason: event.reason,
-          checkpoint:
-            event.decision === 'restored'
-              ? {
-                  path: event.checkpoint,
-                  decision: event.decision,
-                  restoredNodes: event.restoredNodes,
-                  totalNodes: event.totalNodes,
-                  fingerprint: event.fingerprint,
-                }
-              : {
-                  path: event.checkpoint,
-                  decision: event.decision,
-                  restoredNodes: event.restoredNodes,
-                  totalNodes: event.totalNodes,
-                  fingerprint: event.fingerprint,
-                },
+          checkpoint: {
+            path: event.checkpoint,
+            decision: event.decision,
+            restoredNodes: event.restoredNodes,
+            totalNodes: event.totalNodes,
+            fingerprint: event.fingerprint,
+          },
         },
       ];
     case 'loop:condition':

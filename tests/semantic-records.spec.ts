@@ -292,8 +292,8 @@ describe('semantic run records', () => {
         decision: 'restored',
         restoredNodes: 2,
         totalNodes: 3,
-        reason: 'restored 2/3 nodes from an explicitly trusted changed workspace',
-        fingerprint: 'changed',
+        reason: 'restored 2/3 nodes from a matching workspace',
+        fingerprint: 'matched',
       },
     ];
 
@@ -345,12 +345,28 @@ describe('semantic run records', () => {
           decision: 'restored',
           restoredNodes: 2,
           totalNodes: 3,
-          fingerprint: 'changed',
+          fingerprint: 'matched',
         },
       }),
     ]);
     expect(records.every((record) => parseSemanticRunRecord(record))).toBe(true);
     expect(() => semanticRecordsFromEvent(events[0]!, '../invalid')).toThrow();
+  });
+
+  it('omits trusted changed-workspace restores from semantic record v1', () => {
+    const event: LoopEvent = {
+      kind: 'runtime:restore',
+      ts: 5,
+      path: [],
+      checkpoint: 'build.ckpt',
+      decision: 'restored',
+      restoredNodes: 2,
+      totalNodes: 3,
+      reason: 'restored 2/3 nodes from an explicitly trusted changed workspace',
+      fingerprint: 'changed',
+    };
+
+    expect(semanticRecordsFromEvent(event, 'projection-a1b2c3')).toEqual([]);
   });
 
   it('records verdicts from dag when conditions and gate jobs', async () => {

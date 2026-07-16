@@ -208,11 +208,11 @@ describe('semantic run record schema v1', () => {
       },
     };
     expect(safeParseSemanticRunRecord(trustedChangedWorkspaceRestore).success).toBe(
-      true,
+      false,
     );
     expect(() =>
       fromJsonSchema.parse(trustedChangedWorkspaceRestore),
-    ).not.toThrow();
+    ).toThrow();
 
     const contradictoryPreflight = [
       {
