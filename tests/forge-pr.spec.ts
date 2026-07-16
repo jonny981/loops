@@ -152,7 +152,7 @@ describe('MockForge checksPass', () => {
     await expect(forge.checksPass(pr, { cwd: '.' })).resolves.toBe(false);
   });
 
-  it('fails when no GitHub Actions check run exists', async () => {
+  it('fails when no check run exists', async () => {
     const forge = new MockForge({ mergeable: true, checkRuns: 0, checks: true });
     await expect(forge.checksPass(pr, { cwd: '.' })).resolves.toBe(false);
   });

@@ -39,7 +39,7 @@ The workspace-fingerprint guard and the sanctioned recovery flow are mutually ex
 
 Candidate fixes, in rough preference order: (a) fingerprint per-node — a green node restores unless files its stage could have touched changed since checkpoint (lanes give the natural scope); (b) fingerprint on the checkpoint's committed TREE rather than HEAD, so commits that only ADD history atop the checkpointed state don't invalidate (a fix commit is exactly that); (c) a `--resume-trust-workspace` escape hatch that restores green nodes despite the fingerprint, for the operator who knows the delta is benign. Without one of these, checkpoints only survive crash/SIGTERM recovery with zero intervening fixes — the rarest recovery case; the common case (something broke, so by definition a fix lands before resume) is the one the guard forbids.
 
-**0.9.0 resolution:** candidate (c) shipped as `RunOptions.resumeTrustWorkspace` and `--resume-trust-workspace`. The default fingerprint refusal remains strict; explicit trust restores only graph-matching green nodes and records the changed fingerprint. A substantive fix changes the committed tree, while write lanes describe allowed outputs rather than node inputs or dependency provenance, so the tree- and lane-based candidates could not safely cover this recovery flow.
+**0.9.0 resolution:** candidate (c) shipped as `RunOptions.resumeTrustWorkspace` and `--resume-trust-workspace`. The default fingerprint refusal remains strict; explicit trust restores only graph-matching green nodes, and the runtime restore event records the changed fingerprint. Frozen semantic record v1 omits this combination rather than widening its contract. A substantive fix changes the committed tree, while write lanes describe allowed outputs rather than node inputs or dependency provenance, so the tree- and lane-based candidates could not safely cover this recovery flow.
 
 ## 1c. [DONE 2026-07-15] A signal-abort checkpoint crashes the next resume
 
@@ -47,7 +47,7 @@ Candidate fixes, in rough preference order: (a) fingerprint per-node — a green
 
 Related observation from the same kill: the leaf ran 40m21s against `timeoutMs` 20m with no timeout firing. The docs mention a post-`timeoutMs` grace window for completing final results — if the grace is unbounded while the engine streams, a hung-but-chatty leaf never times out. Worth pinning the semantics.
 
-**0.9.0 resolution:** repeated nested outcomes remain serializable, and restore validates DAG entries independently. Malformed records are skipped with bounded path-specific diagnostics, valid siblings remain reusable, and malformed checkpoint JSON starts fresh with a reported reason. Engine timing is an absolute `timeoutMs + timeoutGraceMs` boundary per invocation; streaming does not reset it. Worker, fallback, and advisor invocations each receive their own window.
+**0.9.0 resolution:** repeated nested outcomes remain serializable, and restore validates DAG entries independently. Malformed records are skipped with bounded path-specific diagnostics, valid siblings remain reusable, and malformed checkpoint JSON starts fresh with a reported reason. Present fingerprints must use the generated 64-character lowercase hexadecimal form, and restored attempts must be positive safe integers. Engine timing is an absolute `timeoutMs + timeoutGraceMs` boundary per invocation; streaming does not reset it. Worker, fallback, and advisor invocations each receive their own window.
 
 ## 1d. [DONE 2026-07-15] commandSucceeds discards subprocess output
 
@@ -77,7 +77,7 @@ The promote stage hung twice (10 min, then 30 min) and I misdiagnosed it the fir
 
 **Fixed island-side** (`ciCheckAndFix` + `ghPrState`): the gate now trusts a "green" only once the PR is MERGEABLE and ≥1 GitHub Actions check-run (`__typename === 'CheckRun'`, not just an external Vercel status) has posted, waiting a bounded window for a still-computing state; and a `CONFLICTING`/`DIRTY` PR is a first-class ci-fix — the fix leaf merges base, resolves conflicts (superset for island files), and pushes so CI can run. **Residual loops ask:** the library's own `forgeChecks()` condition almost certainly shares the blind spot (it keys off posted check-runs, not the expected-workflow list + mergeability). Fold the two guards into `forgeChecks` — (a) a PR that is not mergeable is never green; (b) assert an expected-workflow run exists for the head, don't infer green from the absence of a failing required check.
 
-**0.9.0 resolution:** `forgeChecks()` requires exact `MERGEABLE` state and at least one `CheckRun` before it evaluates required checks. The `CheckRun` is a trust proxy that GitHub Actions ran, not proof of a named expected workflow. Conflict repair, base merge, and push orchestration remain downstream concerns.
+**0.9.0 resolution:** `forgeChecks()` requires exact `MERGEABLE` state and at least one `CheckRun` before it evaluates required checks. The `CheckRun` proves the rollup is not external-status-only; it does not prove that GitHub Actions or a named workflow ran. Conflict repair, base merge, and push orchestration remain downstream concerns.
 
 ## ▸ Batch — earlier (0.5.x–0.7.0 era, carried forward)
 

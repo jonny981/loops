@@ -76,8 +76,8 @@ export interface Forge {
   mergePr(pr: PrRef, opts: MergeOptions): Promise<void>;
   /**
    * True when the PR is mergeable, its status rollup contains a `CheckRun`, and
-   * all required checks are green. `CheckRun` presence is a trust proxy that CI
-   * ran, not proof of a particular configured workflow.
+   * all required checks are green. `CheckRun` presence proves the rollup is not
+   * external-status-only, not that GitHub Actions or a named workflow ran.
    */
   checksPass(pr: PrRef, opts: ForgeOpts): Promise<boolean>;
 }

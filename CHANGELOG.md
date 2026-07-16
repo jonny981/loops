@@ -29,17 +29,19 @@ heading, dated, before the tag is pushed.
 
 ### Changed
 
-- `forgeChecks()` requires a mergeable pull request and at least one GitHub
-  Actions `CheckRun` before it evaluates required checks, so an
+- `forgeChecks()` requires a mergeable pull request and at least one
+  `CheckRun` before it evaluates required checks, so an
   external-status-only rollup cannot produce a green result.
-- Semantic restore records may report `decision: restored` with
-  `fingerprint: changed` when the operator explicitly trusts the workspace.
+- Detailed restore events report an explicitly trusted changed workspace
+  honestly. Frozen semantic record v1 omits that transition because its
+  restored-checkpoint shape cannot encode `fingerprint: changed`.
 
 ### Fixed
 
 - Checkpoint persistence preserves repeated nested outcomes, validates restored
-  DAG entries independently, and skips malformed content with bounded
-  diagnostics instead of crashing resume.
+  DAG entries independently, rejects noncanonical fingerprints and invalid
+  attempt counters, and skips malformed content with bounded diagnostics
+  instead of crashing resume.
 - The Codex engine preserves a nonempty final result after a non-timeout dirty
   teardown and reports the exit as a warning instead of discarding completed
   work.

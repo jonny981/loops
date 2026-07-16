@@ -240,8 +240,9 @@ squash body correct. Two ways to gate the merge for "when CI passes":
   checks before loops issues the merge (`forgeChecks()` is a `Condition`, usable anywhere one is).
 
 The synchronous gate first requires exact `MERGEABLE` state and at least one
-GitHub Actions `CheckRun`, then evaluates required checks. The `CheckRun` is a
-trust proxy that GitHub Actions ran, not proof of a configured workflow name.
+`CheckRun`, then evaluates required checks. The `CheckRun` proves the rollup is
+not external-status-only; it does not prove that GitHub Actions or a named
+workflow ran.
 
 `mergeJob` writes the synthesis as the squash body directly, so it survives the squash
 regardless of the repo's merge settings; body-only (drop `mergeJob`, let a human merge)

@@ -442,9 +442,9 @@ The three tiers below form a progression. The scratch files record what failed a
   ```
 
   `forgeChecks()` first requires exact `MERGEABLE` state and at least one
-  GitHub Actions `CheckRun`, then evaluates required checks. The `CheckRun` is
-  a trust proxy that GitHub Actions ran, not proof of a configured workflow
-  name.
+  `CheckRun`, then evaluates required checks. The `CheckRun` proves the rollup
+  is not external-status-only; it does not prove that GitHub Actions or a named
+  workflow ran.
 
 The Ledger has **two faces**: _cross-iteration_ (recover from your own failed attempts in a retry loop) and _cross-node_ (honour an upstream node's decision a downstream agent could not otherwise know). Both need headroom. On one-shot, single-node work memory is only a tax; the lift shows up only once one attempt is not enough. For where it helps and where it doesn't, [docs/concepts.md](docs/concepts.md) has the discussion and [bench/RESULTS.md](bench/RESULTS.md) has the memory-on-vs-off ablation (run `npm run bench:compare` to reproduce).
 
@@ -517,8 +517,9 @@ Grounding is composed before engine dispatch, so Codex receives the complete
 prompt through stdin. Adapter integration covers working memory plus the task;
 retrieval feeds the same composed-prompt boundary upstream. If Codex writes a
 nonempty final output and then exits nonzero for a non-timeout teardown failure,
-loops returns the completed result and logs a scrubbed warning. An exit without
-final output remains an engine failure.
+the engine returns the completed result with a scrubbed warning. `agentJob` and
+`agentCheck` surface that warning in run logs. An exit without final output
+remains an engine failure.
 
 `EngineOptions.minToolIntervalMs` puts a floor between consecutive tool executions, for backends that throttle bursty tool use. Only `agent-sdk` honors it, because only the SDK mediates tool calls in-process (an awaited PreToolUse hook). The subprocess engines (`claude-cli`, `codex`) execute tools autonomously and report them after the fact, and `anthropic-api` drives no tool loop, so all three ignore it: there is no interception point to pace at outside the SDK.
 
@@ -818,13 +819,16 @@ fingerprint changed.
 
 Checkpoint DAG entries are validated independently. Malformed entries are
 skipped and reported while valid siblings remain reusable; malformed checkpoint
-JSON starts fresh with a restore diagnostic. Missing or unreadable files remain
-configuration errors.
+JSON starts fresh with a restore diagnostic. Present fingerprints must use the
+generated 64-character lowercase hexadecimal form, and restored attempts must
+be positive safe integers. Missing or unreadable files remain configuration
+errors.
 
 Use `--resume-trust-workspace` only for an intentional fix-commit recovery. It
 does not weaken malformed-fingerprint checks, still filters cached nodes against
 the loaded graph, and is omitted from generated resume commands. Without the
-explicit API option or CLI flag, a changed workspace restores nothing.
+explicit API option or CLI flag, a changed workspace restores no cached DAG
+nodes.
 
 ### Rate limits, quotas, and budgets: wait or resume
 
