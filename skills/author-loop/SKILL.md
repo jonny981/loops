@@ -133,7 +133,10 @@ Progress accumulates on disk, so each iteration starts with a clean context but 
   end with a closing decision token. It omits the handoff instruction.
 - Parse closing contracts with `lastDecisionLine(text, token, values)` or
   `confidenceFromText(text)`. They read the handoff-stripped work report, so a
-  token restated after `===HANDOFF===` cannot score the leaf. Use
+  token restated after `===HANDOFF===` cannot score the leaf. The `values`
+  vocabulary matches case-insensitively and the return carries the
+  vocabulary's own casing, so gates can compare with `===` regardless of how
+  the leaf cased the token. Use
   `lastDecisionLine(..., { mode: 'last-match' })` only when trailing prose is
   allowed. `confidenceCondition` keeps strict fractional defaults and offers
   opt-in `scale: 'percent'`, `allowNa: true`, and `reason: 'output'` modes.

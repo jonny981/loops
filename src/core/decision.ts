@@ -44,7 +44,12 @@ export function lastDecisionLine(
 ): string | undefined {
   const work = stripHandoff(text);
   const tag = escapeRegExp(token);
-  const allowed = values?.map((value) => value.toLowerCase());
+  // The vocabulary matches case-insensitively, but its own casing is the
+  // canonical return: a gate comparing against its declared values must not
+  // depend on how a chatty leaf happened to case the token.
+  const allowed = values
+    ? new Map(values.map((value) => [value.toLowerCase(), value]))
+    : undefined;
   const lines = work
     .split(/\r?\n/)
     .map((item) => item.trim())
@@ -59,8 +64,7 @@ export function lastDecisionLine(
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       const value = valueFromLine(lines[index]!);
       if (!value) continue;
-      if (allowed && !allowed.includes(value.toLowerCase())) return undefined;
-      return value;
+      return allowed ? allowed.get(value.toLowerCase()) : value;
     }
     return undefined;
   }
@@ -68,8 +72,8 @@ export function lastDecisionLine(
   const line = lines.at(-1);
   if (!line) return undefined;
   const value = valueFromLine(line);
-  if (!value || (allowed && !allowed.includes(value.toLowerCase()))) return undefined;
-  return value;
+  if (!value) return undefined;
+  return allowed ? allowed.get(value.toLowerCase()) : value;
 }
 
 export function confidenceFromText(

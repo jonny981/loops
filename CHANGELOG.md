@@ -13,6 +13,13 @@ heading, dated, before the tag is pushed.
 
 ### Fixed
 
+- `lastDecisionLine(text, token, values)` returns the matched token in the
+  `values` vocabulary's own casing instead of the leaf's. The vocabulary
+  already matched case-insensitively, so a gate comparing the return with
+  `===` against a declared value silently failed on a lowercase verdict from
+  a chatty leaf. Both modes are covered; without a `values` list the
+  as-written token is still returned. Fail-closed behavior is unchanged.
+
 - CLI-backed engines (`codex`, `claude-cli`) resolve when the engine process
   exits instead of waiting for its stdio streams to close. An orphaned helper
   that inherited the engine's pipes (an MCP transport worker, a hook-spawned

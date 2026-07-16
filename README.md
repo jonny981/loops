@@ -400,6 +400,9 @@ The three tiers below form a progression. The scratch files record what failed a
 
   Use `lastDecisionLine(text, token, values)` and `confidenceFromText(text)` for
   closing-line contracts; both ignore tokens restated inside the handoff block.
+  The `values` vocabulary matches case-insensitively and the returned token
+  carries the vocabulary's own casing, so a gate can compare with `===`
+  whatever casing the leaf wrote.
   `lastDecisionLine(..., { mode: 'last-match' })` permits trailing prose while
   selecting the last anchored token. `confidenceCondition` keeps its strict
   fractional defaults, with opt-in `scale: 'percent'`, `allowNa: true`, and

@@ -36,6 +36,23 @@ describe('decision-token helpers', () => {
     expect(lastDecisionLine('decision: pass\nunresolved caveat', 'decision')).toBeUndefined();
   });
 
+  it('returns the canonical vocabulary casing, not the leaf casing', () => {
+    // A chatty leaf may close with `VERDICT: pass`; a gate comparing the
+    // return against its declared vocabulary (`=== 'PASS'`) must still match.
+    expect(
+      lastDecisionLine('VERDICT: pass', 'VERDICT', ['PASS', 'CONCERNS'], {
+        mode: 'last-match',
+      }),
+    ).toBe('PASS');
+    expect(lastDecisionLine('verdict: Concerns', 'VERDICT', ['PASS', 'CONCERNS'])).toBe(
+      'CONCERNS',
+    );
+    // The vocabulary's own casing is authoritative, whatever it is.
+    expect(lastDecisionLine('DECISION: PASS', 'decision', ['pass', 'fail'])).toBe('pass');
+    // Without a vocabulary there is nothing to canonicalize to.
+    expect(lastDecisionLine('decision: Pass', 'decision')).toBe('Pass');
+  });
+
   it('can select the last anchored decision before trailing chatter', () => {
     expect(
       lastDecisionLine(
