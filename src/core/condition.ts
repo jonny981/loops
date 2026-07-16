@@ -33,6 +33,23 @@ import { truncate } from './text.ts';
 import { redactSecrets, redactEnvValues, scrubCapture } from './redact.ts';
 import { logEngineWarning, loopsRequestMeta } from './engine-meta.ts';
 
+const COMMAND_FAILURE_TAIL_MAX = 3000;
+const COMMAND_FAILURE_TAIL_MARKER = '… [output truncated]\n';
+
+function commandFailureTail(
+  text: string,
+  env: Record<string, string> | undefined,
+): string {
+  const scrubbed = scrubCapture(text, env);
+  if (scrubbed.length <= COMMAND_FAILURE_TAIL_MAX) return scrubbed;
+  return (
+    COMMAND_FAILURE_TAIL_MARKER +
+    scrubbed.slice(
+      -(COMMAND_FAILURE_TAIL_MAX - COMMAND_FAILURE_TAIL_MARKER.length),
+    )
+  );
+}
+
 /**
  * Coerce any `ConditionInput` — a `Condition`, a bare predicate, or an array
  * mixing both — into the single `Condition` primitive. This is what lets
@@ -127,11 +144,18 @@ export function minConfidence(threshold: number): Condition {
  * kills for deterministic gates.
  * `opts.env` pins vars for this one gate command; it is the most specific
  * layer, over any `withEnv` overlay and the running environment's vars.
+ * `opts.captureOutput` appends a scrubbed, bounded combined-output tail to a
+ * failed command's reason. The separate evidence output remains unchanged.
  */
 export function commandSucceeds(
   command: string,
   args: string[] = [],
-  opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {},
+  opts: {
+    cwd?: string;
+    timeoutMs?: number;
+    env?: Record<string, string>;
+    captureOutput?: boolean;
+  } = {},
 ): Condition {
   return setLabel(async (ctx) => {
     try {
@@ -143,13 +167,20 @@ export function commandSucceeds(
         reject: false,
         stdin: 'ignore',
         env,
+        all: opts.captureOutput,
       });
       if (r.exitCode === 0) {
         return { met: true, reason: `\`${command}\` exited 0` };
       }
+      const baseReason = `\`${command}\` exited ${r.exitCode ?? '?'}`;
+      const tail = opts.captureOutput
+        ? commandFailureTail(r.all ?? '', env)
+        : '';
       return {
         met: false,
-        reason: `\`${command}\` exited ${r.exitCode ?? '?'}`,
+        reason: tail
+          ? `${baseReason}\n\ncommand output (tail):\n${tail}`
+          : baseReason,
         // The evidence behind the failure, in the same shape `reviewContext`
         // gives a judge. Scrubbed (`scrubCapture`) because it flows into JSONL
         // event records — a failing command often echoes its config, and a

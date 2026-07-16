@@ -254,6 +254,19 @@ describe('commandSucceeds output capture', () => {
     expect(r?.output).toBeUndefined();
   });
 
+  it('does not append captured output to a successful command', async () => {
+    const r = await untilResult(
+      commandSucceeds(
+        'node',
+        ['-e', 'console.log("successful detail"); process.exit(0)'],
+        { captureOutput: true },
+      ),
+      noEngine,
+    );
+    expect(r?.reason).toBe('`node` exited 0');
+    expect(r?.output).toBeUndefined();
+  });
+
   it('truncates long stream output with the … marker', async () => {
     const r = await untilResult(
       commandSucceeds('node', [
@@ -277,6 +290,64 @@ describe('commandSucceeds output capture', () => {
     );
     expect(r?.output).toContain('[redacted]');
     expect(r?.output).not.toContain('hunter2secret');
+  });
+
+  it('keeps the failure reason concise unless output capture is requested', async () => {
+    const r = await untilResult(
+      commandSucceeds('node', [
+        '-e',
+        'console.error("failure detail"); process.exit(1)',
+      ]),
+      noEngine,
+    );
+    expect(r?.reason).toBe('`node` exited 1');
+    expect(r?.reason).not.toContain('failure detail');
+    expect(r?.output).toContain('failure detail');
+  });
+
+  it('appends the bounded tail of combined output when requested', async () => {
+    const r = await untilResult(
+      commandSucceeds(
+        'node',
+        [
+          '-e',
+          [
+            'process.stdout.write("BEGIN_MARKER\\n" + "x".repeat(5000))',
+            'process.stderr.write("\\nSTDERR_MARKER\\n")',
+            'setTimeout(() => { console.error("END_MARKER"); process.exit(1) }, 10)',
+          ].join('; '),
+        ],
+        { captureOutput: true },
+      ),
+      noEngine,
+    );
+    expect(r?.reason).toContain('command output (tail):');
+    expect(r?.reason).toContain('… [output truncated]');
+    expect(r?.reason).toContain('STDERR_MARKER');
+    expect(r?.reason).toContain('END_MARKER');
+    expect(r?.reason).not.toContain('BEGIN_MARKER');
+  });
+
+  it('redacts the full combined stream before taking its tail', async () => {
+    const injected = 's'.repeat(500);
+    const r = await untilResult(
+      commandSucceeds(
+        'node',
+        [
+          '-e',
+          [
+            'process.stdout.write("p".repeat(500) + process.env.COMMAND_SECRET + "z".repeat(2800) + "\\n")',
+            'console.error("token=hunter2secret")',
+            'process.exit(1)',
+          ].join('; '),
+        ],
+        { captureOutput: true, env: { COMMAND_SECRET: injected } },
+      ),
+      noEngine,
+    );
+    expect(r?.reason).toContain('[redacted]');
+    expect(r?.reason).not.toContain('s'.repeat(50));
+    expect(r?.reason).not.toContain('hunter2secret');
   });
 });
 
