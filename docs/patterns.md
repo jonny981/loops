@@ -239,6 +239,10 @@ squash body correct. Two ways to gate the merge for "when CI passes":
 - `mergeJob({ when: forgeChecks() })` → a synchronous loops gate that checks the PR's required
   checks before loops issues the merge (`forgeChecks()` is a `Condition`, usable anywhere one is).
 
+The synchronous gate first requires exact `MERGEABLE` state and at least one
+GitHub Actions `CheckRun`, then evaluates required checks. The `CheckRun` is a
+trust proxy that GitHub Actions ran, not proof of a configured workflow name.
+
 `mergeJob` writes the synthesis as the squash body directly, so it survives the squash
 regardless of the repo's merge settings; body-only (drop `mergeJob`, let a human merge)
 instead relies on the repo's squash default being "PR title and description". The host is the

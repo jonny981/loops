@@ -50,9 +50,12 @@ Execution lifecycle records use `run`, `job`, `loop`, or `dag-node`. Their
 allowed transitions are `created` to `running`, `running` to a terminal state
 or `paused`, and checkpoint-backed `paused` to `running`. Acknowledgements and
 resume commands belong only to pauses; checkpoint details belong only to
-resumes. Reserved layers use bounded vocabularies: workstreams, artifacts,
-handoffs, and triggers cannot introduce arbitrary state names into v1. Their
-owning features remain responsible for enforcing causal transition graphs.
+resumes. An explicitly trusted changed-workspace resume records
+`decision: restored` with `fingerprint: changed`; the default changed-workspace
+decision remains a skip. Reserved layers use bounded vocabularies: workstreams,
+artifacts, handoffs, and triggers cannot introduce arbitrary state names into
+v1. Their owning features remain responsible for enforcing causal transition
+graphs.
 
 ## Validate and query
 

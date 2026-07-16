@@ -11,6 +11,39 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-15
+
+### Added
+
+- `commandSucceeds(cmd, args, { captureOutput: true })` appends the final 3 KB
+  of scrubbed combined subprocess output to a failed condition's reason while
+  preserving the existing concise default.
+- `RunOptions.resumeTrustWorkspace` and CLI `--resume-trust-workspace` let an
+  operator explicitly reuse graph-matching green checkpoint nodes after an
+  intentional workspace change. Strict fingerprint checks remain the default.
+- Decision-token helpers support exact `n/a` acceptance for passing jobs,
+  percent-scale thresholds, output-backed reasons, and an opt-in last anchored
+  match before trailing prose.
+- `promptBank(dir, { fragmentsDir })` resolves first-level and nested includes
+  from a contained relative fragments directory.
+
+### Changed
+
+- `forgeChecks()` requires a mergeable pull request and at least one GitHub
+  Actions `CheckRun` before it evaluates required checks, so an
+  external-status-only rollup cannot produce a green result.
+- Semantic restore records may report `decision: restored` with
+  `fingerprint: changed` when the operator explicitly trusts the workspace.
+
+### Fixed
+
+- Checkpoint persistence preserves repeated nested outcomes, validates restored
+  DAG entries independently, and skips malformed content with bounded
+  diagnostics instead of crashing resume.
+- The Codex engine preserves a nonempty final result after a non-timeout dirty
+  teardown and reports the exit as a warning instead of discarding completed
+  work.
+
 ## [0.8.0] - 2026-07-12
 
 ### Added
@@ -229,7 +262,9 @@ limit policies, supervision (`--supervise`, `list`/`status`/`tail`), the Ink
 TUI, `loops validate` / run-from-any-repo via the global tsx loader, and the
 author-loop skill.
 
-[Unreleased]: https://github.com/jonny981/loops/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/jonny981/loops/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jonny981/loops/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/jonny981/loops/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/jonny981/loops/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jonny981/loops/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/jonny981/loops/compare/v0.5.0...v0.5.1

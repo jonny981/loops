@@ -334,6 +334,11 @@ Three **hardening gates** close the ways an agent can technically satisfy a gate
 
 A failing gate is not just "no". The evidence-bearing conditions — `commandSucceeds`, `agentCheck`, and the combinators that wrap them — carry their verbatim diagnostic evidence on `ConditionResult.output` (a failing command's stdout/stderr, a judge's full findings), truncated and secret-scrubbed, and the loop hands the previous iteration's `until` verdict to the next body as `ctx.lastGate`. The point: the next fresh context reads **why** the gate failed instead of spending a turn re-running it to find out.
 
+When a one-line consumer also needs terminal evidence in `reason`, use
+`commandSucceeds(cmd, args, { captureOutput: true })`. A failed command appends
+the scrubbed final 3 KB of combined output. The default reason stays concise,
+and successful commands do not carry output.
+
 ```ts
 loop({
   name: 'build',
@@ -395,6 +400,15 @@ The three tiers below form a progression. The scratch files record what failed a
 
   Use `lastDecisionLine(text, token, values)` and `confidenceFromText(text)` for
   closing-line contracts; both ignore tokens restated inside the handoff block.
+  `lastDecisionLine(..., { mode: 'last-match' })` permits trailing prose while
+  selecting the last anchored token. `confidenceCondition` keeps its strict
+  fractional defaults, with opt-in `scale: 'percent'`, `allowNa: true`, and
+  `reason: 'output'` modes for other contracts.
+
+  `promptBank(dir).render(name, vars)` loads Markdown templates from `dir` and
+  resolves includes there by default. Pass `{ fragmentsDir: 'fragments' }` to
+  keep root templates in `dir` while resolving first-level and nested includes
+  from that contained relative directory.
 
 - **Milestone commits: crystallise it.** A commit is a _milestone_, not an iteration. When a loop converges, `commitJob` composes one structured body, the handoff plus a compacted working log (the **way**), welded to the diff (the **what**), then clears both scratch files. Turn it on with `commit:`; iterations stay durable in the workspace + scratch files, so the log holds only converged, reasoned-over checkpoints. Welded to its diff, a commit body is a permanent record any later agent can look back to, as far back as it wants. Finer milestones? Compose finer loops/nodes.
 
@@ -426,6 +440,11 @@ The three tiers below form a progression. The scratch files record what failed a
   ```ts
   sequence('ship', pullRequestJob({ base: 'main' }), mergeJob({ base: 'main', auto: true }));
   ```
+
+  `forgeChecks()` first requires exact `MERGEABLE` state and at least one
+  GitHub Actions `CheckRun`, then evaluates required checks. The `CheckRun` is
+  a trust proxy that GitHub Actions ran, not proof of a configured workflow
+  name.
 
 The Ledger has **two faces**: _cross-iteration_ (recover from your own failed attempts in a retry loop) and _cross-node_ (honour an upstream node's decision a downstream agent could not otherwise know). Both need headroom. On one-shot, single-node work memory is only a tax; the lift shows up only once one attempt is not enough. For where it helps and where it doesn't, [docs/concepts.md](docs/concepts.md) has the discussion and [bench/RESULTS.md](bench/RESULTS.md) has the memory-on-vs-off ablation (run `npm run bench:compare` to reproduce).
 
@@ -488,6 +507,18 @@ await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
 ```
 
 That's the whole contract: implement `run`, register a name. A managed/durable runner could be a drop-in engine too.
+
+`timeoutMs` is a soft boundary for one engine invocation, and
+`timeoutMs + timeoutGraceMs` is its absolute boundary. Streaming does not reset
+either timer. A worker retry, fallback route, or advisor consult is a separate
+invocation with its own window.
+
+Grounding is composed before engine dispatch, so Codex receives the complete
+prompt through stdin. Adapter integration covers working memory plus the task;
+retrieval feeds the same composed-prompt boundary upstream. If Codex writes a
+nonempty final output and then exits nonzero for a non-timeout teardown failure,
+loops returns the completed result and logs a scrubbed warning. An exit without
+final output remains an engine failure.
 
 `EngineOptions.minToolIntervalMs` puts a floor between consecutive tool executions, for backends that throttle bursty tool use. Only `agent-sdk` honors it, because only the SDK mediates tool calls in-process (an awaited PreToolUse hook). The subprocess engines (`claude-cli`, `codex`) execute tools autonomously and report them after the fact, and `anthropic-api` drives no tool loop, so all three ignore it: there is no interception point to pace at outside the SDK.
 
@@ -759,17 +790,18 @@ There is no `converge()` / `sweep()` / `tend()` in the API. They are patterns, n
 
 ## Budget, records, resume
 
-Four `RunOptions` with matching CLI flags. The API defaults are off. The CLI
+Five `RunOptions` with matching CLI flags. The API defaults are off. The CLI
 auto-writes a thin JSONL record under `.loops/records/<runId>.jsonl`; pass
 `--record <path>` to choose a full-fidelity record path, or `--no-record` to
 disable it.
 
-| Option       | CLI flag             | Effect                                                                                |
-| ------------ | -------------------- | ------------------------------------------------------------------------------------- |
-| `budget`     | `--budget <n>`       | Cap total tokens for the run. Engine calls refuse once the cap is hit.                |
-| `recordTo`   | `--record <path>`    | Append every structured event as JSONL: a readable, queryable run record. Use `'auto'` to name a thin record from the run id. |
-| `checkpoint` | `--checkpoint <p>`   | Snapshot shared `ctx.state` and completed green DAG nodes at loop/dag/job boundaries. |
-| `resumeFrom` | `--resume <path>`    | Restore checkpoint state and skip restored green DAG nodes once, then continue warm.  |
+| Option                 | CLI flag                   | Effect                                                                                |
+| ---------------------- | -------------------------- | ------------------------------------------------------------------------------------- |
+| `budget`               | `--budget <n>`             | Cap total tokens for the run. Engine calls refuse once the cap is hit.                |
+| `recordTo`             | `--record <path>`          | Append every structured event as JSONL: a readable, queryable run record. Use `'auto'` to name a thin record from the run id. |
+| `checkpoint`           | `--checkpoint <p>`         | Snapshot shared `ctx.state` and completed green DAG nodes at loop/dag/job boundaries. |
+| `resumeFrom`           | `--resume <path>`          | Restore checkpoint state and skip restored green DAG nodes once, then continue warm.  |
+| `resumeTrustWorkspace` | `--resume-trust-workspace` | Explicitly reuse graph-matching green nodes after an intentional workspace change. Requires resume. |
 
 ```ts
 await run(job, { budget: 2_000_000, recordTo: '.loops/run.jsonl', checkpoint: '.loops/state.json' });
@@ -783,6 +815,16 @@ In the CLI, `--resume <path>` also checkpoints back to `<path>` when
 `--checkpoint` is omitted. A resumed run emits a startup restore event such as
 `restored 3/3 nodes from .loops/state.json` or a skip reason when the workspace
 fingerprint changed.
+
+Checkpoint DAG entries are validated independently. Malformed entries are
+skipped and reported while valid siblings remain reusable; malformed checkpoint
+JSON starts fresh with a restore diagnostic. Missing or unreadable files remain
+configuration errors.
+
+Use `--resume-trust-workspace` only for an intentional fix-commit recovery. It
+does not weaken malformed-fingerprint checks, still filters cached nodes against
+the loaded graph, and is omitted from generated resume commands. Without the
+explicit API option or CLI flag, a changed workspace restores nothing.
 
 ### Rate limits, quotas, and budgets: wait or resume
 

@@ -96,6 +96,9 @@ create the ESM package scope, tsconfig, config file, and `.loops/` ignore entry.
 A gate that just asks the model whether it is done lets it grade its own homework, and it always says yes. Make the gate real:
 
 - Combine a **deterministic** signal (`commandSucceeds('npm', ['test'])`: the tests really pass) with a **separate judge** (`agentCheck`). Prefer this mixed form over a lone judge.
+- For a long external command whose one-line reason must carry terminal evidence,
+  opt into `commandSucceeds(cmd, args, { captureOutput: true })`. Failures append
+  a scrubbed 3 KB output tail; the default reason remains concise.
 - `until`/`start`/`stopOn` take one item or many. Arrays are `all` by default; wrap in `any(...)` for or.
 - Harden the judge: `quorum(2, judgeA, judgeB, judgeC)` is a k-of-n jury. `agentCheck({ dimensions: [...] })` opens on the geometric mean, so one weak dimension drags the verdict down.
 - A missing confidence scores 0 (fail-closed). Never lean on the model's self-report alone.
@@ -130,10 +133,15 @@ Progress accumulates on disk, so each iteration starts with a clean context but 
   end with a closing decision token. It omits the handoff instruction.
 - Parse closing contracts with `lastDecisionLine(text, token, values)` or
   `confidenceFromText(text)`. They read the handoff-stripped work report, so a
-  token restated after `===HANDOFF===` cannot score the leaf.
+  token restated after `===HANDOFF===` cannot score the leaf. Use
+  `lastDecisionLine(..., { mode: 'last-match' })` only when trailing prose is
+  allowed. `confidenceCondition` keeps strict fractional defaults and offers
+  opt-in `scale: 'percent'`, `allowNa: true`, and `reason: 'output'` modes.
 - `promptBank(dir).render(name, vars)` loads Markdown prompt templates, supports
   `{{var}}` and `{{> fragment}}`, and fails on unused vars or unresolved
-  placeholders.
+  placeholders. `promptBank(dir, { fragmentsDir: 'fragments' })` keeps root
+  templates in `dir` and resolves nested includes from that contained relative
+  directory.
 - `commit: { subject }` (or `commit: true`) writes one structured milestone commit on convergence: the reasoning welded to the diff. Later turns ground on it.
 - For long, noisy histories use `ground: { retrieve: true }` (select relevant commits, not recent-N); for indefinite processes add `consolidateJob` to fold history into a bounded, decision-preserving record.
 
@@ -180,6 +188,11 @@ To pin env vars over a subtree (gate commands, judges, and agent subprocesses al
 
 A step no model may approve (deploy to prod, spend real money) is a `humanGate({ name })` node: unacknowledged, it pauses the whole run (`paused`, exit code 75) and the CLI prints the resume command with `--ack <name>` appended; acknowledged, it passes. Run with `--checkpoint <path>` so the pause is resumable, then `loops run <file> --resume <path> --ack <name>`. With `--checkpoint`, completed green DAG nodes are restored from checkpoint on resume; non-DAG jobs rerun as ordinary jobs. An `AgentDef`'s `humanGates` entries construct directly: `humanGate(def.humanGates[0])`.
 
+After an intentional fix commit changes the workspace, strict resume skips the
+checkpoint. An operator may add `--resume-trust-workspace` to reuse only
+graph-matching green nodes. The flag requires `--resume`, does not relax
+malformed-fingerprint checks, and is not copied into generated resume guidance.
+
 ## Agents and feedback
 
 A node can be a named specialist instead of an inline prompt. Define it once with `defineAgent` (persona in markdown via `fromFile`, structure in TS) and hand it to `agentJob({ agent })`; `defineSkill` folds a methodology into its system. An existing Claude Code agent `.md` loads directly with `defineAgentFromMarkdown(path, overrides?)`: frontmatter (`name`/`description`/`model`/`tools`) maps onto the def, the body becomes `system`, and the result is always a leaf (the `Task`/`Agent` spawn tools are dropped). The contract fields (`tier`, `outputs`, `failureModes`, …) are metadata for `describe` and validation, not scheduling power: the `dag` orchestrates, agents stay workers.
@@ -190,6 +203,10 @@ Use `agentJob({ advisor: { engine, model, maxCalls } })` for a bounded
 consultant. The worker asks with `<consult_advisor>`, loops records the question
 and reply, and the worker resumes with the advisor response. Do not ask a leaf
 to shell out to another model.
+
+`timeoutMs` and `timeoutGraceMs` bound one engine invocation absolutely;
+streaming does not reset the timer. Worker retries, fallback routes, and advisor
+consults receive separate windows.
 
 Review feedback is a structured revision request that flows back to the worker on one channel. In a loop, a failing `review` is threaded into the next turn as `ctx.lastReview`; set `consumeFeedback: true` and `agentJob` folds it into the prompt. Aggregate several reviewers with `reviewPanel`; route a fix back to an earlier dag node with a targeted `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) when the dag's `maxKickbacks` allows it.
 
