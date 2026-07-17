@@ -9,7 +9,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { agentJob, run } from '../src/api.ts';
+import { agentJob, costReport, run, Stats } from '../src/api.ts';
 import { modelFor } from '../src/engines/engine.ts';
 import { buildCodexArgs, CodexEngine } from '../src/engines/codex.ts';
 import { preflightEngine } from '../src/engines/preflight.ts';
@@ -21,6 +21,7 @@ describe('buildCodexArgs', () => {
   it('defaults to a read-only ephemeral exec and writes the last message', () => {
     const args = buildCodexArgs({ prompt: 'review this' }, {}, '/tmp/out.txt');
     expect(args.slice(0, 4)).toEqual(['exec', '--ephemeral', '--skip-git-repo-check', '--color']);
+    expect(args).toContain('--json');
     expect(args).toContain('read-only');
     expect(args).toContain('-o');
     expect(args[args.indexOf('-o') + 1]).toBe('/tmp/out.txt');
@@ -117,6 +118,121 @@ writeFileSync(out, 'stub final');
 
     expect(result.text).toBe('stub final');
     expect(readFileSync(stdinFile, 'utf8')).toBe('system rules\n\n---\n\ndo the work');
+  });
+
+  it('rejects an explicit empty tool set before spawning Codex', async () => {
+    await expect(
+      new CodexEngine({ cliBinary: join(tmpdir(), 'loops-codex-must-not-spawn') }).run(
+        { prompt: 'select evidence', tools: [] },
+        () => {},
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({
+      code: 'CONFIG',
+      phase: 'engine',
+      message: 'codex cannot honor tools: []; choose an engine that supports disabling tools',
+    });
+  });
+
+  it('reports terminal JSONL usage without double-counting cached input', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'loops-codex-stub-'));
+    const bin = join(dir, 'codex-stub.mjs');
+    writeFileSync(
+      bin,
+      `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+
+const args = process.argv.slice(2);
+const out = args[args.indexOf('-o') + 1];
+writeFileSync(out, 'stub final');
+process.stdout.write(JSON.stringify({
+  type: 'turn.completed',
+  usage: { input_tokens: 42, cached_input_tokens: 30, output_tokens: 7 },
+}) + '\\n');
+`,
+    );
+    chmodSync(bin, 0o755);
+
+    const usageEvents: Array<{ type: string; usage?: unknown; model?: string }> = [];
+    const stats = new Stats();
+    const result = await new CodexEngine({ cliBinary: bin }).run(
+      { prompt: 'do the work' },
+      (event) => {
+        usageEvents.push(event);
+        if (event.type === 'usage') {
+          stats.record({
+            kind: 'engine:usage',
+            ts: 0,
+            path: [],
+            model: event.model,
+            usage: event.usage,
+          });
+        }
+      },
+      new AbortController().signal,
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 42,
+      outputTokens: 7,
+      cacheReadInputTokens: 30,
+    });
+    expect(usageEvents.filter((event) => event.type === 'usage')).toEqual([
+      {
+        type: 'usage',
+        usage: {
+          inputTokens: 42,
+          outputTokens: 7,
+          cacheReadInputTokens: 30,
+        },
+        model: 'codex',
+      },
+    ]);
+
+    const snapshot = stats.snapshot();
+    expect(snapshot.models).toEqual([
+      {
+        model: 'codex',
+        calls: 1,
+        inputTokens: 42,
+        outputTokens: 7,
+        cacheReadInputTokens: 30,
+      },
+    ]);
+    expect(
+      costReport(
+        snapshot,
+        { codex: { inputPerMTokUsd: 1, outputPerMTokUsd: 2 } },
+        'codex',
+      ),
+    ).toMatchObject({
+      spentUsd: undefined,
+      baselineUsd: undefined,
+      savedUsd: undefined,
+      unpricedModels: ['codex'],
+      models: [{ model: 'codex', usd: undefined }],
+    });
+  });
+
+  it('rejects Codex retrieval with a route-specific configuration error', async () => {
+    const repo = await tmpRepo();
+    const engine = new CodexEngine({
+      cliBinary: join(tmpdir(), 'loops-codex-must-not-spawn'),
+    });
+
+    const { outcome } = await run(
+      agentJob({
+        label: 'codex-worker',
+        prompt: 'Continue the task.',
+        engine: 'codex',
+        ground: { retrieve: true, recordInstruction: false },
+      }),
+      { engine: 'codex', engines: { codex: engine }, cwd: repo },
+    );
+
+    expect(outcome.status).toBe('fail');
+    expect(outcome.error).toMatchObject({ code: 'CONFIG', phase: 'engine' });
+    expect(outcome.summary).toContain('set ground.retrieve.engine');
   });
 
   it('preserves a completed result when the subprocess fails during teardown', async () => {

@@ -33,7 +33,7 @@ export const build = loop({
 
 ## Sweep — one fresh task per item; transfer the house style
 
-A known set of independent tasks (research each OEM, generate each profile). The
+A known set of independent tasks (upgrade each package, generate each report). The
 Ledger's job is *consistency* — each item done the way the earlier ones established.
 
 ```ts

@@ -11,6 +11,37 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+### Added
+
+- `loop({ checkFirst: true })` evaluates an explicit convergence gate before
+  dispatching the first body turn, then threads a failed gate or rejected
+  review into the first repair turn.
+- `reviewPanel` can persist high-confidence passing seats in checkpointed run
+  state and reuse them while each seat's declared `invalidateOn` content scope
+  and required `cacheVersion` remain unchanged.
+
+### Changed
+
+- Retrieval grounding uses a replacement system prompt with no tools, inherits
+  worker timeouts, emits ordinary usage events, and is budget-checked before a
+  worker turn starts.
+- `agentJob({ role: 'reader' })` no longer auto-captures report output into the
+  shared ledger or handoff scratch files.
+- `reviewContext.maxChars` caps the complete assembled evidence bundle in
+  addition to each source.
+
+### Fixed
+
+- Claude CLI and Agent SDK usage totals include cache creation and cache-read
+  input exactly once, and the Codex engine reads terminal usage from its JSONL
+  event stream instead of reporting zero.
+- Cost receipts preserve Claude cache creation and cache-read counts and
+  withhold actual and baseline totals when the price table cannot distinguish
+  their rates.
+- Run-owned checkpoint and record files are excluded from reviewer pass and
+  no-progress workspace fingerprints, so orchestration writes cannot create
+  false invalidations or false progress.
+
 ## [0.9.2] - 2026-07-17
 
 ### Added

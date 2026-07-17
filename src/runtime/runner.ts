@@ -506,6 +506,11 @@ export async function run(
     signal: controller.signal,
     runId,
     checkpoint: checkpointControl,
+    fingerprintExcludePaths: uniquePaths([
+      recordPath,
+      options.checkpoint,
+      options.resumeFrom,
+    ]),
     emit,
     state: initialState,
     params: options.params ?? {},

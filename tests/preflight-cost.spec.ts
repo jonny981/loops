@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { preflight, preflightEngine, formatPreflight } from '../src/engines/preflight.ts';
 import { MockEngine } from '../src/engines/mock.ts';
 import { costReport, formatCostReport, priceFor, type PriceTable } from '../src/core/cost.ts';
+import { Stats } from '../src/core/stats.ts';
 import type { Engine } from '../src/engines/engine.ts';
 
 describe('preflight', () => {
@@ -86,7 +87,65 @@ describe('cost accounting', () => {
     );
     expect(report.spentUsd).toBeUndefined(); // a partial total is not a total
     expect(report.unpricedModels).toEqual(['gpt-5.2']);
-    expect(formatCostReport(report).join('\n')).toContain('unpriced');
+    const text = formatCostReport(report).join('\n');
+    expect(text).toContain('incomplete price coverage');
+    expect(text).not.toContain('add them to the price table');
+  });
+
+  it('withholds totals when cached input has no distinct rates', () => {
+    const stats = new Stats();
+    stats.record({
+      kind: 'engine:usage',
+      ts: 1,
+      path: [],
+      model: 'claude-sonnet-5',
+      usage: {
+        inputTokens: 31,
+        outputTokens: 3,
+        cacheCreationInputTokens: 11,
+        cacheReadInputTokens: 13,
+      },
+    });
+    stats.record({
+      kind: 'engine:usage',
+      ts: 2,
+      path: [],
+      model: 'claude-sonnet-5',
+      usage: {
+        inputTokens: 17,
+        outputTokens: 1,
+        cacheCreationInputTokens: 2,
+        cacheReadInputTokens: 3,
+      },
+    });
+
+    const snapshot = stats.snapshot();
+    expect(snapshot.models).toEqual([
+      {
+        model: 'claude-sonnet-5',
+        calls: 2,
+        inputTokens: 48,
+        outputTokens: 4,
+        cacheCreationInputTokens: 13,
+        cacheReadInputTokens: 16,
+      },
+    ]);
+
+    const report = costReport(snapshot, PRICES, 'claude-opus-4-8');
+    expect(report.models).toEqual([
+      {
+        model: 'claude-sonnet-5',
+        calls: 2,
+        inputTokens: 48,
+        outputTokens: 4,
+        usd: undefined,
+      },
+    ]);
+    expect(report.spentUsd).toBeUndefined();
+    expect(report.baselineUsd).toBeUndefined();
+    expect(report.savedUsd).toBeUndefined();
+    expect(report.unpricedModels).toEqual(['claude-sonnet-5']);
+    expect(formatCostReport(report).join('\n')).toContain('incomplete price coverage');
   });
 
   it('reconstructs the baseline on the SAME token stream and reports savings', () => {

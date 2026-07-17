@@ -92,6 +92,7 @@ export function renderPlan(meta: JobMeta | undefined, indent = ''): string[] {
       if (typeof meta.max === 'number') caps.push(`max ${meta.max}`);
       if (typeof meta.noProgress === 'number')
         caps.push(`stall after ${meta.noProgress} flat`);
+      if (meta.checkFirst) caps.push('check first');
       const max = caps.length ? ` (${caps.join('; ')})` : '';
       out.push(`${indent}loop${nm}${max}`);
       const start = meta.start as string[] | undefined;

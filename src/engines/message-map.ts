@@ -67,8 +67,16 @@ export function mapMessage(
       }
       const usage = inner.usage as AnyRecord | undefined;
       if (usage) {
-        acc.usage.inputTokens += num(usage.input_tokens);
+        acc.usage.inputTokens += inputTokens(usage);
         acc.usage.outputTokens += num(usage.output_tokens);
+        const cacheCreation = optionalNum(usage.cache_creation_input_tokens);
+        const cacheRead = optionalNum(usage.cache_read_input_tokens);
+        if (cacheCreation !== undefined)
+          acc.usage.cacheCreationInputTokens =
+            (acc.usage.cacheCreationInputTokens ?? 0) + cacheCreation;
+        if (cacheRead !== undefined)
+          acc.usage.cacheReadInputTokens =
+            (acc.usage.cacheReadInputTokens ?? 0) + cacheRead;
       }
       break;
     }
@@ -110,10 +118,16 @@ export function mapMessage(
       const usage = msg.usage as AnyRecord | undefined;
       if (usage) {
         // result usage is authoritative for the turn
-        const i = num(usage.input_tokens);
+        const i = inputTokens(usage);
         const o = num(usage.output_tokens);
         if (i) acc.usage.inputTokens = i;
         if (o) acc.usage.outputTokens = o;
+        const cacheCreation = optionalNum(usage.cache_creation_input_tokens);
+        const cacheRead = optionalNum(usage.cache_read_input_tokens);
+        if (cacheCreation !== undefined)
+          acc.usage.cacheCreationInputTokens = cacheCreation;
+        if (cacheRead !== undefined)
+          acc.usage.cacheReadInputTokens = cacheRead;
       }
       if (!acc.text && typeof msg.result === 'string') acc.text = msg.result;
       break;
@@ -121,6 +135,18 @@ export function mapMessage(
   }
 }
 
+function inputTokens(usage: AnyRecord): number {
+  return (
+    num(usage.input_tokens) +
+    num(usage.cache_creation_input_tokens) +
+    num(usage.cache_read_input_tokens)
+  );
+}
+
 function num(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return optionalNum(value) ?? 0;
+}
+
+function optionalNum(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

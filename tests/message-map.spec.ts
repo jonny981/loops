@@ -35,6 +35,47 @@ describe('message-map', () => {
     );
   });
 
+  it('counts cached Claude input once when terminal usage replaces message totals', () => {
+    const assistant = {
+      type: 'assistant',
+      message: {
+        content: [],
+        usage: {
+          input_tokens: 7,
+          cache_creation_input_tokens: 11,
+          cache_read_input_tokens: 13,
+          output_tokens: 3,
+        },
+      },
+    };
+    expect(collect([assistant]).acc.usage).toEqual({
+      inputTokens: 31,
+      outputTokens: 3,
+      cacheCreationInputTokens: 11,
+      cacheReadInputTokens: 13,
+    });
+    expect(
+      collect([
+        assistant,
+        {
+          type: 'result',
+          subtype: 'success',
+          usage: {
+            input_tokens: 7,
+            cache_creation_input_tokens: 11,
+            cache_read_input_tokens: 13,
+            output_tokens: 3,
+          },
+        },
+      ]).acc.usage,
+    ).toEqual({
+      inputTokens: 31,
+      outputTokens: 3,
+      cacheCreationInputTokens: 11,
+      cacheReadInputTokens: 13,
+    });
+  });
+
   it('streams deltas without double-counting the final block', () => {
     const { acc, events } = collect([
       {

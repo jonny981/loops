@@ -50,7 +50,7 @@ describe('scrubCapture (the one scrub-then-cut composition)', () => {
     const text = `prefix ${env.TOKEN} tail`;
     const out = scrubCapture(text, env, 12);
     expect(out).not.toContain('supersec');
-    expect(out).toContain('[redacted]'.slice(0, 5));
+    expect(out).toBe('prefix [re\n…');
   });
 
   it('redacts shape-matched secrets before the cut too (the engine stderr case)', () => {

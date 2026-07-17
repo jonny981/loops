@@ -30,6 +30,7 @@ interface GitOpts {
   cwd: string;
   signal?: AbortSignal;
   excludePaths?: string[];
+  includePaths?: string[];
 }
 
 // Record-delimited log format: sha, ISO date, subject, body, then a record
@@ -106,12 +107,14 @@ export async function isDirty(opts: GitOpts): Promise<boolean> {
 /**
  * A content hash of the workspace's observable state: HEAD, every pending
  * tracked change (staged + unstaged, with content), the porcelain status, and
- * the CONTENT of untracked non-ignored files (hashed by git itself, so a
- * revisit to a byte-identical tree fingerprints identically). This is the
+ * the CONTENT of untracked files (hashed by git itself, so a revisit to a
+ * byte-identical tree fingerprints identically). Whole-workspace hashes omit
+ * ignored files; `includePaths` observes ignored content explicitly selected
+ * by the caller. Scoped hashes omit unrelated commits. This is the
  * deterministic evidence channel behind `noProgress`: two iterations with the
- * same fingerprint left the workspace in the same state. Returns undefined
- * outside a git work tree — the caller treats that channel as absent, never as
- * "unchanged". Never throws.
+ * same fingerprint left the observed workspace in the same state. Returns
+ * undefined outside a git work tree; the caller treats that channel as
+ * absent, never as "unchanged". Never throws.
  */
 export async function workspaceFingerprint(
   opts: GitOpts,
@@ -121,9 +124,24 @@ export async function workspaceFingerprint(
     const excluded = (opts.excludePaths ?? [])
       .map((p) => relative(opts.cwd, resolve(opts.cwd, p)).replace(/\\/g, '/'))
       .filter((p) => p && !p.startsWith('..') && p !== '.');
-    const pathspec = excluded.length
-      ? ['--', '.', ...excluded.map((p) => `:(exclude)${p}`)]
+    const included = [...new Set(opts.includePaths ?? [])]
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .sort();
+    const scoped = included.length > 0;
+    const pathspec = scoped || excluded.length
+      ? [
+          '--',
+          ...(scoped ? included : ['.']),
+          ...excluded.map((p) => `:(exclude)${p}`),
+        ]
       : [];
+    const output = async (args: string[]): Promise<string> => {
+      const result = await git(args, opts);
+      if (result.exitCode !== 0)
+        throw new Error(`git ${args[0] ?? 'command'} failed`);
+      return result.stdout;
+    };
     const hash = createHash('sha256');
     const feed = (label: string, value: string) => {
       hash.update(label);
@@ -131,28 +149,45 @@ export async function workspaceFingerprint(
       hash.update(value);
       hash.update('\x1e');
     };
-    feed('head', (await headSha(opts)) ?? '');
+    if (scoped) {
+      // A scoped fingerprint follows the selected content, not the branch tip:
+      // an unrelated commit must not invalidate a reviewer that never read it.
+      feed('scope', included.join('\n'));
+      feed(
+        'tracked',
+        await output(['ls-files', '--stage', ...pathspec]),
+      );
+    } else {
+      feed('head', (await headSha(opts)) ?? '');
+    }
     // `status --porcelain` captures names/stages even where a diff cannot run
     // (e.g. an unborn HEAD); the two diffs capture tracked content.
     feed(
       'status',
-      (await git(['status', '--porcelain', ...pathspec], opts)).stdout,
+      await output(['status', '--porcelain', ...pathspec]),
     );
-    feed('unstaged', (await git(['diff', ...pathspec], opts)).stdout);
-    feed('staged', (await git(['diff', '--cached', ...pathspec], opts)).stdout);
+    feed('unstaged', await output(['diff', ...pathspec]));
+    feed('staged', await output(['diff', '--cached', ...pathspec]));
     // Untracked content, hashed by git (streams; no JS-side file reads). A file
     // vanishing between the list and the hash fails the chunk; its paths still
     // feed the fingerprint, so the disappearance itself reads as a new state.
     const untracked = (
-      await git(['ls-files', '--others', '--exclude-standard', ...pathspec], opts)
-    ).stdout
+      await output([
+        'ls-files',
+        '--others',
+        ...(scoped ? [] : ['--exclude-standard']),
+        ...pathspec,
+      ])
+    )
       .split('\n')
       .filter(Boolean);
     for (let i = 0; i < untracked.length; i += 500) {
       const chunk = untracked.slice(i, i + 500);
       feed(`untracked-paths:${i}`, chunk.join('\n'));
-      const r = await git(['hash-object', '--', ...chunk], opts);
-      if (r.exitCode === 0) feed(`untracked-content:${i}`, r.stdout);
+      feed(
+        `untracked-content:${i}`,
+        await output(['hash-object', '--', ...chunk]),
+      );
     }
     return hash.digest('hex');
   } catch {

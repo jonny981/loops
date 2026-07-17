@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
@@ -26,6 +27,7 @@ import {
 import { oneLine, truncate } from './text.ts';
 import { readLedger, readPrompt } from './draft.ts';
 import { groundingText } from './ground.ts';
+import { workspaceFingerprint } from './git.ts';
 
 export type {
   FeedbackActionSeverity,
@@ -161,9 +163,14 @@ export function graphPositionBlock(graph: GraphPosition): string {
   ].join('\n');
 }
 
-type ReviewTarget =
-  | { name?: string; scope?: string; review: ConditionInput }
-  | { name?: string; scope?: string; job: Job };
+type ReviewTarget = {
+  name?: string;
+  scope?: string;
+  /** Stable reviewer criteria version. Required when passes are persisted. */
+  cacheVersion?: string;
+  /** Workspace paths whose content can invalidate this reviewer's persisted pass. */
+  invalidateOn?: string[];
+} & ({ review: ConditionInput } | { job: Job });
 
 export interface ReviewPanelConfig {
   label?: string;
@@ -172,6 +179,8 @@ export interface ReviewPanelConfig {
   concurrency?: number;
   /** Default `all`: every reviewer must pass. A number means k-of-n over all reviewers. */
   pass?: 'all' | number;
+  /** Reuse only passing verdicts at or above this confidence while their evidence is unchanged. */
+  persistPasses?: { minConfidence: number };
   /**
    * When set, findings scoped outside these surfaces are escalated and do not
    * count against this panel's pass/fail decision. Unscoped findings stay
@@ -203,6 +212,89 @@ interface ReviewEngineError {
 }
 
 type ReviewResult = ReviewVerdict | ReviewEngineError;
+
+interface PersistedReviewPass {
+  identity: string;
+  fingerprint: string;
+  confidence: number;
+}
+
+type PersistedReviewPasses = Record<string, unknown>;
+
+const SHA256_FINGERPRINT = /^[0-9a-f]{64}$/;
+
+function reviewerCacheIdentity(reviewer: ReviewTarget): string {
+  const invalidateOn = [...new Set(reviewer.invalidateOn ?? [])]
+    .map((path) => path.trim())
+    .filter(Boolean)
+    .sort();
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        name: reviewer.name!.trim(),
+        cacheVersion: reviewer.cacheVersion!.trim(),
+        kind: 'job' in reviewer ? 'job' : 'review',
+        scope: reviewer.scope ?? null,
+        invalidateOn,
+      }),
+    )
+    .digest('hex');
+}
+
+function reviewPassCacheKey(ctx: JobContext, label: string): string {
+  return `loops:review-panel:${JSON.stringify([...ctx.path, label])}`;
+}
+
+function reviewPassCache(value: unknown): PersistedReviewPasses {
+  const cache: PersistedReviewPasses = {};
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return cache;
+  for (const [name, entry] of Object.entries(value))
+    Object.defineProperty(cache, name, {
+      value: entry,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  return cache;
+}
+
+function setReviewPass(
+  cache: PersistedReviewPasses,
+  name: string,
+  pass: PersistedReviewPass,
+): void {
+  Object.defineProperty(cache, name, {
+    value: pass,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
+function reusableReviewPass(
+  value: unknown,
+  minConfidence: number,
+  identity: string,
+): value is PersistedReviewPass {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return false;
+  const pass = value as Partial<PersistedReviewPass>;
+  return (
+    pass.identity === identity &&
+    typeof pass.fingerprint === 'string' &&
+    SHA256_FINGERPRINT.test(pass.fingerprint) &&
+    typeof pass.confidence === 'number' &&
+    Number.isFinite(pass.confidence) &&
+    pass.confidence >= minConfidence &&
+    pass.confidence <= 1
+  );
+}
+
+interface PersistedReviewRun {
+  result: ReviewResult;
+  reusedFingerprint?: string;
+}
 
 const REVIEW_PANEL_DEFAULT_CONCURRENCY = DEFAULT_FANOUT_CONCURRENCY;
 function isReviewInfrastructureError(
@@ -300,6 +392,144 @@ async function runReviewer(
   }
 }
 
+async function runPersistedReviewer(
+  reviewer: ReviewTarget,
+  index: number,
+  ctx: JobContext,
+  cache: PersistedReviewPasses,
+  minConfidence: number,
+): Promise<PersistedReviewRun> {
+  const name = reviewer.name!;
+  const identity = reviewerCacheIdentity(reviewer);
+  const before = await workspaceFingerprint({
+    cwd: ctx.workspace.dir,
+    signal: ctx.signal,
+    excludePaths: ctx.fingerprintExcludePaths,
+    includePaths: reviewer.invalidateOn,
+  });
+  const cached = cache[name];
+  if (
+    before !== undefined &&
+    reusableReviewPass(cached, minConfidence, identity) &&
+    cached.fingerprint === before
+  ) {
+    return {
+      result: {
+        kind: 'verdict',
+        name,
+        met: true,
+        confidence: cached.confidence,
+        reason: 'reused persisted pass',
+        scope: reviewer.scope,
+      },
+      reusedFingerprint: before,
+    };
+  }
+
+  delete cache[name];
+  const result = await runReviewer(reviewer, index, ctx);
+  if (
+    before === undefined ||
+    result.kind !== 'verdict' ||
+    !result.met ||
+    result.confidence === undefined ||
+    !Number.isFinite(result.confidence) ||
+    result.confidence < minConfidence ||
+    result.confidence > 1
+  )
+    return { result };
+
+  const after = await workspaceFingerprint({
+    cwd: ctx.workspace.dir,
+    signal: ctx.signal,
+    excludePaths: ctx.fingerprintExcludePaths,
+    includePaths: reviewer.invalidateOn,
+  });
+  if (after !== undefined && after === before)
+    setReviewPass(cache, name, {
+      identity,
+      fingerprint: after,
+      confidence: result.confidence,
+    });
+  return { result };
+}
+
+async function settlePersistedReviewers(
+  reviewers: readonly ReviewTarget[],
+  initial: readonly PersistedReviewRun[],
+  ctx: JobContext,
+  cache: PersistedReviewPasses,
+  minConfidence: number,
+  concurrency: number,
+): Promise<ReviewResult[]> {
+  // A reused seat can become stale while the other reviewers are running.
+  // Finish the initial fan-out before checking every reuse against its evidence.
+  const staleIndices = (
+    await mapWithConcurrency(initial, concurrency, async (run, index) => {
+      if (run.reusedFingerprint === undefined) return undefined;
+      const current = await workspaceFingerprint({
+        cwd: ctx.workspace.dir,
+        signal: ctx.signal,
+        excludePaths: ctx.fingerprintExcludePaths,
+        includePaths: reviewers[index]!.invalidateOn,
+      });
+      return current === run.reusedFingerprint ? undefined : index;
+    })
+  ).filter((index): index is number => index !== undefined);
+
+  for (const index of staleIndices) delete cache[reviewers[index]!.name!];
+
+  const reruns = await mapWithConcurrency(
+    staleIndices,
+    concurrency,
+    async (index) => ({
+      index,
+      run: await runPersistedReviewer(
+        reviewers[index]!,
+        index,
+        ctx,
+        cache,
+        minConfidence,
+      ),
+    }),
+  );
+  const results = initial.map((run) => run.result);
+  for (const { index, run } of reruns) results[index] = run.result;
+
+  // A bounded rerun may invalidate any passing seat. Do not rerun again, but
+  // fail this tally closed and evict the stale pass for the next invocation.
+  await mapWithConcurrency(results, concurrency, async (result, index) => {
+    if (result.kind !== 'verdict' || !result.met) return;
+    const reviewer = reviewers[index]!;
+    const name = reviewer.name!;
+    const cached = cache[name];
+    if (
+      !reusableReviewPass(
+        cached,
+        minConfidence,
+        reviewerCacheIdentity(reviewer),
+      )
+    )
+      return;
+    const current = await workspaceFingerprint({
+      cwd: ctx.workspace.dir,
+      signal: ctx.signal,
+      excludePaths: ctx.fingerprintExcludePaths,
+      includePaths: reviewer.invalidateOn,
+    });
+    if (current !== cached.fingerprint) {
+      delete cache[name];
+      results[index] = {
+        ...result,
+        met: false,
+        reason: 'review evidence changed during panel',
+      };
+    }
+  });
+
+  return results;
+}
+
 function reviewFindings(result: ReviewVerdict): FeedbackFinding[] {
   const findings = result.findings?.length
     ? result.findings
@@ -369,6 +599,39 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
       code: 'CONFIG',
       message: `reviewPanel "${label}": concurrency must be a positive integer`,
     });
+  if (config.persistPasses) {
+    const minConfidence = config.persistPasses.minConfidence;
+    if (
+      !Number.isFinite(minConfidence) ||
+      minConfidence < 0 ||
+      minConfidence > 1
+    )
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `reviewPanel "${label}": persistPasses.minConfidence must be from 0 to 1`,
+      });
+    if (!config.label?.trim())
+      throw new LoopError({
+        code: 'CONFIG',
+        message: 'reviewPanel persistPasses requires an explicit label',
+      });
+    const names = config.reviewers.map((reviewer) => reviewer.name?.trim());
+    if (names.some((name) => !name))
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `reviewPanel "${label}" persistPasses requires every reviewer to have an explicit name`,
+      });
+    if (new Set(names).size !== names.length)
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `reviewPanel "${label}" persistPasses requires unique reviewer names`,
+      });
+    if (config.reviewers.some((reviewer) => !reviewer.cacheVersion?.trim()))
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `reviewPanel "${label}" persistPasses requires every reviewer to have an explicit cacheVersion`,
+      });
+  }
   const job: Job = async (ctx) => {
     ctx.emit({
       kind: 'job:start',
@@ -377,11 +640,47 @@ export function reviewPanel(config: ReviewPanelConfig): Job {
       label,
       timeoutMs: ctx.timeoutMs,
     });
-    const results = await mapWithConcurrency(
-      config.reviewers,
-      concurrency,
-      (reviewer, i) => runReviewer(reviewer, i, ctx),
-    );
+    const cacheKey = config.persistPasses
+      ? reviewPassCacheKey(ctx, label)
+      : undefined;
+    const cache = cacheKey ? reviewPassCache(ctx.state[cacheKey]) : undefined;
+    if (cache) {
+      const names = new Set(config.reviewers.map((reviewer) => reviewer.name));
+      for (const name of Object.keys(cache))
+        if (!names.has(name)) delete cache[name];
+    }
+    if (cacheKey && cache) ctx.state[cacheKey] = cache;
+    let results: ReviewResult[];
+    if (cache && config.persistPasses) {
+      const initial = await mapWithConcurrency(
+        config.reviewers,
+        concurrency,
+        (reviewer, i) =>
+          runPersistedReviewer(
+            reviewer,
+            i,
+            ctx,
+            cache,
+            config.persistPasses!.minConfidence,
+          ),
+      );
+      results = await settlePersistedReviewers(
+        config.reviewers,
+        initial,
+        ctx,
+        cache,
+        config.persistPasses.minConfidence,
+        concurrency,
+      );
+    } else {
+      results = await mapWithConcurrency(
+        config.reviewers,
+        concurrency,
+        (reviewer, i) => runReviewer(reviewer, i, ctx),
+      );
+    }
+    if (cacheKey && cache && !Object.keys(cache).length)
+      delete ctx.state[cacheKey];
     const verdicts = results.filter(
       (r): r is ReviewVerdict => r.kind === 'verdict',
     );
@@ -621,6 +920,9 @@ export function reviewContext(config: ReviewContextConfig) {
       buildLedger(),
     ]);
     const sections = [...tests, ...diff, ...files, ...ledger];
-    return sections.join('\n\n---\n\n') || '(no review context)';
+    return truncate(
+      sections.join('\n\n---\n\n') || '(no review context)',
+      max,
+    );
   };
 }

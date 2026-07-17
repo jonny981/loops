@@ -44,6 +44,7 @@ export function childContext(
     signal: parent.signal,
     runId: parent.runId,
     checkpoint: parent.checkpoint,
+    fingerprintExcludePaths: parent.fingerprintExcludePaths,
     emit: parent.emit,
     state: parent.state,
     params: parent.params,

@@ -149,8 +149,8 @@ with `defineParams`, and those values arrive on `ctx.params`.
 import { defineJob, defineParams, fnJob } from '@loops-adk/core';
 
 export const params = defineParams({
-  oem: { type: 'string', env: 'OEM', required: true, help: 'OEM name' },
-  device: { type: 'choice', choices: ['battery', 'inverter'], default: 'battery' },
+  project: { type: 'string', env: 'PROJECT', required: true, help: 'Project name' },
+  target: { type: 'choice', choices: ['web', 'worker'], default: 'web' },
   skip: { type: 'string[]', default: [] },
   repoRoot: { type: 'string', defaultFrom: 'gitRoot' },
 });
@@ -183,7 +183,7 @@ export default defineConfig({
 });
 ```
 
-Use it with `loops run onboard.loop.ts --profile live --oem Sigenergy`.
+Use it with `loops run deliver.loop.ts --profile live --project atlas`.
 Recipes read custom tunables from `ctx.config.recipe`. `loops init <dir>`
 creates the small ESM, TypeScript, config, and `.loops/` ignore scaffold for a
 new recipe island.
@@ -349,9 +349,15 @@ loop({
         : 'Implement the feature in TASK.md.',
   }),
   until: commandSucceeds('npm', ['test']),
+  checkFirst: true, // do not dispatch the fixer when the workspace is already green
   max: 10,
 });
 ```
+
+`checkFirst` requires an explicit `until`. It evaluates that gate at iteration
+0 and proceeds to `review` when green. A failed gate or rejected review is
+threaded into the first body turn as `lastGate` or `lastReview`, so repair jobs
+start with evidence instead of a speculative model call.
 
 `gateJob` lifts the same evidence across the Job boundary (it rides `Outcome.data`). The judge itself is tunable: `agentCheck` takes `cwd` (a tool-using judge that must read the artifact it rules on), `timeoutMs`, and `maxReasonChars` (the excerpt cap on a `confidenceTag` reason; the full findings always travel via `output`).
 
@@ -386,7 +392,7 @@ Fresh context kills _rot_; on its own it would cause _amnesia_. **Ledger** is th
 
 The three tiers below form a progression. The scratch files record what failed and what was tried. The gate turns a fix into a verified fact. The milestone commit distills it into a durable decision. Grounding lets the next turn read that decision instead of re-deriving it.
 
-- **Scratch files: working memory and a handoff.** Two gitignored files carry a unit of work forward. `.loops/ledger.md` is **working memory** for the agent(s) doing the work now: the harness auto-captures each grounded turn (the reasoning + a summary of actions), so the why is recorded even when no single agent holds it all at the end, and fanned-out peers share it. `.loops/prompt.md` is the **handoff** the agent distils for whoever continues: intent, alternatives ruled out, constraints, what is left. Grounding injects both into the next context; the commit body is the handoff plus a compacted working log.
+- **Scratch files: working memory and a handoff.** Two gitignored files carry a unit of work forward. `.loops/ledger.md` is **working memory** for the agents executing the unit: the harness auto-captures each grounded worker turn (the reasoning + a summary of actions), so the why is recorded even when no single agent holds it all at the end, and fanned-out peers share it. Report-only `role: 'reader'` turns remain in outcomes and events but do not duplicate their reports into scratch. `.loops/prompt.md` is the **handoff** the agent distils for whoever continues: intent, alternatives ruled out, constraints, what is left. Grounding injects both into the next context; the commit body is the handoff plus a compacted working log.
 
   ```ts
   appendPrompt(ctx.workspace, { heading: 'Why', body: 'tried a token refresh; the gate still failed on scope' });
@@ -432,7 +438,7 @@ The three tiers below form a progression. The scratch files record what failed a
   non-resume run. CLI-backed engines receive prompts over stdin, not argv, so
   large bounded prompts do not hit the OS argument limit.
 
-- **Scaling the read: retrieval, then consolidation.** Recent-N grounding is the default, but on a long, noisy log the relevant commit falls out of the window. `ground: { retrieve: true }` has a cheap model select the relevant commits by subject instead. Use it for long-horizon work. For an indefinite process, `consolidateJob` folds the history into a **decision-preserving consolidated ledger**: a bounded record that keeps every accrued decision verbatim (a naive progress summary loses the specifics), committed as a commit body (the coarse tier, grounded like any milestone, never a side file). Retrieval finds the _relevant_ past commits; consolidation keeps _all the decisions_ in bounded space: different jobs, both in the git grain.
+- **Scaling the read: retrieval, then consolidation.** Recent-N grounding is the default, but on a long, noisy log the relevant commit falls out of the window. `ground: { retrieve: true }` has a cheap model select the relevant commits by subject instead. The selector runs with a replacement system prompt and no tools, inherits the worker timeout, emits ordinary usage events, and is charged to the run budget before the worker starts. Its engine must support `tools: []`; for a Codex worker, set `ground.retrieve.engine` to a selector engine that does. Use retrieval for long-horizon work. For an indefinite process, `consolidateJob` folds the history into a **decision-preserving consolidated ledger**: a bounded record that keeps every accrued decision verbatim (a naive progress summary loses the specifics), committed as a commit body (the coarse tier, grounded like any milestone, never a side file). Retrieval finds the _relevant_ past commits; consolidation keeps _all the decisions_ in bounded space: different jobs, both in the git grain.
 
   ```ts
   agentJob({ label: 'work', prompt: 'Continue.', ground: { retrieve: true } });
@@ -553,7 +559,7 @@ Both are on the public surface too (`preflight`, `preflightEngine`, `classifyEng
 
 ### Cost receipts: `--prices` and the reconstructed baseline
 
-Pass a price table and the exit summary prices the run's **measured** token usage per model. Prices are yours to supply (a JSON file; the library hardcodes none — stale prices are worse than no prices), a model with usage but no price entry is named instead of silently counted as $0, and `--baseline-model` adds the counterfactual: what the *same token stream* would have cost at a ceiling model's rates — always labeled a reconstruction, because it is one, not a measured alternative run.
+Pass a price table and the exit summary prices the run's **measured** token usage per model. Prices are yours to supply as a JSON file; the library hardcodes none because stale prices are worse than no prices. A model without complete price coverage is named instead of silently counted as $0. When usage includes cache creation or cache reads, the two-rate table cannot distinguish their prices, so actual and baseline totals are withheld as incomplete price coverage. `--baseline-model` otherwise adds the counterfactual of what the *same token stream* would have cost at a ceiling model's rates, labeled as a reconstruction rather than a measured alternative run.
 
 ```bash
 loops run feature.loop.ts \
@@ -599,8 +605,9 @@ Every `agentJob` and `agentCheck` subprocess gets `LOOPS_LEAF=1` plus leaf
 metadata (`LOOPS_LEAF_ID`, label, path, iteration, and run id when present), so
 host hooks can skip headless leaves. Claude-family model ids are normalised for
 the Claude CLI, including stripping long-context suffixes such as `[1m]`.
-`agentJob({ role: 'reader' })` keeps grounding but omits the handoff instruction,
-which is useful for leaves that must end with a decision token.
+`agentJob({ role: 'reader' })` keeps grounding but omits the handoff instruction
+and scratch auto-capture. This is useful for report-only leaves that must end
+with a decision token without amplifying their output into later prompts.
 
 For a bounded expert consult, set `agentJob({ advisor: { engine, model } })`.
 The worker asks with a `<consult_advisor>` block; loops runs the advisor turn,
@@ -751,15 +758,85 @@ blocking finding threaded into the next pass. An empty panel is a construction
 error, not a vacuous pass.
 
 ```ts
+import {
+  agentCheck,
+  agentJob,
+  commandSucceeds,
+  gateJob,
+  loop,
+  pipeline,
+  reviewContext,
+  reviewPanel,
+} from '@loops-adk/core';
+
 const review = reviewPanel({
-  // pass: 2,  // optional: k-of-n instead of all
+  label: 'ship-review',
+  persistPasses: { minConfidence: 0.9 },
   reviewers: [
-    { name: 'security', review: agentCheck({ question: 'Is it safe?', context: reviewContext({ diff: true, ledger: true }) }) },
-    { name: 'correctness', review: agentCheck({ question: 'Is it correct?' }) },
-    { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', context: reviewContext({ files: ['src/**'] }) }) },
+    {
+      name: 'correctness',
+      cacheVersion: 'v1',
+      invalidateOn: ['src/**', 'tests/**', 'deliver.loop.ts'],
+      review: agentCheck({
+        question: 'Do the tests and behavior agree?',
+        context: reviewContext({ files: ['src/**', 'tests/**'] }),
+      }),
+    },
+    {
+      name: 'security',
+      cacheVersion: 'v1',
+      invalidateOn: ['src/auth/**', 'SECURITY.md', 'deliver.loop.ts'],
+      review: agentCheck({
+        question: 'Is the change safe?',
+        context: reviewContext({
+          files: ['src/auth/**', 'SECURITY.md'],
+          maxChars: 12000,
+        }),
+      }),
+    },
   ],
 });
 ```
+
+Attach the panel to a repair loop. Green gates and review skip the fixer; after
+a rejection, only failed or invalidated reviewer seats run again.
+
+```ts
+const repairAndReview = loop({
+  name: 'repair-and-review',
+  checkFirst: true,
+  body: agentJob({
+    label: 'fix',
+    prompt: 'Fix the failing gate or review findings.',
+    consumeFeedback: true,
+  }),
+  until: commandSucceeds('npm', ['test']),
+  review,
+  max: 3,
+});
+
+export default pipeline('deliver', [
+  {
+    name: 'implement',
+    job: agentJob({ label: 'implement', prompt: 'Implement TASK.md.' }),
+  },
+  { name: 'repair-and-review', job: repairAndReview },
+  {
+    name: 'build',
+    job: gateJob('build', commandSucceeds('npm', ['run', 'build'])),
+  },
+]);
+```
+
+`persistPasses` stores only passing verdicts at or above `minConfidence` in
+checkpointed run state. A pass is reused only while its `invalidateOn` content
+fingerprint is unchanged; omit `invalidateOn` to fingerprint the whole
+workspace. The declared paths must cover the judged code plus the prompt,
+reviewer definition, and contract files that shape the verdict. Missing or
+malformed fingerprints rerun the reviewer. Every persisted reviewer also needs
+a stable `cacheVersion`; change it when its prompt, model, criteria, or
+implementation changes. `reviewContext.maxChars` is a total cap over the
+assembled evidence bundle as well as a per-source cap.
 
 In a DAG, a targeted `revisionRequest({ target, findings })` reruns the target
 node and its dependents when `maxKickbacks` allows it. `kickback(to, reason)` is
@@ -782,13 +859,13 @@ A loop is not one shape. Three recur, and they differ in what memory does and in
 | | **Converge** | **Sweep** | **Tend** |
 | --- | --- | --- | --- |
 | shape | one hard target, retried | a known set, one fresh task each | an unbounded process picking the next unit |
-| example | build to a high bar with tests | research each OEM | triage issues until none remain |
+| example | build to a high bar with tests | upgrade each package | triage issues until none remain |
 | iteration N vs N−1 | the **same** task | an **independent** task | a **discovered** task |
 | terminates when | the gate passes | the worklist is empty | a dynamic condition (maybe never) |
 | memory's job | don't re-walk dead ends | transfer the house style | remember what's done + decided, forever |
 | `loops` shape | `loop({ until: gate, max })` | `loop`/`dag` over a worklist | `loop({ until: dynamic, max: ∞ })` |
 
-They **nest**: GitHub triage is Tend ∘ Converge (pick the next ticket, classify it, dispatch a Converge loop to a test gate); OEM research is Sweep ∘ Converge (each item is itself a multi-step build that must converge). Because a `loop` and a `dag` are both `Job`s, dispatch is just a body that selects a sub-`Job`. Wrap it in `isolated()` when each needs its own worktree. The Ledger's three tiers (scratch files → milestone commits → consolidated ledger) map onto the three nesting levels.
+They **nest**: GitHub triage is Tend ∘ Converge (pick the next ticket, classify it, dispatch a Converge loop to a test gate); a package upgrade is Sweep ∘ Converge (each package is a multi-step build that must converge). Because a `loop` and a `dag` are both `Job`s, dispatch is just a body that selects a sub-`Job`. Wrap it in `isolated()` when each needs its own worktree. The Ledger's three tiers (scratch files → milestone commits → consolidated ledger) map onto the three nesting levels.
 
 There is no `converge()` / `sweep()` / `tend()` in the API. They are patterns, not primitives. Copy-paste recipes for each (and the nested dispatch) are in [docs/patterns.md](docs/patterns.md); the full treatment is in [docs/concepts.md](docs/concepts.md).
 
@@ -919,13 +996,16 @@ The primitives compose into an **engineering team**: several loops that build a 
 // Five report-only lenses, each a markdown persona that closes with `<confidence>N%</confidence>`.
 // The adversarial lens runs on a DIFFERENT model (codex / GPT-5): any reviewer, any model.
 const battery = (name) =>
-  reviewPanel(name, [
-    ['adversarial', { engine: 'codex' }], // genuinely different priors
-    ['security',    { model: 'opus' }],
-    ['correctness', { model: 'sonnet' }],
-    ['conformance', { model: 'opus' }],
-    ['simplicity',  { model: 'haiku' }],
-  ]);
+  reviewPanel({
+    label: `${name}-review`,
+    reviewers: [
+      { name: 'adversarial', review: agentCheck({ question: 'Challenge the design.', engine: 'codex' }) },
+      { name: 'security', review: agentCheck({ question: 'Is it safe?', model: 'opus' }) },
+      { name: 'correctness', review: agentCheck({ question: 'Is it correct?', model: 'sonnet' }) },
+      { name: 'conformance', review: agentCheck({ question: 'Does it meet the contract?', model: 'opus' }) },
+      { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', model: 'haiku' }) },
+    ],
+  });
 
 const engineer = (name) =>
   loop({

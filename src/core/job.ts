@@ -88,9 +88,8 @@ export interface AgentJobConfig {
    */
   graphContext?: boolean;
   /**
-   * Reader leaves default to grounded context without the handoff-writing
-   * instruction, so closing decision tokens survive as the final line. Writer is
-   * the ordinary agentJob behavior.
+   * Reader leaves keep grounded context but omit the handoff instruction and
+   * scratch auto-capture, so report output does not amplify later prompts.
    */
   role?: 'writer' | 'reader';
   /**
@@ -132,7 +131,7 @@ export interface AgentJobConfig {
    * Ground the turn in memory before it works: prepend the branch-local commit log
    * (recent committed milestones), the live working memory (`ledger.md`) and handoff
    * (`prompt.md`) from this run, and tell the agent where to record its own
-   * reasoning. With grounding on, the harness also auto-captures the turn into
+   * reasoning. With grounding on, the harness also auto-captures writer turns into
    * `ledger.md` afterwards. `true` uses defaults; an object tunes the reach. This is
    * how a fresh context stops repeating what earlier iterations already tried.
    */
@@ -200,6 +199,8 @@ export interface GroundConfig {
    * Retrieve relevant commits with a cheap model instead of taking recent-N.
    * Far less noisy when the branch log carries unrelated work (a shared repo).
    * `true` uses defaults; an object tunes the candidate window / selection model.
+   * The selector must support `tools: []`; a Codex worker therefore needs an
+   * explicit selector engine here.
    */
   retrieve?: boolean | { candidates?: number; engine?: EngineRef; model?: string };
   /**
@@ -278,6 +279,8 @@ async function withGrounding(
   ground: boolean | GroundConfig,
   routeEngine?: EngineRef,
   routeModel?: string,
+  routeTimeoutMs?: number,
+  routeTimeoutGraceMs?: number,
   curatedExtras?: { brief?: string; sources?: SourceText[] },
 ): Promise<string> {
   const opts: GroundConfig = typeof ground === 'object' ? ground : {};
@@ -303,6 +306,8 @@ async function withGrounding(
         candidates: retrieveConfig?.candidates,
         engine: retrieveConfig?.engine ?? routeEngine,
         model: retrieveConfig?.model ?? routeModel,
+        timeoutMs: routeTimeoutMs,
+        timeoutGraceMs: routeTimeoutGraceMs,
       })
     : await groundingText(ctx.workspace, {
         max: opts.max,
@@ -628,7 +633,6 @@ export function agentJob(config: AgentJobConfig): Job {
       const timeoutMs = route.timeoutMs ?? defaultTimeoutMs;
       const timeoutGraceMs = route.timeoutGraceMs ?? defaultTimeoutGraceMs;
       try {
-        assertBudget(ctx); // refuse to spend past the run's token budget
         const basePrompt = routeGround
           ? await withGrounding(
               ctx,
@@ -636,6 +640,8 @@ export function agentJob(config: AgentJobConfig): Job {
               routeGround,
               route.engine ?? config.engine,
               routeModel,
+              timeoutMs,
+              timeoutGraceMs,
               curatedExtras,
             )
           : contextualPrompt;
@@ -646,6 +652,7 @@ export function agentJob(config: AgentJobConfig): Job {
           const prompt = advisorReplies.length
             ? `${basePrompt}\n\n---\n\n${advisorReplies.join('\n\n---\n\n')}`
             : basePrompt;
+          assertBudget(ctx); // recheck after grounding and before every worker turn
           result = await engine.run(
             {
               prompt,
@@ -781,7 +788,7 @@ export function agentJob(config: AgentJobConfig): Job {
     // own reply, without relying on it writing a side file. The reply is split at the
     // handoff marker: the working log (before) goes to `ledger.md`, the structured
     // handoff (after) to `prompt.md`. With no marker, the whole reply is working log.
-    if (successfulGround) {
+    if (successfulGround && config.role !== 'reader') {
       appendLedger(ctx.workspace, {
         label,
         iteration: ctx.iteration,

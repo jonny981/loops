@@ -55,7 +55,16 @@ import { dag, loop, agentJob, gateJob, quorum, agentCheck, commandSucceeds } fro
 dag({
   name: 'ship',
   nodes: {
-    store:  loop({ name: 'store', body: agentJob({ agent: storeEngineer, prompt: 'Build the store to its tests.', ground: true }), until: commandSucceeds('npm', ['test']) }),
+    store: loop({
+      name: 'store',
+      checkFirst: true,
+      body: agentJob({
+        agent: storeEngineer,
+        prompt: 'Build the store to its tests.',
+        ground: true,
+      }),
+      until: commandSucceeds('npm', ['test']),
+    }),
     api:    { needs: ['store'], job: loop({ /* apiEngineer, same shape */ }) },
     review: { needs: ['api'], job: gateJob('review', quorum(2,
       agentCheck({ agent: securityReviewer, question: 'Is it safe?' }),
@@ -83,16 +92,50 @@ const implement = agentJob({ agent: implementationAgent, prompt: brief, consumeF
 import { reviewPanel, reviewContext, agentCheck } from '@loops-adk/core';
 
 const review = reviewPanel({
-  pass: 2, // optional: k-of-n instead of all
+  label: 'ship-review',
+  persistPasses: { minConfidence: 0.9 },
   reviewers: [
-    { name: 'security',    review: agentCheck({ question: 'Is it safe?',    context: reviewContext({ diff: true, ledger: true }) }) },
-    { name: 'correctness', review: agentCheck({ question: 'Is it correct?', context: reviewContext({ tests: { command: 'npm', args: ['test'] } }) }) },
-    { name: 'simplicity',  review: agentCheck({ question: 'Is it simple?',  context: reviewContext({ files: ['src/**'] }) }) },
+    {
+      name: 'correctness',
+      cacheVersion: 'v1',
+      invalidateOn: ['src/**', 'tests/**', 'team.loop.ts'],
+      review: agentCheck({
+        question: 'Do the tests and behavior agree?',
+        context: reviewContext({ files: ['src/**', 'tests/**'] }),
+      }),
+    },
+    {
+      name: 'security',
+      cacheVersion: 'v1',
+      invalidateOn: ['src/auth/**', 'SECURITY.md', 'team.loop.ts'],
+      review: agentCheck({
+        question: 'Is the change safe?',
+        context: reviewContext({
+          files: ['src/auth/**', 'SECURITY.md'],
+          maxChars: 12000,
+        }),
+      }),
+    },
   ],
 });
 ```
 
-A failing panel emits a `revisionRequest` carrying each failing reviewer's concern as a finding, threaded into the next pass.
+A failing panel emits a `revisionRequest` carrying each failing reviewer's concern as a finding, threaded into the next pass. Persisted passes are reused only while their declared evidence is unchanged; bump `cacheVersion` when a reviewer's model, prompt, or criteria changes.
+
+```ts
+const reviewedBuild = loop({
+  name: 'reviewed-build',
+  checkFirst: true,
+  body: agentJob({
+    agent: implementationAgent,
+    prompt: 'Fix the failing test or review finding.',
+    consumeFeedback: true,
+  }),
+  until: commandSucceeds('npm', ['test']),
+  review,
+  max: 3,
+});
+```
 
 **Route feedback across a DAG** with a targeted revision. When `DagConfig.maxKickbacks > 0`, a `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) re-runs the target node and its transitive dependents, threading the reason in as their `lastReview`. Constrain valid targets with `DagNode.acceptsKickbackTo`. Because every cycle is a bounded re-run, not a graph edge, it always terminates.
 

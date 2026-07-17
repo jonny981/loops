@@ -19,6 +19,8 @@ export interface ModelUsage {
   calls: number;
   inputTokens: number;
   outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 export interface ErrorEntry {
@@ -68,6 +70,12 @@ export class Stats {
         m.calls += 1;
         m.inputTokens += event.usage.inputTokens;
         m.outputTokens += event.usage.outputTokens;
+        if (event.usage.cacheCreationInputTokens !== undefined)
+          m.cacheCreationInputTokens =
+            (m.cacheCreationInputTokens ?? 0) + event.usage.cacheCreationInputTokens;
+        if (event.usage.cacheReadInputTokens !== undefined)
+          m.cacheReadInputTokens =
+            (m.cacheReadInputTokens ?? 0) + event.usage.cacheReadInputTokens;
         break;
       }
       case 'error':

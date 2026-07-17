@@ -80,6 +80,11 @@ export function loop(config: LoopConfig): Job {
       code: 'CONFIG',
       message: 'loop() requires a non-empty name',
     });
+  if (config.checkFirst && config.until == null)
+    throw new LoopError({
+      code: 'CONFIG',
+      message: 'loop() checkFirst requires an explicit until gate',
+    });
   const onError = config.retry?.onError ?? 'continue';
   const noProgress = resolveNoProgress(config.noProgress);
 
@@ -180,6 +185,11 @@ export function loop(config: LoopConfig): Job {
     };
 
     try {
+      if (parent.signal.aborted)
+        return finish(
+          { status: 'aborted', summary: 'aborted by signal' },
+          0,
+        );
       const entryContext = ctxAt(0);
       const [start, until, stopOn] = await Promise.all([
         config.start ? prepareCondition(config.start, entryContext) : undefined,
@@ -214,6 +224,173 @@ export function loop(config: LoopConfig): Job {
         ? new ProgressTracker(noProgress)
         : undefined;
       let warnedInert = false;
+
+      type ConvergenceAttempt = {
+        conv: ConditionResult;
+        turnReview?: Outcome;
+        terminal?: Outcome;
+      };
+      const evaluateConvergence = async (
+        at: number,
+        gateContext: JobContext,
+        bodyOutcome: Outcome | undefined,
+      ): Promise<ConvergenceAttempt> => {
+        // Explicit `until`, else the ordinary post-body pass verdict. checkFirst
+        // requires `until`, so the synthesized branch always has a body outcome.
+        const conv: ConditionResult = until
+          ? await gate(until, 'until', gateContext, bodyOutcome)
+          : {
+              met: bodyOutcome!.status === 'pass',
+              confidence: bodyOutcome!.confidence,
+              reason: `body status = ${bodyOutcome!.status}`,
+            };
+        if (parent.signal.aborted) {
+          return {
+            conv,
+            terminal: { status: 'aborted', summary: 'aborted by signal' },
+          };
+        }
+        if (until) {
+          parent.emit({
+            kind: 'loop:condition',
+            ts: ts(),
+            path,
+            which: 'until',
+            iteration: at,
+            result: conv,
+          });
+          // Thread the latest explicit verdict (met or not) to the next body
+          // as `ctx.lastGate`. Set before the met-branch so a review-reject
+          // re-entry carries it too. The synthesized body-pass verdict is never
+          // threaded because it carries no diagnostic value.
+          lastGate = conv;
+        }
+
+        if (!conv.met) return { conv };
+
+        if (!config.review) {
+          await recordMilestone(ctxAt(at, bodyOutcome));
+          if (parent.signal.aborted) {
+            return {
+              conv,
+              terminal: { status: 'aborted', summary: 'aborted by signal' },
+            };
+          }
+          return {
+            conv,
+            terminal: {
+              status: 'pass',
+              confidence: conv.confidence ?? bodyOutcome?.confidence,
+              ...(bodyOutcome?.late ? { late: true } : {}),
+              summary: bodyOutcome ? bodyOutcome.summary : conv.reason,
+              data: bodyOutcome?.data,
+            },
+          };
+        }
+
+        let reviewOutcome: Outcome;
+        try {
+          reviewOutcome = await config.review(ctxAt(at, bodyOutcome));
+        } catch (e) {
+          throw LoopError.from(e, {
+            code: 'VALIDATION',
+            phase: 'review',
+            path,
+            iteration: at,
+          });
+        }
+        if (parent.signal.aborted) {
+          return {
+            conv,
+            terminal: { status: 'aborted', summary: 'aborted by signal' },
+          };
+        }
+        // A paused review is a deliberate halt (a human gate as the
+        // convergence sign-off step), not a rejection. Propagate it like
+        // a paused body instead of burning iterations re-entering the loop
+        // while the gate waits. Before the `loop:review` emit, so a records
+        // consumer never reads the pause as a rejected review.
+        if (reviewOutcome.status === 'paused') {
+          return { conv, terminal: { ...reviewOutcome } };
+        }
+        // Decide whether this failing review will actually re-enter the loop
+        // before emitting, so the event carries an accurate accept/reject bit
+        // (a downstream records consumer must not read a dropped review as
+        // acted-on). Re-entry is blocked by the restart bound or by having no
+        // iteration left; `consecutiveReviewFails` is still pre-increment here.
+        const reviewPassed = reviewOutcome.status === 'pass';
+        const restartsExhausted =
+          config.maxReviewRestarts != null &&
+          consecutiveReviewFails + 1 >= config.maxReviewRestarts;
+        const iterationsRemain = config.max == null || at < config.max;
+        const willReenter =
+          !reviewPassed && !restartsExhausted && iterationsRemain;
+        parent.emit({
+          kind: 'loop:review',
+          ts: ts(),
+          path,
+          outcome: reviewOutcome,
+          accepted: willReenter,
+        });
+        if (reviewPassed) {
+          await recordMilestone(ctxAt(at, bodyOutcome));
+          if (parent.signal.aborted) {
+            return {
+              conv,
+              terminal: { status: 'aborted', summary: 'aborted by signal' },
+            };
+          }
+          return {
+            conv,
+            terminal: {
+              status: 'pass',
+              confidence: reviewOutcome.confidence ?? conv.confidence,
+              ...(bodyOutcome?.late || reviewOutcome.late
+                ? { late: true }
+                : {}),
+              summary:
+                reviewOutcome.summary ??
+                (bodyOutcome ? bodyOutcome.summary : conv.reason),
+              data: bodyOutcome?.data,
+            },
+          };
+        }
+        // Review rejected: thread the verdict to the next iteration
+        // (context-scoped, not run-global, so concurrent sibling loops don't
+        // cross-contaminate) and bound the restart cycle.
+        consecutiveReviewFails += 1;
+        lastReview = reviewOutcome;
+        parent.log(
+          `review did not pass (${reviewOutcome.summary ?? reviewOutcome.status}); re-entering ${config.name}`,
+          'warn',
+        );
+        if (restartsExhausted) {
+          return {
+            conv,
+            turnReview: reviewOutcome,
+            terminal: {
+              status: 'exhausted',
+              summary: `review rejected ${consecutiveReviewFails}× (maxReviewRestarts)`,
+              ...(bodyOutcome?.late || reviewOutcome.late
+                ? { late: true }
+                : {}),
+              data: bodyOutcome?.data,
+            },
+          };
+        }
+        return { conv, turnReview: reviewOutcome };
+      };
+
+      if (config.checkFirst) {
+        await yieldToLoop();
+        if (parent.signal.aborted)
+          return finish(
+            { status: 'aborted', summary: 'aborted by signal' },
+            0,
+          );
+        const precheck = await evaluateConvergence(0, ctxAt(0), undefined);
+        if (precheck.terminal) return finish(precheck.terminal, 0);
+      }
 
       // 2. iterate
       while (true) {
@@ -402,118 +579,11 @@ export function loop(config: LoopConfig): Job {
             );
         }
 
-        // convergence check: explicit `until`, else "did the body pass?"
-        const conv: ConditionResult = until
-          ? await gate(until, 'until', ctx, last)
-          : {
-              met: last.status === 'pass',
-              confidence: last.confidence,
-              reason: `body status = ${last.status}`,
-            };
-        if (until) {
-          parent.emit({
-            kind: 'loop:condition',
-            ts: ts(),
-            path,
-            which: 'until',
-            iteration,
-            result: conv,
-          });
-          // Thread the latest explicit verdict (met or not) to the next body
-          // as `ctx.lastGate`. Set before the met-branch so a review-reject
-          // re-entry carries it too. The synthesized body-pass verdict is never
-          // threaded — it carries no diagnostic value.
-          lastGate = conv;
-        }
-
-        if (conv.met) {
-          if (!config.review) {
-            await recordMilestone(ctxAt(iteration, last));
-            return finish(
-              {
-                status: 'pass',
-                confidence: conv.confidence ?? last.confidence,
-                ...(last.late ? { late: true } : {}),
-                summary: last.summary,
-                data: last.data,
-              },
-              iteration,
-            );
-          }
-          let reviewOutcome: Outcome;
-          try {
-            reviewOutcome = await config.review(ctxAt(iteration, last));
-          } catch (e) {
-            throw LoopError.from(e, {
-              code: 'VALIDATION',
-              phase: 'review',
-              path,
-              iteration,
-            });
-          }
-          // A paused review is a deliberate halt (a human gate as the
-          // converged-now-sign-off step), not a rejection — propagate it like
-          // a paused body instead of burning iterations re-entering the loop
-          // while the gate waits. Before the `loop:review` emit, so a records
-          // consumer never reads the pause as a rejected review.
-          if (reviewOutcome.status === 'paused') {
-            return finish({ ...reviewOutcome }, iteration);
-          }
-          // Decide whether this failing review will actually re-enter the loop
-          // before emitting, so the event carries an accurate accept/reject bit
-          // (a downstream records consumer must not read a dropped review as
-          // acted-on). Re-entry is blocked by the restart bound or by having no
-          // iteration left; `consecutiveReviewFails` is still pre-increment here.
-          const reviewPassed = reviewOutcome.status === 'pass';
-          const restartsExhausted =
-            config.maxReviewRestarts != null &&
-            consecutiveReviewFails + 1 >= config.maxReviewRestarts;
-          const iterationsRemain =
-            config.max == null || iteration < config.max;
-          const willReenter =
-            !reviewPassed && !restartsExhausted && iterationsRemain;
-          parent.emit({
-            kind: 'loop:review',
-            ts: ts(),
-            path,
-            outcome: reviewOutcome,
-            accepted: willReenter,
-          });
-          if (reviewPassed) {
-            await recordMilestone(ctxAt(iteration, last));
-            return finish(
-              {
-                status: 'pass',
-                confidence: reviewOutcome.confidence ?? conv.confidence,
-                ...(last.late || reviewOutcome.late ? { late: true } : {}),
-                summary: reviewOutcome.summary ?? last.summary,
-                data: last.data,
-              },
-              iteration,
-            );
-          }
-          // review rejected — thread the verdict to the next iteration (context-scoped,
-          // not run-global, so concurrent sibling loops don't cross-contaminate) and
-          // bound the restart cycle.
-          consecutiveReviewFails += 1;
-          lastReview = reviewOutcome;
-          turnReview = reviewOutcome;
-          parent.log(
-            `review did not pass (${reviewOutcome.summary ?? reviewOutcome.status}); re-entering ${config.name}`,
-            'warn',
-          );
-          if (restartsExhausted) {
-            return finish(
-              {
-                status: 'exhausted',
-                summary: `review rejected ${consecutiveReviewFails}× (maxReviewRestarts)`,
-                ...(last.late || reviewOutcome.late ? { late: true } : {}),
-                data: last.data,
-              },
-              iteration,
-            );
-          }
-        }
+        const convergence = await evaluateConvergence(iteration, ctx, last);
+        const { conv } = convergence;
+        turnReview = convergence.turnReview;
+        if (convergence.terminal)
+          return finish(convergence.terminal, iteration);
 
         // No-progress check — the loop is about to go again, so ask whether the
         // turn that just finished reached any state this run had not already
@@ -527,6 +597,7 @@ export function loop(config: LoopConfig): Job {
             fingerprint = await workspaceFingerprint({
               cwd: ctx.workspace.dir,
               signal: parent.signal,
+              excludePaths: ctx.fingerprintExcludePaths,
             });
           }
           let signalValue: string | undefined;
@@ -596,6 +667,16 @@ export function loop(config: LoopConfig): Job {
       }
     } catch (e) {
       const error = LoopError.from(e, { code: 'UNKNOWN', path, iteration });
+      if (parent.signal.aborted || error.code === 'ABORTED') {
+        return finish(
+          {
+            status: 'aborted',
+            summary: parent.signal.aborted ? 'aborted by signal' : error.message,
+            error,
+          },
+          iteration,
+        );
+      }
       parent.emit({
         kind: 'error',
         ts: ts(),
@@ -615,6 +696,7 @@ export function loop(config: LoopConfig): Job {
     name: config.name,
     max: config.max,
     noProgress: noProgress?.window,
+    checkFirst: !!config.checkFirst,
     start: describeConditions(config.start),
     gate: describeConditions(config.until),
     stopOn: describeConditions(config.stopOn),

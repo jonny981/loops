@@ -111,4 +111,41 @@ describe('loop commit-on-convergence (the milestone)', () => {
     await run(job, { ...base, cwd: repo });
     expect((await log({ cwd: repo })).length).toBe(before); // no new commits
   });
+
+  it.each([false, true])(
+    'aborts when checkFirst is cancelled while recording its milestone (review: %s)',
+    async (withReview) => {
+      const repo = await tmpRepo();
+      const controller = new AbortController();
+      let bodyRuns = 0;
+      write(repo, 'work.ts', 'work\n');
+      const job = loop({
+        name: 'cancelled-milestone',
+        checkFirst: true,
+        commit: {
+          subject: () => {
+            controller.abort();
+            return 'feat: cancelled milestone';
+          },
+        },
+        body: fnJob('work', async () => {
+          bodyRuns += 1;
+          return { status: 'pass' };
+        }),
+        until: predicate(() => true),
+        ...(withReview
+          ? { review: fnJob('review', async () => ({ status: 'pass' })) }
+          : {}),
+      });
+
+      const { outcome } = await run(job, {
+        ...base,
+        cwd: repo,
+        signal: controller.signal,
+      });
+
+      expect(outcome.status).toBe('aborted');
+      expect(bodyRuns).toBe(0);
+    },
+  );
 });

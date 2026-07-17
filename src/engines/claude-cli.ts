@@ -209,7 +209,12 @@ export function buildClaudeArgs(
   const model = modelFor(req, opts, 'claude-cli');
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (model) args.push('--model', model);
-  if (req.system) args.push('--append-system-prompt', req.system);
+  if (req.system)
+    args.push(
+      req.systemMode === 'replace' ? '--system-prompt' : '--append-system-prompt',
+      req.system,
+    );
+  if (req.tools) args.push('--tools', req.tools.join(','));
   if (req.allowedTools?.length)
     args.push('--allowedTools', req.allowedTools.join(','));
   // A leaf agent may not spawn sub-agents, so disallow the spawn tool (wins over any allowlist).

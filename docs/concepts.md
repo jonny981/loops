@@ -57,7 +57,7 @@ in *what you can even measure*: a harness built for one is blind to the others.
 | | **Converge** | **Sweep** | **Tend** |
 |---|---|---|---|
 | shape | one hard target, retried | a known set, one fresh task per iteration | an unbounded process picking the next unit |
-| example | build to a high bar with tests | research each OEM | triage issues until none remain |
+| example | build to a high bar with tests | upgrade each package | triage issues until none remain |
 | iteration N vs N−1 | the **same** task | an **independent** task | a **discovered** task |
 | terminates when | the gate passes | the worklist is empty | a dynamic condition (maybe never) |
 | the Ledger's job | don't re-walk dead ends | transfer the house style | remember what's done + decided, forever |
@@ -86,8 +86,8 @@ window) and retrieval/consolidation become essential, not optional.
 
 Real systems nest them. GitHub triage is **Tend ∘ Converge**: the Tend loop picks
 the next ticket, *classifies* it, and dispatches to the right shape of sub-loop (a
-bug → a Converge loop to a test gate; a research batch → a Sweep). OEM research is
-**Sweep ∘ Converge**: each OEM is itself a multi-step build that must converge.
+bug → a Converge loop to a test gate; a research batch → a Sweep). A package upgrade is
+**Sweep ∘ Converge**: each package is a multi-step build that must converge.
 
 Because `loop()` and `dag()` both return a `Job`, and a `Job` is just
 `(ctx) => Promise<Outcome>`, **dynamic dispatch is a body that selects and invokes
@@ -128,7 +128,9 @@ As the log grows, *reading* it has to scale, and there is a progression:
   window. What it injects is not just a diff: each retrieved commit carries the
   full **way** — the diff welded to the why, the alternatives ruled out, the
   constraints that held, and what not to repeat. (Same noisy log: 5/6.) Use it for
-  long-horizon (Sweep/Tend) work; recent-N is the wrong default there.
+  long-horizon (Sweep/Tend) work; recent-N is the wrong default there. The
+  selector runs without tools and counts against timeout, usage, and budget;
+  set `ground.retrieve.engine` when the worker engine cannot enforce `tools: []`.
 - **consolidation** (`consolidateJob`) — fold the history into a **decision-preserving
   consolidated ledger**: the current state, the open threads, and every accrued
   decision kept verbatim, committed as a **commit body** (an empty-tree commit), so

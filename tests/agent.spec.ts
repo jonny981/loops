@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -24,11 +24,11 @@ import { tmpRepo, cleanupRepos } from './git-helpers.ts';
 afterAll(cleanupRepos);
 
 /** A mock engine that records the request it was handed. */
-function capturing(): { engine: MockEngine; req: () => AgentRequest } {
+function capturing(reply = 'done'): { engine: MockEngine; req: () => AgentRequest } {
   let seen: AgentRequest | undefined;
   const engine = new MockEngine((r: AgentRequest) => {
     seen = r;
-    return 'done';
+    return reply;
   });
   return { engine, req: () => seen! };
 }
@@ -247,14 +247,19 @@ describe('AgentDef', () => {
     const repo = await tmpRepo();
     mkdirSync(join(repo, '.loops'), { recursive: true });
     writeFileSync(join(repo, '.loops', 'ledger.md'), 'prior working memory\n');
-    const cap = capturing();
-    await run(agentJob({ role: 'reader', prompt: 'score it' }), {
+    writeFileSync(join(repo, '.loops', 'prompt.md'), 'prior handoff\n');
+    const cap = capturing('reader report\n===HANDOFF===\nreader handoff');
+    const { outcome } = await run(agentJob({ role: 'reader', prompt: 'score it' }), {
       engine: 'mock',
       engines: { mock: () => cap.engine },
       cwd: repo,
     });
     expect(cap.req().prompt).toContain('prior working memory');
+    expect(cap.req().prompt).toContain('prior handoff');
     expect(cap.req().prompt).not.toContain('Before you finish: the handoff');
+    expect(outcome).toMatchObject({ status: 'pass', data: expect.stringContaining('reader report') });
+    expect(readFileSync(join(repo, '.loops', 'ledger.md'), 'utf8')).toBe('prior working memory\n');
+    expect(readFileSync(join(repo, '.loops', 'prompt.md'), 'utf8')).toBe('prior handoff\n');
   });
 
   it('runs bounded advisor consults and records the question and reply', async () => {

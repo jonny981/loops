@@ -180,6 +180,8 @@ export interface JobContext {
   readonly runId?: string;
   /** Internal checkpoint metadata. Recipe-owned scratch state lives in `state`. */
   readonly checkpoint?: CheckpointControl;
+  /** Run-owned files omitted from workspace fingerprints. */
+  readonly fingerprintExcludePaths?: string[];
   emit(event: LoopEvent): void;
   /** Shared mutable state for the whole run (e.g. accumulating notes). */
   readonly state: Record<string, unknown>;
@@ -316,6 +318,13 @@ export interface LoopConfig {
   start?: ConditionInput;
   /** After each body run; one or many checks. Met => stop (then `review`). */
   until?: ConditionInput;
+  /**
+   * Evaluate the explicit `until` gate once at iteration 0, before the body.
+   * A met gate completes immediately (after `review`, when configured); an
+   * unmet verdict is exposed to the first body iteration as `ctx.lastGate`.
+   * Requires `until`.
+   */
+  checkFirst?: boolean;
   /** Hard early-exit per iteration; one or many checks. Met => `aborted`. */
   stopOn?: ConditionInput;
   /** Iteration cap. Reached without passing => `exhausted`. */
@@ -522,7 +531,7 @@ export type LoopEvent =
       ts: number;
       path: string[];
       which: ConditionKind;
-      /** The enclosing loop iteration; 0 for its start gate. */
+      /** The enclosing loop iteration; 0 for start and check-first gates. */
       iteration?: number;
       result: ConditionResult;
     }

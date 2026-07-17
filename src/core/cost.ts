@@ -2,9 +2,9 @@
  * Cost accounting over the run's measured token usage — the honest-receipt
  * fold. Two rules carried over from auditing supervisor-orchestrator ledgers:
  *
- * 1. **Never silently $0.** A model with usage but no price entry lands in
+ * 1. **Never silently $0.** A model without complete price coverage lands in
  *    `unpricedModels`, and the totals stay `undefined` rather than pretending
- *    the run was free.
+ *    the run was free or pricing cached input at the base input rate.
  * 2. **The baseline is labeled a reconstruction.** `baselineUsd` prices the
  *    SAME measured token stream at the baseline model's rates — "what these
  *    exact tokens would have cost on the ceiling model". It is a like-for-like
@@ -34,7 +34,7 @@ export interface ModelCost {
   calls: number;
   inputTokens: number;
   outputTokens: number;
-  /** Undefined when the table carries no price for this model. */
+  /** Undefined when the table cannot price this model's complete usage. */
   usd?: number;
 }
 
@@ -48,7 +48,7 @@ export interface CostReport {
   /** `baselineUsd - spentUsd` when both exist. Negative means the run cost
    *  MORE than the baseline would have. */
   savedUsd?: number;
-  /** Models that carried usage but had no price entry. */
+  /** Models whose complete usage cannot be priced by the supplied table. */
   unpricedModels: string[];
   models: ModelCost[];
 }
@@ -86,6 +86,13 @@ function round(usd: number): number {
   return Number(usd.toFixed(6));
 }
 
+function hasCachedInput(usage: StatsSnapshot['models'][number]): boolean {
+  return (
+    (usage.cacheCreationInputTokens ?? 0) > 0 ||
+    (usage.cacheReadInputTokens ?? 0) > 0
+  );
+}
+
 export function costReport(
   snapshot: Pick<StatsSnapshot, 'models'>,
   prices: PriceTable,
@@ -95,9 +102,13 @@ export function costReport(
   const unpriced: string[] = [];
   let spent = 0;
   let allPriced = true;
+  const hasAnyCachedInput = snapshot.models.some(hasCachedInput);
   for (const m of snapshot.models) {
     const price = priceFor(prices, m.model);
-    const usd = price ? round(usdFor(price, m.inputTokens, m.outputTokens)) : undefined;
+    const usd =
+      price && !hasCachedInput(m)
+        ? round(usdFor(price, m.inputTokens, m.outputTokens))
+        : undefined;
     if (usd === undefined) {
       allPriced = false;
       unpriced.push(m.model);
@@ -114,7 +125,7 @@ export function costReport(
   }
 
   let baselineUsd: number | undefined;
-  if (baselineModel && snapshot.models.length) {
+  if (baselineModel && snapshot.models.length && !hasAnyCachedInput) {
     const baselinePrice = priceFor(prices, baselineModel);
     if (baselinePrice) {
       baselineUsd = round(
@@ -145,7 +156,7 @@ export function formatCostReport(report: CostReport): string[] {
   const lines: string[] = [];
   for (const m of report.models) {
     lines.push(
-      `${m.model}: ${m.inputTokens}/${m.outputTokens} tok over ${m.calls} call(s)${m.usd !== undefined ? ` = $${m.usd}` : ' (unpriced)'}`,
+      `${m.model}: ${m.inputTokens}/${m.outputTokens} tok over ${m.calls} call(s)${m.usd !== undefined ? ` = $${m.usd}` : ' (incomplete price coverage)'}`,
     );
   }
   if (report.spentUsd !== undefined) {
@@ -153,7 +164,7 @@ export function formatCostReport(report: CostReport): string[] {
   }
   if (report.unpricedModels.length) {
     lines.push(
-      `no total: unpriced model(s) ${report.unpricedModels.join(', ')} — add them to the price table`,
+      `no total: incomplete price coverage for model(s) ${report.unpricedModels.join(', ')}`,
     );
   }
   if (report.baselineUsd !== undefined) {

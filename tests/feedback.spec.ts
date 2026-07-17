@@ -251,6 +251,455 @@ describe('feedback protocol', () => {
     expect(peak).toBeLessThanOrEqual(4);
   });
 
+  it('keeps run-owned files out of whole-workspace pass fingerprints', async () => {
+    const repo = await tmpRepo();
+    const checkpoint = join(repo, '.loops', 'review.ckpt.json');
+    const recordTo = join(repo, 'review.run.jsonl');
+    let stableRuns = 0;
+    let limitedRuns = 0;
+    const build = () =>
+      reviewPanel({
+        label: 'persisted-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [
+          {
+            name: 'stable',
+            cacheVersion: 'v1',
+            review: async () => {
+              stableRuns += 1;
+              return { met: true, confidence: 0.95, reason: 'stable' };
+            },
+          },
+          {
+            name: 'limited',
+            cacheVersion: 'v1',
+            review: async () => {
+              limitedRuns += 1;
+              if (limitedRuns === 1)
+                throw new LoopError({ code: 'QUOTA', message: 'usage limit' });
+              return { met: true, confidence: 0.96, reason: 'recovered' };
+            },
+          },
+        ],
+      });
+    const opts = {
+      engine: 'mock' as const,
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+      checkpoint,
+      recordTo,
+    };
+
+    const first = await run(build(), opts);
+    expect(first.outcome.status).toBe('paused');
+
+    const second = await run(build(), { ...opts, resumeFrom: checkpoint });
+    expect(second.outcome.status).toBe('pass');
+    expect(stableRuns).toBe(1);
+    expect(limitedRuns).toBe(2);
+  });
+
+  it('reruns a persisted pass only when its declared content changes', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    mkdirSync(join(repo, 'docs'));
+    write(repo, 'src/reviewed.ts', 'export const value = 1;\n');
+    write(repo, 'docs/notes.md', 'first\n');
+    await run(commitJob({ subject: 'test: add review fixture' }), {
+      engine: 'mock',
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+    });
+    const state: Record<string, unknown> = {};
+    let runs = 0;
+    const build = () =>
+      reviewPanel({
+        label: 'scoped-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [
+          {
+            name: 'correctness',
+            cacheVersion: 'v1',
+            invalidateOn: ['src'],
+            review: async () => {
+              runs += 1;
+              return { met: true, confidence: 0.95, reason: 'clear' };
+            },
+          },
+        ],
+      });
+    const opts = {
+      engine: 'mock' as const,
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+      state,
+    };
+
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    expect(Object.values(state)).toEqual([
+      {
+        correctness: {
+          identity: expect.stringMatching(/^[0-9a-f]{64}$/),
+          fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+          confidence: 0.95,
+        },
+      },
+    ]);
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    write(repo, 'docs/notes.md', 'second\n');
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    expect(runs).toBe(1);
+
+    write(repo, 'src/reviewed.ts', 'export const value = 2;\n');
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    expect(runs).toBe(2);
+  });
+
+  it('fails closed for low-confidence and malformed persisted passes', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    write(repo, 'src/reviewed.ts', 'export const value = 1;\n');
+    const state: Record<string, unknown> = {};
+    let lowRuns = 0;
+    const lowConfidence = () =>
+      reviewPanel({
+        label: 'low-confidence-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [
+          {
+            name: 'correctness',
+            cacheVersion: 'v1',
+            invalidateOn: ['src'],
+            review: async () => {
+              lowRuns += 1;
+              return { met: true, confidence: 0.89, reason: 'uncertain' };
+            },
+          },
+        ],
+      });
+    const opts = {
+      engine: 'mock' as const,
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+      state,
+    };
+
+    await run(lowConfidence(), opts);
+    await run(lowConfidence(), opts);
+    expect(lowRuns).toBe(2);
+    expect(state).toEqual({});
+
+    let highRuns = 0;
+    const highConfidence = () =>
+      reviewPanel({
+        label: 'malformed-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [
+          {
+            name: 'security',
+            cacheVersion: 'v1',
+            invalidateOn: ['src'],
+            review: async () => {
+              highRuns += 1;
+              return { met: true, confidence: 0.95, reason: 'clear' };
+            },
+          },
+        ],
+      });
+    await run(highConfidence(), opts);
+    for (const key of Object.keys(state)) state[key] = 'malformed';
+    await run(highConfidence(), opts);
+    expect(highRuns).toBe(2);
+  });
+
+  it('does not persist a pass when its evidence changes during review', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    write(repo, 'src/reviewed.ts', 'export const value = 1;\n');
+    const state: Record<string, unknown> = {};
+    let runs = 0;
+    const build = () =>
+      reviewPanel({
+        label: 'stable-evidence-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [
+          {
+            name: 'correctness',
+            cacheVersion: 'v1',
+            invalidateOn: ['src'],
+            review: async () => {
+              runs += 1;
+              if (runs === 1)
+                write(repo, 'src/reviewed.ts', 'export const value = 2;\n');
+              return { met: true, confidence: 0.95, reason: 'clear' };
+            },
+          },
+        ],
+      });
+    const opts = {
+      engine: 'mock' as const,
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+      state,
+    };
+
+    await run(build(), opts);
+    await run(build(), opts);
+    expect(runs).toBe(2);
+  });
+
+  it('binds persisted passes to an explicit reviewer cache version', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    write(repo, 'src/reviewed.ts', 'export const value = 1;\n');
+    const state: Record<string, unknown> = {};
+    let firstRuns = 0;
+    let changedRuns = 0;
+    const opts = {
+      engine: 'mock' as const,
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+      state,
+    };
+
+    const first = reviewPanel({
+      label: 'versioned-review',
+      persistPasses: { minConfidence: 0.9 },
+      reviewers: [
+        {
+          name: 'correctness',
+          cacheVersion: 'v1',
+          invalidateOn: ['src'],
+          review: async () => {
+            firstRuns += 1;
+            return { met: true, confidence: 0.95, reason: 'old criteria pass' };
+          },
+        },
+      ],
+    });
+    expect((await run(first, opts)).outcome.status).toBe('pass');
+
+    const changed = reviewPanel({
+      label: 'versioned-review',
+      persistPasses: { minConfidence: 0.9 },
+      reviewers: [
+        {
+          name: 'correctness',
+          cacheVersion: 'v2',
+          invalidateOn: ['src'],
+          review: async () => {
+            changedRuns += 1;
+            return { met: false, confidence: 0.99, reason: 'new criteria fail' };
+          },
+        },
+      ],
+    });
+    expect((await run(changed, opts)).outcome.status).toBe('fail');
+    expect(firstRuns).toBe(1);
+    expect(changedRuns).toBe(1);
+  });
+
+  it('reruns stale reused seats in parallel after another reviewer changes their evidence', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    write(repo, 'src/reviewed.ts', 'export const value = 1;\n');
+    const state: Record<string, unknown> = {};
+    const reusedRuns = [0, 0];
+    let mutatorRuns = 0;
+    let mutate = false;
+    let active = 0;
+    let peak = 0;
+    let arrivals = 0;
+    let releaseReruns = () => {};
+    let rerunBarrier = Promise.resolve();
+    const reusableReviewer = (index: number): Condition => async () => {
+      reusedRuns[index]! += 1;
+      if (mutate) {
+        active += 1;
+        peak = Math.max(peak, active);
+        arrivals += 1;
+        if (arrivals === 2) releaseReruns();
+        await rerunBarrier;
+        active -= 1;
+      }
+      return { met: true, confidence: 0.95, reason: 'clear' };
+    };
+    const build = () =>
+      reviewPanel({
+        label: 'concurrent-invalidation-review',
+        persistPasses: { minConfidence: 0.9 },
+        concurrency: 2,
+        reviewers: [
+          {
+            name: 'stable-a',
+            cacheVersion: 'v1',
+            invalidateOn: ['src'],
+            review: reusableReviewer(0),
+          },
+          {
+            name: 'stable-b',
+            cacheVersion: 'v1',
+            invalidateOn: ['src'],
+            review: reusableReviewer(1),
+          },
+          {
+            name: 'mutator',
+            cacheVersion: 'v1',
+            invalidateOn: ['src'],
+            review: async () => {
+              mutatorRuns += 1;
+              if (mutate) {
+                write(repo, 'src/reviewed.ts', 'export const value = 2;\n');
+              }
+              return { met: true, confidence: 0.5, reason: 'not reusable' };
+            },
+          },
+        ],
+      });
+    const opts = {
+      engine: 'mock' as const,
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+      state,
+    };
+
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    rerunBarrier = new Promise<void>((resolve) => {
+      releaseReruns = resolve;
+    });
+    mutate = true;
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    mutate = false;
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+
+    expect(reusedRuns).toEqual([2, 2]);
+    expect(mutatorRuns).toBe(3);
+    expect(peak).toBe(2);
+  });
+
+  it('fails the current panel when a bounded rerun invalidates another reused pass', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    write(repo, 'src/a.ts', 'export const a = 1;\n');
+    write(repo, 'src/b.ts', 'export const b = 1;\n');
+    const state: Record<string, unknown> = {};
+    const runs = [0, 0];
+    let cascade = false;
+    const build = () =>
+      reviewPanel({
+        label: 'overlapping-mutation-review',
+        persistPasses: { minConfidence: 0.9 },
+        concurrency: 2,
+        reviewers: [
+          {
+            name: 'review-a',
+            cacheVersion: 'v1',
+            invalidateOn: ['src/a.ts'],
+            review: async () => {
+              runs[0]! += 1;
+              if (cascade) write(repo, 'src/b.ts', 'export const b = 2;\n');
+              return { met: true, confidence: 0.95, reason: 'a clear' };
+            },
+          },
+          {
+            name: 'review-b',
+            cacheVersion: 'v1',
+            invalidateOn: ['src/b.ts'],
+            review: async () => {
+              runs[1]! += 1;
+              return { met: true, confidence: 0.95, reason: 'b clear' };
+            },
+          },
+          {
+            name: 'mutator',
+            cacheVersion: 'v1',
+            invalidateOn: ['src/a.ts'],
+            review: async () => {
+              if (cascade) write(repo, 'src/a.ts', 'export const a = 2;\n');
+              return { met: true, confidence: 0.5, reason: 'not reusable' };
+            },
+          },
+        ],
+      });
+    const opts = {
+      engine: 'mock' as const,
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+      state,
+    };
+
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    cascade = true;
+    const unstable = await run(build(), opts);
+    expect(unstable.outcome.status).toBe('fail');
+    expect(unstable.outcome.revision?.findings).toEqual([
+      expect.objectContaining({
+        reviewer: 'review-b',
+        evidence: 'review evidence changed during panel',
+      }),
+    ]);
+
+    cascade = false;
+    expect((await run(build(), opts)).outcome.status).toBe('pass');
+    expect(runs).toEqual([2, 2]);
+  });
+
+  it('requires stable reviewer identities for persisted passes', async () => {
+    const pass: Condition = async () => ({
+      met: true,
+      confidence: 0.95,
+      reason: 'clear',
+    });
+
+    expect(() =>
+      reviewPanel({
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [{ name: 'correctness', cacheVersion: 'v1', review: pass }],
+      }),
+    ).toThrow(/explicit label/);
+    expect(() =>
+      reviewPanel({
+        label: 'persisted-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [{ cacheVersion: 'v1', review: pass }],
+      }),
+    ).toThrow(/explicit name/);
+    expect(() =>
+      reviewPanel({
+        label: 'persisted-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [
+          { name: 'correctness', cacheVersion: 'v1', review: pass },
+          { name: 'correctness', cacheVersion: 'v1', review: pass },
+        ],
+      }),
+    ).toThrow(/unique/);
+    expect(() =>
+      reviewPanel({
+        label: 'persisted-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [
+          { name: 'correctness', cacheVersion: 'v1', review: pass },
+          { name: ' correctness ', cacheVersion: 'v1', review: pass },
+        ],
+      }),
+    ).toThrow(/unique/);
+    expect(() =>
+      reviewPanel({
+        label: 'persisted-review',
+        persistPasses: { minConfidence: 0.9 },
+        reviewers: [{ name: 'correctness', review: pass }],
+      }),
+    ).toThrow(/cacheVersion/);
+    expect(() =>
+      reviewPanel({
+        label: 'persisted-review',
+        persistPasses: { minConfidence: 2 },
+        reviewers: [{ name: 'correctness', cacheVersion: 'v1', review: pass }],
+      }),
+    ).toThrow(/minConfidence/);
+  });
+
   it('keeps engine errors out of review findings and pauses an all-error panel', async () => {
     const limit = new LoopError({
       code: 'RATE_LIMIT',
@@ -593,6 +1042,46 @@ describe('feedback protocol', () => {
     expect(prompt).toContain('## File: src/a.ts');
     expect(prompt).toContain('Tried a Map cache');
     expect(prompt).toContain('Tests passed in the implementation step.');
+  });
+
+  it('caps the assembled reviewContext while keeping higher-priority evidence first', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    write(repo, 'src/change.ts', 'export const changed = "before";\n');
+    write(repo, 'src/detail.ts', 'FILE-THIRD '.repeat(40));
+    await run(commitJob({ subject: 'test: add context fixtures' }), {
+      engine: 'mock',
+      engines: { mock: () => new MockEngine(() => '') },
+      cwd: repo,
+    });
+    write(repo, 'src/change.ts', 'export const changed = "DIFF-SECOND";\n');
+    appendLedger(ws(repo), 'LEDGER-LAST '.repeat(40));
+    const maxChars = 180;
+    let context = '';
+
+    await run(
+      fnJob('capture-review-context', async (ctx) => {
+        context = await reviewContext({
+          tests: true,
+          diff: true,
+          files: ['src/detail.ts'],
+          ledger: true,
+          maxChars,
+        })(ctx, { status: 'pass', summary: 'TEST-FIRST' });
+        return { status: 'pass' };
+      }),
+      {
+        engine: 'mock',
+        engines: { mock: () => new MockEngine(() => '') },
+        cwd: repo,
+      },
+    );
+
+    expect(context.length).toBeLessThanOrEqual(maxChars);
+    expect(context).toContain('TEST-FIRST');
+    expect(context).toContain('## Git diff');
+    expect(context).not.toContain('## File: src/detail.ts');
+    expect(context).not.toContain('LEDGER-LAST');
   });
 
   it('agentJob graphContext appends the node location without exposing the whole graph', async () => {

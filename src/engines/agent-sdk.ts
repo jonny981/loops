@@ -88,6 +88,14 @@ function classifySdkLimit(
   return undefined;
 }
 
+export function agentSdkSystemPrompt(
+  req: Pick<AgentRequest, 'system' | 'systemMode'>,
+): SdkOptions['systemPrompt'] {
+  return req.systemMode === 'replace'
+    ? req.system
+    : { type: 'preset', preset: 'claude_code', append: req.system };
+}
+
 export class AgentSdkEngine implements Engine {
   readonly name = 'agent-sdk';
   /** One pacer per engine instance, so the interval spans turns, not just one. */
@@ -137,8 +145,9 @@ export class AgentSdkEngine implements Engine {
     // The SDK option surface drifts across versions; cast at this boundary.
     const options = {
       model,
-      systemPrompt: req.system,
+      systemPrompt: agentSdkSystemPrompt(req),
       cwd: req.cwd,
+      tools: req.tools,
       allowedTools: req.allowedTools,
       // A leaf agent may not spawn sub-agents, so disallow the spawn tool.
       disallowedTools: req.leaf ? SUBAGENT_TOOLS : undefined,

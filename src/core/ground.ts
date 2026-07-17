@@ -17,6 +17,8 @@ import type { JobContext, Workspace } from './types.ts';
 import type { EngineRef } from '../engines/engine.ts';
 import { truncate } from './text.ts';
 import { loopsRequestMeta } from './engine-meta.ts';
+import { assertBudget } from './budget.ts';
+import { LoopError } from './errors.ts';
 
 export interface GroundOptions {
   /**
@@ -91,6 +93,10 @@ export interface RetrieveOptions {
   engine?: EngineRef;
   /** Model for the selection call (a cheap one is plenty). */
   model?: string;
+  /** Soft timeout inherited from the worker route when called through `agentJob`. */
+  timeoutMs?: number;
+  /** Extra hard-timeout window after `timeoutMs`. */
+  timeoutGraceMs?: number;
 }
 
 const SELECT_SYSTEM =
@@ -132,19 +138,43 @@ export async function retrieveLedger(
     .map((r) => `${r.sha.slice(0, 9)}: ${r.subject}`)
     .join('\n');
   const engine = opts.engine ? ctx.resolveEngine(opts.engine) : ctx.engine;
+  if (engine.name === 'codex') {
+    throw new LoopError({
+      code: 'CONFIG',
+      phase: 'engine',
+      message:
+        'retrieval grounding cannot use Codex because its CLI adapter cannot disable tools; ' +
+        'set ground.retrieve.engine to an engine that supports tools: []',
+    });
+  }
+  assertBudget(ctx);
   const result = await engine.run(
     {
       prompt:
         `TASK:\n${opts.intent}\n\n` +
         `CANDIDATE COMMITS (sha: subject):\n${list}\n\n` +
-        `Return the shas relevant to the TASK (up to ${opts.max ?? 8}), or NONE.`,
+      `Return the shas relevant to the TASK (up to ${opts.max ?? 8}), or NONE.`,
       system: SELECT_SYSTEM,
+      systemMode: 'replace',
       model: opts.model,
       maxTokens: 200,
+      tools: [],
       leaf: true,
+      timeoutMs: opts.timeoutMs ?? ctx.timeoutMs,
+      timeoutGraceMs: opts.timeoutGraceMs ?? ctx.timeoutGraceMs,
       loops: loopsRequestMeta(ctx, 'retrieve-ledger'),
     },
-    () => {},
+    (event) => {
+      if (event.type === 'usage') {
+        ctx.emit({
+          kind: 'engine:usage',
+          ts: Date.now(),
+          path: [...ctx.path],
+          model: event.model,
+          usage: event.usage,
+        });
+      }
+    },
     ctx.signal,
   );
 

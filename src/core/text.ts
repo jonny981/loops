@@ -10,5 +10,7 @@ export function oneLine(text: string): string {
 
 /** Truncate to `max` chars, appending a `\n…` marker when it overflows. */
 export function truncate(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max).trimEnd()}\n…` : s;
+  if (s.length <= max) return s;
+  const marker = max > 1 ? '\n…' : '…'.slice(0, Math.max(0, max));
+  return `${s.slice(0, Math.max(0, max - marker.length)).trimEnd()}${marker}`;
 }

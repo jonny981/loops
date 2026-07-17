@@ -5,7 +5,7 @@
  * temp git repos.
  */
 import { describe, it, expect, afterAll } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -18,6 +18,8 @@ import {
   ProgressTracker,
   resolveNoProgress,
   workspaceFingerprint,
+  stageAll,
+  commit,
 } from '../src/api.ts';
 import type { RunOptions, LoopEvent, Condition } from '../src/api.ts';
 import { tmpRepo, tmpBareDir, cleanupRepos } from './git-helpers.ts';
@@ -176,6 +178,81 @@ describe('workspaceFingerprint', () => {
     expect(detour).not.toBe(before);
     expect(after).toBe(before);
   });
+
+  it('scopes fingerprints to declared content across edits and commits', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'src'));
+    mkdirSync(join(repo, 'docs'));
+    writeFileSync(join(repo, 'src', 'reviewed.ts'), 'export const value = 1;\n');
+    writeFileSync(join(repo, 'docs', 'notes.md'), 'first\n');
+    await stageAll({ cwd: repo });
+    await commit({ subject: 'test: add scoped files' }, { cwd: repo });
+
+    const fingerprint = () =>
+      workspaceFingerprint({ cwd: repo, includePaths: ['src'] });
+    const before = await fingerprint();
+
+    writeFileSync(join(repo, 'docs', 'notes.md'), 'second\n');
+    expect(await fingerprint()).toBe(before);
+    await stageAll({ cwd: repo });
+    await commit({ subject: 'test: change unreviewed file' }, { cwd: repo });
+    expect(await fingerprint()).toBe(before);
+
+    writeFileSync(join(repo, 'src', 'reviewed.ts'), 'export const value = 2;\n');
+    expect(await fingerprint()).not.toBe(before);
+    writeFileSync(join(repo, 'src', 'reviewed.ts'), 'export const value = 1;\n');
+    expect(await fingerprint()).toBe(before);
+
+    writeFileSync(join(repo, 'src', 'new.ts'), 'export const added = true;\n');
+    expect(await fingerprint()).not.toBe(before);
+  });
+
+  it('includes explicitly scoped ignored content without adding it to the whole workspace', async () => {
+    const repo = await tmpRepo();
+    mkdirSync(join(repo, 'node_modules', 'fixture'), { recursive: true });
+    writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
+    writeFileSync(
+      join(repo, 'node_modules', 'fixture', 'output.json'),
+      '{"value":1}\n',
+    );
+    await stageAll({ cwd: repo });
+    await commit({ subject: 'test: ignore dependencies' }, { cwd: repo });
+
+    const scopedBefore = await workspaceFingerprint({
+      cwd: repo,
+      includePaths: ['node_modules/fixture'],
+    });
+    const wholeBefore = await workspaceFingerprint({ cwd: repo });
+    writeFileSync(
+      join(repo, 'node_modules', 'fixture', 'output.json'),
+      '{"value":2}\n',
+    );
+
+    expect(
+      await workspaceFingerprint({
+        cwd: repo,
+        includePaths: ['node_modules/fixture'],
+      }),
+    ).not.toBe(scopedBefore);
+    expect(await workspaceFingerprint({ cwd: repo })).toBe(wholeBefore);
+  });
+
+  it('fails closed when a scoped pathspec makes a git probe fail', async () => {
+    const repo = await tmpRepo();
+
+    expect(
+      await workspaceFingerprint({
+        cwd: repo,
+        includePaths: ['../outside-the-worktree'],
+      }),
+    ).toBeUndefined();
+    expect(
+      await workspaceFingerprint({
+        cwd: repo,
+        includePaths: [':(attr:missing-close'],
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe('loop({ noProgress })', () => {
@@ -293,6 +370,22 @@ describe('loop({ noProgress })', () => {
     expect(outcome.summary).toContain('stalled');
     expect(outcome.stall?.evidence.join(' ')).toContain('workspace');
     expect(stats.loops[0]?.iterations).toBe(4); // 2 writing + 2 idle
+  });
+
+  it('ignores the run record when measuring workspace progress', async () => {
+    const repo = await tmpRepo();
+    const { outcome, stats } = await run(
+      loop({
+        name: 'recording',
+        body: fnJob('b', async () => ({ status: 'fail', summary: 'same' })),
+        max: 10,
+        noProgress: { window: 2 },
+      }),
+      { ...mockOpts, cwd: repo, recordTo: join(repo, 'run.jsonl') },
+    );
+
+    expect(outcome.summary).toContain('stalled');
+    expect(stats.loops[0]?.iterations).toBe(3);
   });
 
   it('warns once and stays inert when no evidence channel exists', async () => {

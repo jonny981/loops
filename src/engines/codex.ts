@@ -19,6 +19,7 @@ import type {
   Engine,
   EngineEventSink,
   EngineOptions,
+  Usage,
 } from './engine.ts';
 import { modelFor, requestEnv } from './engine.ts';
 import { settleOnExit } from './settle.ts';
@@ -27,6 +28,41 @@ import { scrubCapture } from '../core/redact.ts';
 
 const DIAGNOSTIC_MAX = 700;
 const DIAGNOSTIC_HEAD = 180;
+
+function usageFromJsonl(stdout: unknown): Usage {
+  if (typeof stdout !== 'string') return { inputTokens: 0, outputTokens: 0 };
+  for (const line of stdout.trim().split('\n').reverse()) {
+    try {
+      const event = JSON.parse(line) as {
+        type?: unknown;
+        usage?: {
+          input_tokens?: unknown;
+          cached_input_tokens?: unknown;
+          output_tokens?: unknown;
+        };
+      };
+      if (event.type !== 'turn.completed' || !event.usage) continue;
+      return {
+        inputTokens: tokenCount(event.usage.input_tokens),
+        outputTokens: tokenCount(event.usage.output_tokens),
+        ...(event.usage.cached_input_tokens === undefined
+          ? {}
+          : {
+              cacheReadInputTokens: tokenCount(
+                event.usage.cached_input_tokens,
+              ),
+            }),
+      };
+    } catch {
+      /* ignore non-JSON output */
+    }
+  }
+  return { inputTokens: 0, outputTokens: 0 };
+}
+
+function tokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
+}
 
 function diagnosticCapture(
   stderr: unknown,
@@ -52,7 +88,14 @@ export function buildCodexArgs(
   outFile: string,
 ): string[] {
   const model = modelFor(req, opts, 'codex');
-  const args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never'];
+  const args = [
+    'exec',
+    '--ephemeral',
+    '--skip-git-repo-check',
+    '--color',
+    'never',
+    '--json',
+  ];
 
   if (opts.permissionMode === 'bypassPermissions') {
     args.push('--dangerously-bypass-approvals-and-sandbox');
@@ -76,6 +119,12 @@ export class CodexEngine implements Engine {
     onEvent: EngineEventSink,
     signal: AbortSignal,
   ): Promise<AgentResult> {
+    if (req.tools?.length === 0)
+      throw new LoopError({
+        code: 'CONFIG',
+        phase: 'engine',
+        message: 'codex cannot honor tools: []; choose an engine that supports disabling tools',
+      });
     const model = modelFor(req, this.opts, 'codex');
     const dir = mkdtempSync(join(tmpdir(), 'loops-codex-'));
     const outFile = join(dir, 'last.txt');
@@ -131,9 +180,9 @@ export class CodexEngine implements Engine {
         }`;
       }
 
-      // codex bills a separate (GPT-5) account, so its tokens are out-of-band for
-      // the loops token budget; report zero rather than conflate providers.
-      const usage = { inputTokens: 0, outputTokens: 0 };
+      // `cached_input_tokens` is a subset of Codex `input_tokens`, so the
+      // terminal total is already normalized for the run budget.
+      const usage = usageFromJsonl(sub.stdout);
       if (text) onEvent({ type: 'text', delta: text });
       onEvent({ type: 'usage', usage, model: model ?? 'codex' });
       return {

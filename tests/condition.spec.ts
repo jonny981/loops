@@ -275,8 +275,8 @@ describe('commandSucceeds output capture', () => {
       ]),
       noEngine,
     );
-    expect(r?.output).toContain('x'.repeat(4000));
-    expect(r?.output).not.toContain('x'.repeat(4001));
+    expect(r?.output).toContain('x'.repeat(3998));
+    expect(r?.output).not.toContain('x'.repeat(3999));
     expect(r?.output).toContain('\n…');
   });
 

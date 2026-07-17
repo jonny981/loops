@@ -41,6 +41,20 @@ describe('buildClaudeArgs', () => {
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('Read,Bash');
   });
 
+  it('can replace the default system prompt for a prompt-only turn', () => {
+    const args = buildClaudeArgs(
+      { prompt: 'select', system: 'selector only', systemMode: 'replace' },
+      {},
+    );
+    expect(args[args.indexOf('--system-prompt') + 1]).toBe('selector only');
+    expect(args).not.toContain('--append-system-prompt');
+  });
+
+  it('can disable all available tools for a prompt-only turn', () => {
+    const args = buildClaudeArgs({ prompt: 'select', tools: [] }, {});
+    expect(args[args.indexOf('--tools') + 1]).toBe('');
+  });
+
   it('strips Claude Code long-context suffixes before passing --model', () => {
     const args = buildClaudeArgs(
       { prompt: 'go', model: 'claude-fable-5 [1m]' },

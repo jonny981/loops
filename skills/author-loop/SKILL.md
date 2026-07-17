@@ -22,26 +22,29 @@ There is one unit of work and two supporting types:
 A `.loop.ts` `export default`s a `Job`. Wrap it in `defineJob(...)` to pin the type.
 
 ```ts
-import { defineJob, loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
+import { defineJob, loop, agentJob, commandSucceeds, agentCheck, gateJob } from '@loops-adk/core';
 
 export default defineJob(
   loop({
     name: 'build-feature',
     max: 20,
+    checkFirst: true,
     body: agentJob({
       prompt: (c) => `Iteration ${c.iteration}: make concrete progress on TASK.md.`,
       ground: true, // read the commit log + scratch files before working
+      consumeFeedback: true,
     }),
-    until: [
-      commandSucceeds('npm', ['test']),                       // ground truth
-      agentCheck({ question: 'Does it match TASK.md?', threshold: 0.85 }), // intent
-    ],
+    until: commandSucceeds('npm', ['test']), // cheap ground truth first
+    review: gateJob(
+      'intent-review',
+      agentCheck({ question: 'Does it match TASK.md?', threshold: 0.85 }),
+    ),
     commit: { subject: 'feat: TASK.md' }, // one milestone commit on convergence
   }),
 );
 ```
 
-`loop()` config worth knowing: `body` (the Job per iteration), `until` (stop gate), `start` (gate before iterating), `stopOn` (hard early-exit), `review` (runs when `until` is met; a failing review folds its findings back into the next iteration), `max` (iteration cap), `noProgress` (end `exhausted` after n consecutive iterations that reach no new state; `{ window, gate: true }` also fingerprints the failing gate's `output`, so the same failure signature repeating counts as stall evidence — deterministic gates only, and it requires an explicit `until`), `delayMs` (polling delay), `commit` (milestone commit on convergence).
+`loop()` config worth knowing: `body` (the Job per iteration), `until` (stop gate), `checkFirst` (requires `until`; skip the first body when the gate and review already pass), `start` (gate before iterating), `stopOn` (hard early-exit), `review` (runs when `until` is met; a failing review folds its findings back into the next iteration), `max` (iteration cap), `noProgress` (end `exhausted` after n consecutive iterations that reach no new state; `{ window, gate: true }` also fingerprints the failing gate's `output`, so the same failure signature repeating counts as stall evidence; deterministic gates only, and it requires an explicit `until`), `delayMs` (polling delay), `commit` (milestone commit on convergence).
 
 ## Recipe parameters
 
@@ -53,8 +56,8 @@ the parsed values to `ctx.params`.
 import { defineJob, defineParams, fnJob } from '@loops-adk/core';
 
 export const params = defineParams({
-  oem: { type: 'string', required: true, help: 'OEM name' },
-  device: { type: 'choice', choices: ['battery', 'inverter'], default: 'battery' },
+  project: { type: 'string', required: true, help: 'Project name' },
+  target: { type: 'choice', choices: ['web', 'worker'], default: 'web' },
   skip: { type: 'string[]', default: [] },
   repoRoot: { type: 'string', defaultFrom: 'gitRoot' },
 });
@@ -85,7 +88,7 @@ export default defineConfig({
 `record: 'auto'` writes the default thin record under `.loops/records/`; an
 explicit `--record <path>` writes the full event stream.
 
-Run it as `loops run onboard.loop.ts --profile live --oem Sigenergy`.
+Run it as `loops run deliver.loop.ts --profile live --project atlas`.
 When a param declares `env`, CLI values are written before import, so graph
 shape built from `process.env` matches `ctx.params`. Recipes read custom config
 from `ctx.config.recipe`. For a new recipe island, run `loops init <dir>` to
@@ -130,7 +133,8 @@ Progress accumulates on disk, so each iteration starts with a clean context but 
 
 - `ground: true` on an `agentJob` reads the recent commit log + this run's scratch files into the next prompt, so a fresh turn knows what was already tried. The bounded prompt keeps the task and handoff instruction first, then the live handoff, working memory, and committed context. To default it on for every `agentJob` in a run, set `RunOptions.ground` or pass `--ground`; a job's own `ground` (including an explicit `false`) wins.
 - Use `agentJob({ role: 'reader' })` for leaves that should read grounding but
-  end with a closing decision token. It omits the handoff instruction.
+  end with a closing decision token. It omits the handoff instruction and
+  scratch auto-capture; the report remains in the outcome and event stream.
 - Parse closing contracts with `lastDecisionLine(text, token, values)` or
   `confidenceFromText(text)`. They read the handoff-stripped work report, so a
   token restated after `===HANDOFF===` cannot score the leaf. The `values`
@@ -146,7 +150,7 @@ Progress accumulates on disk, so each iteration starts with a clean context but 
   templates in `dir` and resolves nested includes from that contained relative
   directory.
 - `commit: { subject }` (or `commit: true`) writes one structured milestone commit on convergence: the reasoning welded to the diff. Later turns ground on it.
-- For long, noisy histories use `ground: { retrieve: true }` (select relevant commits, not recent-N); for indefinite processes add `consolidateJob` to fold history into a bounded, decision-preserving record.
+- For long, noisy histories use `ground: { retrieve: true }` (select relevant commits, not recent-N). The selector runs without tools and counts against timeout, usage, and budget; set `ground.retrieve.engine` when the worker engine cannot enforce `tools: []` (including Codex). For indefinite processes add `consolidateJob` to fold history into a bounded, decision-preserving record.
 
 ## Three archetypes
 
@@ -211,7 +215,7 @@ to shell out to another model.
 streaming does not reset the timer. Worker retries, fallback routes, and advisor
 consults receive separate windows.
 
-Review feedback is a structured revision request that flows back to the worker on one channel. In a loop, a failing `review` is threaded into the next turn as `ctx.lastReview`; set `consumeFeedback: true` and `agentJob` folds it into the prompt. Aggregate several reviewers with `reviewPanel`; route a fix back to an earlier dag node with a targeted `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) when the dag's `maxKickbacks` allows it.
+Review feedback is a structured revision request that flows back to the worker on one channel. In a loop, a failing `review` is threaded into the next turn as `ctx.lastReview`; set `consumeFeedback: true` and `agentJob` folds it into the prompt. Aggregate several reviewers with `reviewPanel`. To reuse unchanged high-confidence passes, set `persistPasses`, an explicit panel `label`, and a unique `name` and `cacheVersion` for every reviewer. Give each reviewer a complete `invalidateOn` evidence scope, or omit it to fingerprint the whole workspace. Route a fix back to an earlier dag node with a targeted `revisionRequest({ target, findings })` (or the terse `kickback(to, reason)`) when the dag's `maxKickbacks` allows it.
 
 Composing a team of specialists, gates, and routed feedback is its own skill: see `skills/design-agent-team/SKILL.md`.
 

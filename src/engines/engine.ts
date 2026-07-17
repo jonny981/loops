@@ -18,8 +18,11 @@ export type EngineName =
   | (string & {});
 
 export interface Usage {
+  /** Total input, including cache creation and cache reads where reported. */
   inputTokens: number;
   outputTokens: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 /** Tools an agent uses to spawn sub-agents / fan out. A `leaf` request disallows
@@ -31,8 +34,12 @@ export const SUBAGENT_TOOLS = ['Task', 'Agent'];
 export interface AgentRequest {
   prompt: string;
   system?: string;
+  /** Replace the backend's default system prompt or append to it. Default append. */
+  systemMode?: 'append' | 'replace';
   model?: string;
   maxTokens?: number;
+  /** Available built-in tools. An empty list disables them where supported. */
+  tools?: string[];
   /** Tool allowlist, where the backend supports tools (SDK / CLI). */
   allowedTools?: string[];
   cwd?: string;
