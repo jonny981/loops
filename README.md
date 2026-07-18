@@ -28,7 +28,7 @@ npm i @loops-adk/core   # Node >= 20
 
 ## A day's work, as one file
 
-Loops and graphs are not mutually exclusive. Real work isn't a straight line — some steps run once, some iterate until a bar is met — so a node in the graph can be a whole loop, and a loop's body can be a whole graph, at any depth. That combination is the simplest way to model how people actually work, and it's older than it looks: the [structured program theorem](https://en.wikipedia.org/wiki/Structured_program_theorem) (Böhm & Jacopini, 1966) proved that all control flow reduces to sequence, selection, and iteration. The graph carries the first two. The loop carries the third.
+Loops and graphs are not mutually exclusive. Real work isn't a straight line — some steps run once, some iterate until a bar is met — so a node in the graph can be a whole loop, and a loop's body can be a whole graph, at any depth. That combination is the simplest way to model how people actually work, and it's older than it looks: the [structured program theorem](https://en.wikipedia.org/wiki/Structured_program_theorem) (Böhm & Jacopini, 1966) showed that any computable control flow can be built from sequence, selection, and iteration alone. The graph carries the first two. The loop carries the third.
 
 ```ts
 import {
@@ -83,7 +83,7 @@ const issue = dag({
 export default loop({ name: 'engineer', body: issue, until: predicate(backlogEmpty, 'backlog is empty'), max: 20 });
 ```
 
-A high-complexity plan stops the run until a person reads it and resumes with `--ack plan-approval`. Posting to Slack is the agent's own job through its tools — the pipeline just decides when. Full file: [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
+A high-complexity plan stops the run until a person reads it and resumes with `--ack plan-approval`. Posting to Slack is the agent's own job through its tools — the pipeline just decides when. Full file, including the `highComplexity` and `backlogEmpty` conditions: [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
 
 ## The unit
 
@@ -121,7 +121,7 @@ Strip the library to its verbs and three remain. In the theorem, selection and i
 - **Depend** — research before the plan, approval before the build. An edge in the graph.
 - **Judge** — tests, juries, a person's veto. The gate that decides pass or go again.
 
-The theorem also draws the line between `loops` and graph frameworks that allow cycles. A back-edge over shared state is a flowchart jump — `goto`, the thing the theorem retired. Here the graph is always acyclic, and iteration lives in one named construct with its own gate, caps, and stall detection. **Their cycles are `goto`; `loop()` is `while`.** That is not a claim about power — back-edges compute everything `while` does, just as `goto` did. Structured programming's win was reasoning, not capability, and it's the same win here: because the graph never jumps, its shape is knowable before a token is spent — `loops validate` and `assertGraph` exist because of that ([docs/theory.md](docs/theory.md)).
+The theorem also draws the line between `loops` and graph frameworks that allow cycles. A back-edge over shared state is a flowchart jump — `goto`, the thing structured programming retired. Here the graph is always acyclic, and iteration lives in one named construct with its own gate, caps, and stall detection. **Their cycles are `goto`; `loop()` is `while`.** That is not a claim about power — back-edges compute everything `while` does, just as `goto` did. The win was always reasoning, not capability (Dijkstra's argument in *Go To Statement Considered Harmful*, 1968), and it's the same win here: because the graph never jumps, its shape is knowable before a token is spent — `loops validate` and `assertGraph` exist because of that. Turing complete where it must be, decidable where it can be ([docs/theory.md](docs/theory.md)).
 
 One behaviour is deliberately still missing: **preemption**. A person also drops the plan mid-flight when the world changes. A loop whose body picks its next job at runtime (the Tend pattern in [docs/concepts.md](docs/concepts.md)) approximates it; a graph that can be rewritten mid-run is on the [roadmap](#roadmap).
 
