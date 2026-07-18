@@ -4,7 +4,7 @@ The README's claims, with their receipts. Everything here is checkable; nothing 
 
 ## The theorem
 
-The [structured program theorem](https://en.wikipedia.org/wiki/Structured_program_theorem) — Böhm & Jacopini, *"Flow Diagrams, Turing Machines and Languages with Only Two Formation Rules"*, Communications of the ACM 9(5), 1966 — shows that any computable control flow can be built from three structures: sequence, selection, and iteration. It is the charter under structured programming and the argument that retired `goto`.
+The [structured program theorem](https://en.wikipedia.org/wiki/Structured_program_theorem) — Böhm & Jacopini, *"Flow Diagrams, Turing Machines and Languages with Only Two Formation Rules"*, Communications of the ACM 9(5), 1966 — shows that any computable control flow can be built from three structures: sequence, selection, and iteration. The theorem proved the reduction *possible*; the argument that it was *necessary* came two years later, in Dijkstra's [*"Go To Statement Considered Harmful"*](https://en.wikipedia.org/wiki/Considered_harmful) (CACM, 1968): people reason poorly about processes evolving in time, so a program's text must map cleanly onto its behaviour — which arbitrary jumps destroy. The theorem is the license; the letter is the motive. Together they are the charter under structured programming.
 
 Two honest footnotes, for the careful reader:
 
