@@ -79,11 +79,6 @@ export default loop({ name: 'engineer', body: issue, until: predicate(backlogEmp
 
 A high-complexity plan stops the run until a person reads it and resumes with `--ack plan-approval`. Posting to Slack is the agent's own job through its tools — the pipeline just decides when. Full file: [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
 
-```bash
-loops validate examples/engineer.loop.ts   # load it and print its shape; no model calls
-loops run examples/engineer.loop.ts        # live TUI; --no-tui or --json for headless
-```
-
 ## The unit
 
 Every step above is built from the same unit: do the work, check it, repeat until the check passes.
