@@ -232,18 +232,23 @@ loops records <runId> --kind revision # the decision stream, filtered
 
 ## Examples
 
-| Example | Shows |
-| --- | --- |
-| [`simple-poll.loop.ts`](examples/simple-poll.loop.ts) | the smallest loop; offline (`npm run example:poll`) |
-| [`confidence-gate.loop.ts`](examples/confidence-gate.loop.ts) | a command check and a judge together |
-| [`engineer.loop.ts`](examples/engineer.loop.ts) | a day's work: issue → research → plan → approval → build → review → docs → PR, repeated |
-| [`dag-pipeline.loop.ts`](examples/dag-pipeline.loop.ts) | a flow with a loop inside and a jury at the end |
-| [`converge-review.loop.ts`](examples/converge-review.loop.ts) | a review rejection re-running the loop; offline |
-| [`feedback-pipeline.loop.ts`](examples/feedback-pipeline.loop.ts) | sending work back between stages |
-| [`build-service.loop.ts`](examples/build-service.loop.ts) | four engineer loops in one flow, five reviewers, two vendors |
-| [`ship-pr.loop.ts`](examples/ship-pr.loop.ts) | push → PR → gated squash-merge that keeps the reasoning |
-| [`stall-demo.loop.ts`](examples/stall-demo.loop.ts) | stopping a loop that's going nowhere (`npm run example:stall`) |
-| [`feature-dev.ts`](examples/feature-dev.ts) | a reusable flow with its own CLI flags |
+Every example in [`examples/`](examples/) is a runnable definition file:
+
+- [`simple-poll.loop.ts`](examples/simple-poll.loop.ts) — the smallest loop; offline (`npm run example:poll`)
+- [`confidence-gate.loop.ts`](examples/confidence-gate.loop.ts) — a command check and a judge together
+- [`engineer.loop.ts`](examples/engineer.loop.ts) — a day's work: issue → research → plan → approval → build → review → docs → PR, repeated
+- [`dag-pipeline.loop.ts`](examples/dag-pipeline.loop.ts) — a flow with a loop inside and a jury at the end
+- [`converge-review.loop.ts`](examples/converge-review.loop.ts) — a review rejection re-running the loop; offline
+- [`feedback.loop.ts`](examples/feedback.loop.ts) — a reviewer sending work back to an earlier stage; offline
+- [`feedback-pipeline.loop.ts`](examples/feedback-pipeline.loop.ts) — the same kickback in a full pipeline, decisions read back with `loops records`; offline
+- [`build-service.loop.ts`](examples/build-service.loop.ts) — four engineer loops in one flow, five reviewers, two vendors
+- [`ship-pr.loop.ts`](examples/ship-pr.loop.ts) — push → PR → gated squash-merge that keeps the reasoning
+- [`stall-demo.loop.ts`](examples/stall-demo.loop.ts) — stopping a loop that's going nowhere (`npm run example:stall`)
+- [`contracted-agent.loop.ts`](examples/contracted-agent.loop.ts) — a typed agent persona with a feedback contract
+- [`params.loop.ts`](examples/params.loop.ts) — a recipe with its own CLI flags via `defineParams`
+- [`feature-dev.ts`](examples/feature-dev.ts) — a reusable flow wrapped in a Commander CLI
+- [`helm-offline.ts`](examples/helm-offline.ts) — the conversational front end, fully offline (`npm run example:helm`)
+- [`engine-smoke.loop.ts`](examples/engine-smoke.loop.ts) — the one live-engine smoke test
 
 ## Docs
 
