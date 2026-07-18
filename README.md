@@ -14,11 +14,13 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
 </p>
 
-`loops` orchestrates AI agents through real engineering work: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. You write that pipeline once, as code, and it runs unattended — for an afternoon or a whole backlog.
+`loops` orchestrates AI agents through real engineering work: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. You write that flow once, as code — a DAG of steps with loops nested inside — and it runs unattended, for an afternoon or a whole backlog.
 
 You can't make an LLM deterministic, and there is rarely one right answer in software. But the process of building it can be exact: which steps run and in what order, what each must pass, who reviews the work, when a person must step in. `loops` makes the process code — deterministic, repeatable, enforced — and leaves the creativity to the agent inside each step.
 
-The process is what keeps a long run honest. Every step ends at a gate: tests that must pass, judges on other models, juries that must agree, people who approve the risky parts. A failed step gets the evidence and tries again with a clean context, and every decision is written into git — so a run can pause, crash, or hit a rate limit and pick up where it left off. Nothing moves forward on the model's say-so.
+The process is what keeps a long run honest. Every step ends at a gate: tests that must pass, judges on other models, juries that must agree, people who approve the risky parts. A failed step gets the evidence and tries again with a clean context; a run can pause, crash, or hit a rate limit and pick up where it left off. Nothing moves forward on the model's say-so.
+
+Agent memory is git itself. Each step starts fresh and reads the decisions so far from the commit log; when work lands, the reasoning is written back into the commit. No vector store, no database, no extra infrastructure — nothing to sync or go stale.
 
 ```bash
 npm i @loops-adk/core   # Node >= 20
