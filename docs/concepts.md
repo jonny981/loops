@@ -93,7 +93,7 @@ Because `loop()` and `dag()` both return a `Job`, and a `Job` is just
 `(ctx) => Promise<Outcome>`, **dynamic dispatch is a body that selects and invokes
 a sub-Job**, with no special node type. When each dispatch needs its own isolated
 worktree (parallel tickets must not collide), wrap the sub-Job in
-[`isolated()`](../README.md#parallelism-worktrees-and-tournaments): it forks a worktree,
+[`isolated()`](../README.md#parallel-work): it forks a worktree,
 runs the Job, and lands its work back on pass.
 
 The Ledger composes through the nesting via the **land-back merge boundary**, and

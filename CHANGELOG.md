@@ -13,10 +13,10 @@ heading, dated, before the tag is pushed.
 
 ### Changed
 
-- README rewritten as example-first developer docs: a 30-second hero loop,
-  showcase examples for nesting (a DAG containing a loop, a loop containing a
-  DAG), quorum gates, and adversarial review with kickbacks, plus an examples
-  and docs index — at roughly a third of the previous length. The in-depth
+- README rewritten as concise, example-first developer docs: a first loop,
+  nesting examples (a loop inside a DAG, a DAG inside a loop), quorum gates,
+  review with kickbacks, and short reference sections linking into `docs/`
+  and `examples/` — at roughly a quarter of the previous length. The
   Mastra/LangGraph comparison moved to `docs/comparison.md`.
 
 ## [0.10.0] - 2026-07-17
