@@ -121,6 +121,8 @@ Strip the library to its verbs and three remain. In the theorem, selection and i
 - **Depend** — research before the plan, approval before the build. An edge in the graph.
 - **Judge** — tests, juries, a person's veto. The gate that decides pass or go again.
 
+The theorem also draws the line between `loops` and graph frameworks that allow cycles. A back-edge over shared state is a flowchart jump — `goto`, the thing the theorem retired. Here the graph is always acyclic, and iteration lives in one named construct with its own gate, caps, and stall detection. **Their cycles are `goto`; `loop()` is `while`.** And because the graph never jumps, it stays analyzable — `loops validate` and `assertGraph` exist because of that ([docs/theory.md](docs/theory.md)).
+
 One behaviour is deliberately still missing: **preemption**. A person also drops the plan mid-flight when the world changes. A loop whose body picks its next job at runtime (the Tend pattern in [docs/concepts.md](docs/concepts.md)) approximates it; a graph that can be rewritten mid-run is on the [roadmap](#roadmap).
 
 ## Building blocks
