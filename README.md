@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Run an agent in a loop until the work is actually done.</strong>
+  <strong>Agent pipelines that repeat until the work is actually done.</strong>
 </p>
 
 <p align="center">
@@ -14,46 +14,15 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
 </p>
 
-`loops` turns real, long-running engineering work into code an agent can run: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. Each step runs with a fresh context and a check that must pass before the flow moves on. Nothing moves forward on the model's say-so.
+`loops` builds agent orchestration that mirrors real engineering work: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. The structure is the point: research feeds the plan, the plan gates the build, reviewers send work back, people approve the risky parts, and the whole pipeline repeats. Nothing moves forward on the model's say-so.
 
 ```bash
 npm i @loops-adk/core   # Node >= 20
 ```
 
-## A first loop
-
-```ts
-import { loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
-
-export default loop({
-  name: 'build-feature',
-  max: 20,
-  body: agentJob({
-    prompt: (c) => `Iteration ${c.iteration}: make concrete progress on TASK.md.`,
-    ground: true, // read the commit log and notes before working
-  }),
-  until: [
-    commandSucceeds('npm', ['test']),                                    // the truth
-    agentCheck({ question: 'Does it match TASK.md?', threshold: 0.85 }), // the intent
-  ],
-  commit: { subject: 'feat: TASK.md' }, // one commit when it's done, reasoning included
-});
-```
-
-```bash
-loops validate feature.loop.ts   # load it and print its shape; no model calls
-loops run feature.loop.ts        # live TUI; --no-tui or --json for headless
-```
-
-Three rules hold everywhere:
-
-- **"Done" is checked, not claimed.** The tests must pass, and a separate judge reviews the result. The model never grades its own work.
-- **Every attempt starts fresh.** Progress lives in files and commits, not a growing chat history.
-- **Git is the memory.** Decisions are written into commit messages and read back on the next attempt.
-
 ## A day's work, as one file
 
-The real value is the whole flow, not one loop. A loop can sit inside a step of a bigger flow, and the whole flow can sit inside a loop — everything is the same kind of `Job`.
+A pipeline of steps (`dag`) is a `Job`; a loop is a `Job`; each nests inside the other, so a whole working cadence fits in one file.
 
 ```ts
 import {
@@ -108,7 +77,40 @@ const issue = dag({
 export default loop({ name: 'engineer', body: issue, until: predicate(backlogEmpty, 'backlog is empty'), max: 20 });
 ```
 
-A high-complexity plan stops the run until a person reads it and resumes with `--ack plan-approval`. Posting to Slack is the agent's own job through its tools — the loop just decides when. Full file: [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
+A high-complexity plan stops the run until a person reads it and resumes with `--ack plan-approval`. Posting to Slack is the agent's own job through its tools — the pipeline just decides when. Full file: [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
+
+```bash
+loops validate examples/engineer.loop.ts   # load it and print its shape; no model calls
+loops run examples/engineer.loop.ts        # live TUI; --no-tui or --json for headless
+```
+
+## The unit
+
+Every step above is built from the same unit: do the work, check it, repeat until the check passes.
+
+```ts
+import { loop, agentJob, commandSucceeds, agentCheck } from '@loops-adk/core';
+
+export default loop({
+  name: 'build-feature',
+  max: 20,
+  body: agentJob({
+    prompt: (c) => `Iteration ${c.iteration}: make concrete progress on TASK.md.`,
+    ground: true, // read the commit log and notes before working
+  }),
+  until: [
+    commandSucceeds('npm', ['test']),                                    // the truth
+    agentCheck({ question: 'Does it match TASK.md?', threshold: 0.85 }), // the intent
+  ],
+  commit: { subject: 'feat: TASK.md' }, // one commit when it's done, reasoning included
+});
+```
+
+Three rules hold everywhere:
+
+- **"Done" is checked, not claimed.** The tests must pass, and a separate judge reviews the result. The model never grades its own work.
+- **Every attempt starts fresh.** Progress lives in files and commits, not a growing chat history.
+- **Git is the memory.** Decisions are written into commit messages and read back on the next attempt.
 
 ## Building blocks
 

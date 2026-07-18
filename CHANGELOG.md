@@ -22,11 +22,11 @@ heading, dated, before the tag is pushed.
 ### Changed
 
 - README rewritten as concise, example-first developer docs: it opens on the
-  real use case (a full issue-to-PR flow), shows a first loop and the
-  end-to-end engineer flow, then covers the rest as one-snippet building
-  blocks (juries, human gates, kickbacks, parallel worktrees, memory,
-  budgets) — at under a fifth of the previous length. The Mastra/LangGraph
-  comparison moved to `docs/comparison.md`.
+  real use case — a full issue-to-PR pipeline, repeated over a backlog —
+  then shows the single-loop unit it is built from, and covers the rest as
+  one-snippet building blocks (juries, human gates, kickbacks, parallel
+  worktrees, memory, budgets) — at under a fifth of the previous length.
+  The Mastra/LangGraph comparison moved to `docs/comparison.md`.
 
 ## [0.10.0] - 2026-07-17
 
