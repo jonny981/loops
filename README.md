@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Deterministic pipelines for non-deterministic agents.</strong>
+  <strong>A node can be a loop. A loop can be a node.</strong>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@ npm i @loops-adk/core   # Node >= 20
 
 ## A day's work, as one file
 
-A pipeline of steps (`dag`) is a `Job`; a loop is a `Job`; each nests inside the other, so a whole working cadence fits in one file.
+Loops and graphs are not mutually exclusive. Real work isn't a straight line — some steps run once, some iterate until a bar is met — so a node in the graph can be a whole loop, and a loop's body can be a whole graph, at any depth. That combination is the simplest way to model how people actually work.
 
 ```ts
 import {
