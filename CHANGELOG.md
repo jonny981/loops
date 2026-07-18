@@ -11,6 +11,14 @@ heading, dated, before the tag is pushed.
 
 ## [Unreleased]
 
+### Added
+
+- `examples/engineer.loop.ts` — an engineer, end to end: a Tend loop that
+  picks up the next ready GitHub issue and works it through research, plan,
+  a complexity-gated human approval, a build loop with an adversarial review
+  battery, docs, and a PR, then picks up the next issue. Showcased in the
+  README.
+
 ### Changed
 
 - README rewritten as concise, example-first developer docs: a first loop,

@@ -142,6 +142,45 @@ export default loop({
 
 The adversarial seat runs on a different vendor's model, so the worker and its reviewer don't share blind spots. In a DAG, `revisionRequest({ target, findings })` sends work back to a named upstream node and re-runs the affected subgraph, bounded by `maxKickbacks`.
 
+## An engineer, end to end
+
+The pieces compose into the shape of an engineer's day: pick up an issue, research, plan, pause for a person when the plan is risky, build against a review battery, update the docs, raise the PR, tell the team — then pick up the next issue.
+
+```ts
+const issue = dag({
+  name: 'issue',
+  nodes: {
+    pickup:   agentJob({ label: 'pickup', prompt: 'Pick the next ready issue; branch; write ISSUE.md with acceptance criteria and a complexity call.' }),
+    research: { needs: ['pickup'], job: agentJob({ label: 'research', prompt: 'Explore the code this touches; record findings in NOTES.md.', ground: true }) },
+    plan:     { needs: ['research'], job: agentJob({ label: 'plan', prompt: 'Write PLAN.md: increments, tests, risks.', ground: true }) },
+
+    approval: {
+      needs: ['plan'],
+      when: highComplexity, // low-complexity plans skip straight through
+      job: humanGate({ name: 'plan-approval', prompt: 'Read PLAN.md, then approve this plan.' }),
+    },
+
+    build: { needs: ['approval'], job: build }, // the loop from "Review": lint + tests, then the battery
+    docs:  { needs: ['build'], job: agentJob({ label: 'docs', prompt: 'Update docs and changelog.', ground: true }) },
+    ship:  { needs: ['docs'], job: pullRequestJob({ base: 'main' }) },
+    notify: {
+      needs: ['ship'],
+      optional: true, // a failed notification never blocks the work
+      job: agentJob({ label: 'notify', prompt: 'Post a one-line PR summary to the team channel.' }),
+    },
+  },
+});
+
+export default loop({
+  name: 'engineer',
+  body: issue,
+  until: predicate(backlogEmpty, 'the ready backlog is empty'),
+  max: 20,
+});
+```
+
+An unacknowledged gate pauses the run (exit 75); resume with `--ack plan-approval` once the plan is read. Posting to Slack is the agent's own job through its tools — the loop only decides when. The full file, including the `highComplexity` and `backlogEmpty` conditions, is [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
+
 ## Conditions
 
 `start` / `until` / `stopOn` take one condition or many, mixing deterministic predicates and agent judges. Arrays are AND; wrap in `any(...)` for OR. Prefer the mix: a model's self-reported confidence guards *intent*, a deterministic check is the *truth*.
@@ -254,6 +293,7 @@ loops records <runId> --kind revision # the decision stream, filtered
 | [`dag-pipeline.loop.ts`](examples/dag-pipeline.loop.ts) | a DAG with a loop node and a quorum gate |
 | [`converge-review.loop.ts`](examples/converge-review.loop.ts) | a review rejection re-entering the loop; offline |
 | [`feedback-pipeline.loop.ts`](examples/feedback-pipeline.loop.ts) | kickback between DAG stages |
+| [`engineer.loop.ts`](examples/engineer.loop.ts) | an engineer, end to end: issue → research → plan → approval → build → review → docs → PR, repeated |
 | [`build-service.loop.ts`](examples/build-service.loop.ts) | four engineer loops in a DAG, five-lens review, two vendors |
 | [`ship-pr.loop.ts`](examples/ship-pr.loop.ts) | push → PR → gated squash-merge that preserves the Ledger |
 | [`stall-demo.loop.ts`](examples/stall-demo.loop.ts) | no-progress detection (`npm run example:stall`) |
