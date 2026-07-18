@@ -115,7 +115,7 @@ Three rules hold everywhere:
 
 ## Iterate, depend, judge
 
-Strip the library to its verbs and three remain — the theorem's three, with judgment standing in for selection. In a classical program, selection tests a predicate the machine can evaluate. In agent work, whether the step is *done* is itself the contested question — so selection becomes a gate. That triple is how `loops` models a working engineer:
+Strip the library to its verbs and three remain. In the theorem, selection and iteration both run on predicates the machine evaluates for free. In agent work, the predicate — is it done, is it safe, is it what was asked — is itself the contested question, so `loops` replaces the predicate with a gate. Judgment isn't a fourth structure; it's the predicate made honest. That triple is how the library models a working engineer:
 
 - **Iterate** — drafts, retries, rework. A loop with a bar to clear.
 - **Depend** — research before the plan, approval before the build. An edge in the graph.
@@ -291,6 +291,7 @@ Every example in [`examples/`](examples/) is a runnable definition file:
 - [docs/concepts.md](docs/concepts.md) — the memory model and the three loop shapes (Converge, Sweep, Tend)
 - [docs/patterns.md](docs/patterns.md) — copy-paste recipes: feedback, PR shipping, guard rails
 - [docs/comparison.md](docs/comparison.md) — vs. Mastra and LangGraph
+- [docs/theory.md](docs/theory.md) — the theorem, Turing completeness, and why the graph stays decidable
 - [docs/helm.md](docs/helm.md) — the conversational front end
 - [docs/semantic-records.md](docs/semantic-records.md) — the decision-stream contract behind `loops records`
 - [skills/author-loop/SKILL.md](skills/author-loop/SKILL.md) — the guide an agent reads to write a loop

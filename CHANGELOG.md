@@ -30,9 +30,12 @@ heading, dated, before the tag is pushed.
 - The library's philosophy is stated as iterate / depend / judge, grounded
   in the structured program theorem (Böhm & Jacopini, 1966): the graph
   carries sequence and selection, the loop carries iteration, and the gate
-  stands in for selection because "is it done" is the contested question in
+  replaces the predicate because "is it done" is the contested question in
   agent work. Preemption is named as the deliberate fourth verb on the
-  roadmap. Framing added to the README and `CLAUDE.md`.
+  roadmap. Framing added to the README and `CLAUDE.md`; `docs/theory.md`
+  carries the receipts — the theorem's honest caveats, structured cycles
+  vs back-edges (`while`, not `goto`), Turing completeness at the
+  combinator level, and why the graph layer stays decidable.
 
 ## [0.10.0] - 2026-07-17
 
