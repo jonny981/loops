@@ -28,7 +28,7 @@ npm i @loops-adk/core   # Node >= 20
 
 ## A day's work, as one file
 
-Loops and graphs are not mutually exclusive. Real work isn't a straight line — some steps run once, some iterate until a bar is met — so a node in the graph can be a whole loop, and a loop's body can be a whole graph, at any depth. That combination is the simplest way to model how people actually work.
+Loops and graphs are not mutually exclusive. Real work isn't a straight line — some steps run once, some iterate until a bar is met — so a node in the graph can be a whole loop, and a loop's body can be a whole graph, at any depth. That combination is the simplest way to model how people actually work, and it's older than it looks: the [structured program theorem](https://en.wikipedia.org/wiki/Structured_program_theorem) (Böhm & Jacopini, 1966) proved that all control flow reduces to sequence, selection, and iteration. The graph carries the first two. The loop carries the third.
 
 ```ts
 import {
@@ -112,6 +112,16 @@ Three rules hold everywhere:
 - **"Done" is checked, not claimed.** The tests must pass, and a separate judge reviews the result. The model never grades its own work.
 - **Every attempt starts fresh.** Progress lives in files and commits, not a growing chat history.
 - **Git is the memory.** Decisions are written into commit messages and read back on the next attempt.
+
+## Iterate, depend, judge
+
+Strip the library to its verbs and three remain — the theorem's three, with judgment standing in for selection. In a classical program, selection tests a predicate the machine can evaluate. In agent work, whether the step is *done* is itself the contested question — so selection becomes a gate. That triple is how `loops` models a working engineer:
+
+- **Iterate** — drafts, retries, rework. A loop with a bar to clear.
+- **Depend** — research before the plan, approval before the build. An edge in the graph.
+- **Judge** — tests, juries, a person's veto. The gate that decides pass or go again.
+
+One behaviour is deliberately still missing: **preemption**. A person also drops the plan mid-flight when the world changes. A loop whose body picks its next job at runtime (the Tend pattern in [docs/concepts.md](docs/concepts.md)) approximates it; a graph that can be rewritten mid-run is on the [roadmap](#roadmap).
 
 ## Building blocks
 
@@ -284,6 +294,14 @@ Every example in [`examples/`](examples/) is a runnable definition file:
 - [docs/helm.md](docs/helm.md) — the conversational front end
 - [docs/semantic-records.md](docs/semantic-records.md) — the decision-stream contract behind `loops records`
 - [skills/author-loop/SKILL.md](skills/author-loop/SKILL.md) — the guide an agent reads to write a loop
+
+## Roadmap
+
+- **Preemption** — the fourth verb. Pause a running graph, rewrite it on new information, resume. Until then, the Tend pattern (a loop that picks its next job at runtime) is the approximation.
+- Out-of-process control: pause, abort, and kick back a running loop from outside — the substrate preemption needs
+- `cost per accepted change` as a first-class reported metric
+- Calibration helpers for agent judges
+- More engine adapters (OpenAI, local models)
 
 ## Develop
 

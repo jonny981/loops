@@ -27,6 +27,12 @@ heading, dated, before the tag is pushed.
   one-snippet building blocks (juries, human gates, kickbacks, parallel
   worktrees, memory, budgets) — at under a fifth of the previous length.
   The Mastra/LangGraph comparison moved to `docs/comparison.md`.
+- The library's philosophy is stated as iterate / depend / judge, grounded
+  in the structured program theorem (Böhm & Jacopini, 1966): the graph
+  carries sequence and selection, the loop carries iteration, and the gate
+  stands in for selection because "is it done" is the contested question in
+  agent work. Preemption is named as the deliberate fourth verb on the
+  roadmap. Framing added to the README and `CLAUDE.md`.
 
 ## [0.10.0] - 2026-07-17
 
