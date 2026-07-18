@@ -169,6 +169,29 @@ agentJob({ prompt, ground: true })  // read the notes and commit log before work
 commit: { subject: 'feat: search' } // on success, write the why into the commit body
 ```
 
+**Ground steps in the company knowledge base, alongside the git log.** Two memories feed each step: a small agent curates the exact business context from the knowledge base, and git already carries the implementation history — the decisions, the constraints, the why:
+
+```ts
+// A cheap agent pulls just the relevant business context…
+context: agentJob({
+  label: 'context',
+  prompt: 'Query the company knowledge base (`qmd query …`) for everything relevant to ISSUE.md. Write a short brief to BRIEF.md.',
+  model: 'haiku',
+}),
+
+// …and later steps ground on both: the curated brief and the commit history.
+implement: {
+  needs: ['context'],
+  job: agentJob({
+    prompt: 'Implement the next increment from PLAN.md.',
+    ground: {
+      sources: ['BRIEF.md', 'ISSUE.md'],                              // business context, declared
+      curate: { engine: 'anthropic-api', model: 'claude-haiku-4-5' }, // one cheap turn keeps only what helps
+    },
+  }),
+},
+```
+
 **Stop runaway loops.**
 
 ```ts
