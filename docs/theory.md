@@ -19,6 +19,8 @@ Graph agent frameworks put cycles *in* the graph: an edge loops back over shared
 
 `loops` makes the opposite choice. The graph is acyclic, always. Iteration lives in one named construct — `loop()` — which arrives with its gate (`until`), its caps (`max`, `maxReviewRestarts`), its meter (`budget`), and its stall detector (`noProgress`). Cycles are `while`, not `goto`: declared, bounded, and inspectable.
 
+Be precise about the kind of win this is: not capability. A graph with back-edges is Turing complete; so was `goto`. The structured program theorem never gave programmers new power — it gave them programs that people and tools could reason about, and that was enough to retire flowcharts. The claim here is the same one, re-run: the same computations, but the shape of the run is knowable before it starts.
+
 ## Turing completeness
 
 Yes — on three levels, and the asymmetry is the design.
