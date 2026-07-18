@@ -22,6 +22,8 @@ The process is what keeps a long run honest. Every step ends at a gate: tests th
 
 Agent memory is git itself. Each step starts fresh and reads the decisions so far from the commit log; when work lands, the reasoning is written back into the commit. No vector store, no database, no extra infrastructure — nothing to sync or go stale.
 
+**Execution is cheap. Convergence is expensive.** — [*Convergence Count*](https://x.com/Jonny9811/status/2024472805543137347) (February 2026), the essay `loops` grew from.
+
 ```bash
 npm i @loops-adk/core   # Node >= 20
 ```
@@ -302,7 +304,7 @@ Every example in [`examples/`](examples/) is a runnable definition file:
 
 - **Preemption** — the fourth verb. Pause a running graph, rewrite it on new information, resume. Until then, the Tend pattern (a loop that picks its next job at runtime) is the approximation.
 - Out-of-process control: pause, abort, and kick back a running loop from outside — the substrate preemption needs
-- `cost per accepted change` as a first-class reported metric
+- `convergence count` (turns from intent to outcome) and `cost per accepted change` as first-class reported metrics
 - Calibration helpers for agent judges
 - More engine adapters (OpenAI, local models)
 

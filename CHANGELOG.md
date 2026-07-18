@@ -36,6 +36,10 @@ heading, dated, before the tag is pushed.
   carries the receipts — the theorem's honest caveats, structured cycles
   vs back-edges (`while`, not `goto`), Turing completeness at the
   combinator level, and why the graph layer stays decidable.
+- The README and theory notes cite the project's origin essay,
+  *Convergence Count* (February 2026); the roadmap names `convergence
+  count` as a first-class reported metric beside `cost per accepted
+  change`.
 
 ## [0.10.0] - 2026-07-17
 

@@ -2,6 +2,10 @@
 
 The README's claims, with their receipts. Everything here is checkable; nothing here is required to use the library.
 
+## Origin
+
+The convergence framing predates the code. [*Convergence Count*](https://x.com/Jonny9811/status/2024472805543137347) (February 2026) named the number this library exists to reduce: how many loops from intent to outcome before the thing you built matches the thing you meant. Its thesis — execution is cheap, convergence is expensive, and the fix is process, not inspection — comes from the author's years as a Lean Six Sigma engineer on manufacturing floors. `loops` is that essay, implemented: the gate is the specification of "how you'll know it's right," the review battery is humans and judges reviewing outcomes instead of steps, and the iteration count each run reports is the convergence count itself.
+
 ## The theorem
 
 The [structured program theorem](https://en.wikipedia.org/wiki/Structured_program_theorem) — Böhm & Jacopini, *"Flow Diagrams, Turing Machines and Languages with Only Two Formation Rules"*, Communications of the ACM 9(5), 1966 — shows that any computable control flow can be built from three structures: sequence, selection, and iteration. The theorem proved the reduction *possible*; the argument that it was *necessary* came two years later, in Dijkstra's [*"Go To Statement Considered Harmful"*](https://en.wikipedia.org/wiki/Considered_harmful) (CACM, 1968): people reason poorly about processes evolving in time, so a program's text must map cleanly onto its behaviour — which arbitrary jumps destroy. The theorem is the license; the letter is the motive. Together they are the charter under structured programming.
