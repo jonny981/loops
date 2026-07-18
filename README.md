@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
 </p>
 
-`loops` orchestrates AI agents through real engineering work: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. You write that flow once, as code — a DAG of steps with loops nested inside — and it runs unattended, for an afternoon or a whole backlog.
+`loops` orchestrates AI agents through real engineering work: pick up an issue, research it, write a plan a person can veto, build until the tests really pass, rework until the reviewers are satisfied, open the PR — then pick up the next issue. You write that discipline once, as code — a DAG of steps with loops nested inside — and it runs unattended, for an afternoon or a whole backlog.
 
 You can't make an LLM deterministic, and there is rarely one right answer in software. But the process of building it can be exact: which steps run and in what order, what each must pass, who reviews the work, when a person must step in. `loops` makes the process code — deterministic, repeatable, enforced — and leaves the creativity to the agent inside each step.
 
