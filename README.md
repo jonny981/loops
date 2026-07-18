@@ -14,7 +14,11 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
 </p>
 
-`loops` builds agent orchestration that mirrors real engineering work: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. The structure is the point: research feeds the plan, the plan gates the build, reviewers send work back, people approve the risky parts, and the whole pipeline repeats. Nothing moves forward on the model's say-so.
+`loops` orchestrates AI agents through real engineering work: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. You write that pipeline once, as code, and it runs unattended — for an afternoon or a whole backlog.
+
+It stays honest over a long run because nothing rests on trust. Every step ends at a gate: tests that must pass, judges on other models, juries that must agree, people who approve the risky parts. A failed step gets the evidence and tries again with a clean context, and every decision is written into git — so a run can pause for approval, crash, or hit a rate limit, and pick up where it left off without losing the reasoning. Nothing moves forward on the model's say-so.
+
+There are only two shapes — a loop and a pipeline — and each nests inside the other. The same pieces build a single retry loop or a team of engineers with its own review bench.
 
 ```bash
 npm i @loops-adk/core   # Node >= 20
