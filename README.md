@@ -14,9 +14,7 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license: MIT">
 </p>
 
-`loops` is a library for convergence loops: an agent does a bit of work in a fresh context, a gate you define checks the result, and if it isn't done, it goes again. A loop is a `Job`; so is a DAG; they nest into workflows of any shape. Progress lives in git, not the transcript.
-
-## Install
+`loops` turns real, long-running engineering work into code an agent can run: pick up an issue, research it, write a plan, build until the tests pass, get reviewed, open a PR — then pick up the next one. Each step runs with a fresh context and a check that must pass before the flow moves on. Nothing moves forward on the model's say-so.
 
 ```bash
 npm i @loops-adk/core   # Node >= 20
@@ -32,13 +30,13 @@ export default loop({
   max: 20,
   body: agentJob({
     prompt: (c) => `Iteration ${c.iteration}: make concrete progress on TASK.md.`,
-    ground: true, // read the commit log and scratch files before working
+    ground: true, // read the commit log and notes before working
   }),
   until: [
-    commandSucceeds('npm', ['test']),                                    // ground truth
-    agentCheck({ question: 'Does it match TASK.md?', threshold: 0.85 }), // intent
+    commandSucceeds('npm', ['test']),                                    // the truth
+    agentCheck({ question: 'Does it match TASK.md?', threshold: 0.85 }), // the intent
   ],
-  commit: { subject: 'feat: TASK.md' }, // one milestone commit on convergence
+  commit: { subject: 'feat: TASK.md' }, // one commit when it's done, reasoning included
 });
 ```
 
@@ -47,163 +45,153 @@ loops validate feature.loop.ts   # load it and print its shape; no model calls
 loops run feature.loop.ts        # live TUI; --no-tui or --json for headless
 ```
 
-Three principles run through the library:
+Three rules hold everywhere:
 
-- **The gate is real.** A deterministic check (the tests pass) pairs with a separate judge in its own context. The model that did the work never grades it.
-- **Every turn starts fresh.** Progress accumulates in files and commits, not the transcript, so a long run never rots.
-- **Git is the memory.** Decisions land in commit bodies as work converges and are read back before the next turn. Nothing to embed, index, or sync.
+- **"Done" is checked, not claimed.** The tests must pass, and a separate judge reviews the result. The model never grades its own work.
+- **Every attempt starts fresh.** Progress lives in files and commits, not a growing chat history.
+- **Git is the memory.** Decisions are written into commit messages and read back on the next attempt.
 
-## Composition
+## A day's work, as one file
 
-`loop()` returns a `Job`. So does `dag()`. Anything that expects a `Job` accepts either, so loops and DAGs nest both ways. Runnable versions of the examples below live in [`examples/`](examples/).
-
-### A loop inside a DAG
+The real value is the whole flow, not one loop. A loop can sit inside a step of a bigger flow, and the whole flow can sit inside a loop — everything is the same kind of `Job`.
 
 ```ts
-import { dag, loop, agentJob, agentCheck, commandSucceeds, quorum, gateJob } from '@loops-adk/core';
+import {
+  loop, dag, agentJob, agentCheck, commandSucceeds, predicate,
+  humanGate, reviewPanel, pullRequestJob,
+} from '@loops-adk/core';
 
-export default dag({
-  name: 'ship-feature',
-  nodes: {
-    research: agentJob({ label: 'research', prompt: 'Research the task; write findings to NOTES.md.' }),
-
-    implement: {
-      needs: ['research'],
-      job: loop({ // a node that iterates until its own gate clears
-        name: 'implement',
-        max: 10,
-        body: agentJob({ prompt: (c) => `Implement increment ${c.iteration} from NOTES.md.` }),
-        until: [
-          commandSucceeds('npm', ['test']),
-          agentCheck({ question: 'Is every increment in NOTES.md implemented?', threshold: 0.85 }),
-        ],
-      }),
-    },
-
-    review: {
-      needs: ['implement'],
-      job: gateJob('review', quorum(2, // two of three independent verdicts
-        agentCheck({ question: 'Is it correct and complete?', model: 'opus' }),
-        agentCheck({ question: 'Would this pass a strict code review?', model: 'sonnet' }),
-        agentCheck({ question: 'What breaks?', engine: 'codex' }),
-      )),
-    },
-  },
-});
-```
-
-### A DAG inside a loop
-
-The body of a loop can be a pipeline. Each iteration runs it again, with a fresh context, until the gate clears.
-
-```ts
-import { loop, sequence, agentJob, gateJob, commandSucceeds, agentCheck } from '@loops-adk/core';
-
-export default loop({
-  name: 'clear-release-blockers',
-  max: 6,
-  body: sequence('attempt',
-    agentJob({ label: 'triage', prompt: 'Pick the highest-impact open blocker in TRIAGE.md.' }),
-    agentJob({ label: 'fix', prompt: 'Fix it. Small diff, with a test.', ground: true }),
-    gateJob('build', commandSucceeds('npm', ['run', 'build'])),
-  ),
-  until: [
-    commandSucceeds('npm', ['test']),
-    agentCheck({ question: 'Is TRIAGE.md free of release blockers?', threshold: 0.9 }),
-  ],
-  commit: { subject: 'fix: release blockers' },
-});
-```
-
-### Review
-
-A `review` runs once the gate is met. A rejection re-enters the loop, and the findings arrive in the next iteration's prompt.
-
-```ts
-import { loop, agentJob, agentCheck, commandSucceeds, reviewPanel } from '@loops-adk/core';
-
-const review = reviewPanel({
-  label: 'ship-review',
-  reviewers: [
-    { name: 'adversarial', review: agentCheck({ question: 'Challenge the design. What breaks?', engine: 'codex' }) },
-    { name: 'security', review: agentCheck({ question: 'Is it safe?', model: 'opus' }) },
-    { name: 'simplicity', review: agentCheck({ question: 'Is it simple?', model: 'haiku' }) },
-  ],
+// Build until lint and tests pass, then face the reviewers.
+// A rejection re-runs the loop with their findings in the prompt.
+const build = loop({
+  name: 'build',
+  max: 10,
+  body: agentJob({
+    prompt: 'Implement the next increment from PLAN.md. Small steps, with tests.',
+    ground: true,          // read the plan, notes, and commit log first
+    consumeFeedback: true, // review findings land here
+  }),
+  until: [commandSucceeds('npm', ['run', 'lint']), commandSucceeds('npm', ['test'])],
+  review: reviewPanel({
+    label: 'review',
+    reviewers: [
+      { name: 'adversarial', review: agentCheck({ question: 'What breaks?', engine: 'codex' }) }, // a different vendor
+      { name: 'security', review: agentCheck({ question: 'Is it safe?', model: 'opus' }) },
+      { name: 'completeness', review: agentCheck({ question: 'Is every acceptance criterion met?', model: 'sonnet' }) },
+    ],
+  }),
+  commit: true,
 });
 
-export default loop({
-  name: 'build-and-review',
-  max: 8,
-  body: agentJob({ prompt: 'Implement TASK.md.', consumeFeedback: true }), // findings land here
-  until: commandSucceeds('npm', ['test']),
-  review,
-});
-```
-
-The adversarial seat runs on a different vendor's model, so the worker and its reviewer don't share blind spots. In a DAG, `revisionRequest({ target, findings })` sends work back to a named upstream node and re-runs the affected subgraph, bounded by `maxKickbacks`.
-
-## An engineer, end to end
-
-The pieces compose into the shape of an engineer's day: pick up an issue, research, plan, pause for a person when the plan is risky, build against a review battery, update the docs, raise the PR, tell the team — then pick up the next issue.
-
-```ts
+// One issue, worked end to end.
 const issue = dag({
   name: 'issue',
   nodes: {
     pickup:   agentJob({ label: 'pickup', prompt: 'Pick the next ready issue; branch; write ISSUE.md with acceptance criteria and a complexity call.' }),
-    research: { needs: ['pickup'], job: agentJob({ label: 'research', prompt: 'Explore the code this touches; record findings in NOTES.md.', ground: true }) },
+    research: { needs: ['pickup'], job: agentJob({ label: 'research', prompt: 'Explore the code this touches; write NOTES.md.', ground: true }) },
     plan:     { needs: ['research'], job: agentJob({ label: 'plan', prompt: 'Write PLAN.md: increments, tests, risks.', ground: true }) },
 
     approval: {
       needs: ['plan'],
-      when: highComplexity, // low-complexity plans skip straight through
-      job: humanGate({ name: 'plan-approval', prompt: 'Read PLAN.md, then approve this plan.' }),
+      when: highComplexity, // simple plans skip straight through
+      job: humanGate({ name: 'plan-approval', prompt: 'Read PLAN.md, then approve.' }),
     },
 
-    build: { needs: ['approval'], job: build }, // the loop from "Review": lint + tests, then the battery
-    docs:  { needs: ['build'], job: agentJob({ label: 'docs', prompt: 'Update docs and changelog.', ground: true }) },
-    ship:  { needs: ['docs'], job: pullRequestJob({ base: 'main' }) },
-    notify: {
-      needs: ['ship'],
-      optional: true, // a failed notification never blocks the work
-      job: agentJob({ label: 'notify', prompt: 'Post a one-line PR summary to the team channel.' }),
-    },
+    build:  { needs: ['approval'], job: build },
+    docs:   { needs: ['build'], job: agentJob({ label: 'docs', prompt: 'Update docs and changelog.', ground: true }) },
+    ship:   { needs: ['docs'], job: pullRequestJob({ base: 'main' }) },
+    notify: { needs: ['ship'], optional: true, job: agentJob({ label: 'notify', prompt: 'Post a one-line PR summary to the team channel.' }) },
   },
 });
 
-export default loop({
-  name: 'engineer',
-  body: issue,
-  until: predicate(backlogEmpty, 'the ready backlog is empty'),
-  max: 20,
-});
+// Keep going until the backlog is empty.
+export default loop({ name: 'engineer', body: issue, until: predicate(backlogEmpty, 'backlog is empty'), max: 20 });
 ```
 
-An unacknowledged gate pauses the run (exit 75); resume with `--ack plan-approval` once the plan is read. Posting to Slack is the agent's own job through its tools — the loop only decides when. The full file, including the `highComplexity` and `backlogEmpty` conditions, is [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
+A high-complexity plan stops the run until a person reads it and resumes with `--ack plan-approval`. Posting to Slack is the agent's own job through its tools — the loop just decides when. Full file: [`examples/engineer.loop.ts`](examples/engineer.loop.ts).
 
-## Conditions
+## Building blocks
 
-`start` / `until` / `stopOn` take one condition or many, mixing deterministic predicates and agent judges. Arrays are AND; wrap in `any(...)` for OR. Prefer the mix: a model's self-reported confidence guards *intent*, a deterministic check is the *truth*.
+**Check more than one thing.** An array means all of them must pass:
 
-- **Deterministic** — `commandSucceeds`, `predicate`, `all` / `any` / `not`
-- **Judges** — `agentCheck` (with `dimensions`, scored on the geometric mean so one weak dimension drags the verdict down) and `quorum(k, ...judges)`. A missing confidence scores as 0; the gate fails closed.
-- **Guards** — `ratchet` (a metric may only improve), `writeScope` (changes stay in declared lanes), `sampled` (run an expensive judge on a deterministic sample of iterations). No model calls. Recipes in [docs/patterns.md](docs/patterns.md#hardening-gates--keep-the-loop-honest-without-spending-a-model-call).
+```ts
+until: [
+  commandSucceeds('npm', ['test']),                 // the truth
+  agentCheck({ question: 'Ready to ship?', threshold: 0.85 }), // the intent
+]
+```
 
-A failing gate briefs the next attempt: its evidence (failing test output, a judge's findings) arrives in the next iteration as `ctx.lastGate`, so a fresh context reads why it failed instead of rediscovering it.
+**Ask a jury, not a judge.**
+
+```ts
+quorum(2, // any 2 of 3 must agree
+  agentCheck({ question: 'Is it correct?', model: 'opus' }),
+  agentCheck({ question: 'Would this pass code review?', model: 'sonnet' }),
+  agentCheck({ question: 'What breaks?', engine: 'codex' }),
+)
+```
+
+**Show the failure to the next attempt.** A failed check hands over its evidence — test output, a judge's findings — so the next attempt fixes instead of rediscovering:
+
+```ts
+prompt: (c) => c.lastGate?.met === false
+  ? `The gate failed:\n${c.lastGate.output}\n\nFix exactly that.`
+  : 'Implement the feature in TASK.md.',
+```
+
+**Pause for a person.**
+
+```ts
+humanGate({ name: 'prod-approval', prompt: 'Review the staging deploy, then approve.' })
+// the run stops (exit 75) until: loops run … --resume … --ack prod-approval
+```
+
+**Send work back.** A reviewer in a dag can return work to an earlier step; that step and everything after it run again:
+
+```ts
+revisionRequest({ target: 'implement', findings })
+```
+
+**Work in parallel without collisions.** Each writer gets its own git branch, merged back on pass:
+
+```ts
+dag({ name: 'team', isolation: 'worktree', nodes: { server, web, integrate } })
+tournament({ name: 'best-of-3', n: 3, candidate, judge }) // try 3 approaches, keep the winner
+```
+
+**Remember between attempts.**
+
+```ts
+agentJob({ prompt, ground: true })  // read the notes and commit log before working
+commit: { subject: 'feat: search' } // on success, write the why into the commit body
+```
+
+**Stop runaway loops.**
+
+```ts
+loop({ max: 50, noProgress: 3 })       // cap attempts; stop after 3 attempts that change nothing
+await run(job, { budget: 2_000_000 })  // cap tokens for the whole run
+```
+
+**Test the running thing.** An `Environment` brings up a local stack or a preview deploy, and its variables reach the checks:
+
+```ts
+await run(job, { environment: dockerStack }) // gates now see BASE_URL of a live stack
+```
 
 ## Engines
 
-The loop only touches a one-method `Engine` interface, so any model can run any role — a reviewer on a different model than the worker.
+Any model can fill any role — a worker on one model, its reviewer on another.
 
 | name            | backend                          | notes                                             |
 | --------------- | -------------------------------- | ------------------------------------------------- |
 | `claude-cli`    | `claude` subprocess              | uses host Claude auth, no key                     |
 | `agent-sdk`     | `@anthropic-ai/claude-agent-sdk` | fresh `query()` per call                          |
-| `anthropic-api` | `@anthropic-ai/sdk`              | token streaming; cheapest for judges; needs a key |
+| `anthropic-api` | `@anthropic-ai/sdk`              | cheapest for judges; needs a key                  |
 | `codex`         | `codex exec` subprocess          | a different vendor behind the same interface      |
 | `mock`          | scripted, offline                | for tests and examples                            |
 
-Bring your own by implementing `run` and registering a name:
+Bring your own by implementing one method:
 
 ```ts
 const myEngine: Engine = {
@@ -212,114 +200,72 @@ const myEngine: Engine = {
     return { text, usage: { inputTokens, outputTokens }, model: req.model ?? 'x' };
   },
 };
-await run(job, { engine: 'my-provider', engines: { 'my-provider': myEngine } });
 ```
 
-`fallbackEngine(['claude-cli', 'codex'])` reroutes around a dead lane (bad key, missing binary) and remembers it. `loops preflight` checks each lane with one tiny turn before iteration 1 spends anything.
-
-## Memory
-
-Fresh context prevents rot; the Ledger prevents amnesia. Three tiers, all in git:
-
-- **Scratch files** — `.loops/ledger.md` (working memory) and `.loops/prompt.md` (the handoff), auto-captured from grounded turns.
-- **Milestone commits** — on convergence, `commit:` writes one structured commit body: the why, welded to the diff. The scratch files are cleared.
-- **Grounding** — `ground: true` prepends the recent commit log and scratch files to the next turn. `ground: { retrieve: true }` has a cheap model select the relevant commits instead; `consolidateJob` folds a long history into a bounded, decision-preserving record.
-
-`pullRequestJob` / `mergeJob` keep a PR body as a consolidation of the branch, so the reasoning survives a squash merge. The full model is in [docs/concepts.md](docs/concepts.md); [bench/RESULTS.md](bench/RESULTS.md) has the memory-on-vs-off ablation.
-
-## Limits
-
-Three independent stops, plus a pause only a person lifts:
-
-```ts
-loop({
-  name: 'build',
-  body,
-  until: commandSucceeds('npm', ['test']),
-  max: 50,        // caps attempts
-  noProgress: 3,  // ends the loop after 3 iterations reaching no new state
-});
-await run(job, { budget: 2_000_000 }); // caps tokens; engine calls refuse past it
-```
-
-A rate limit, quota, or spent budget pauses the run (exit 75) and prints a resume command; `--checkpoint` / `--resume` continue warm, restoring completed green DAG nodes. `humanGate({ name: 'prod-approval' })` holds the run at a named checkpoint until someone re-runs with `--ack prod-approval` — for steps that must not proceed on any model's say-so.
-
-## Parallel work
-
-`isolation: 'worktree'` gives each DAG node its own branch and git worktree, merged back on pass, so parallel writers never collide. `isolated(job)` is the same boundary as a wrapper, for work discovered at runtime. `tournament()` runs N candidate approaches in isolated worktrees, judges them, and keeps the winner. `withEnv(overlay, job)` pins env vars over a subtree; pinned values are scrubbed from all captured output.
-
-## Environments
-
-A gate is only as good as what it tests. An `Environment` brings up the running thing — a local Docker stack, a per-branch cloud preview — and injects its env vars (`BASE_URL`) into gate commands, so `until` can test live behavior rather than files on disk. Adapters for command-line IaC tools, sst, and Docker Compose ship as opt-in subpaths.
+`fallbackEngine(['claude-cli', 'codex'])` moves to the next engine when one dies. `loops preflight` checks every engine with one tiny turn before the run spends anything.
 
 ## CLI
 
 ```bash
-loops run feature.loop.ts                 # run a definition file (live TUI)
-loops run feature.loop.ts --no-tui        # plain logs        --json  # NDJSON events
-loops validate feature.loop.ts            # load + print the shape; no model calls
-loops describe feature.loop.ts --json     # machine-readable shape
-loops preflight -e claude-cli -e codex    # check each engine lane with one tiny turn
-
-# or no file at all — the standard worker → until → review loop from flags:
-loops run --prompt "Implement TASK.md" --engine claude-cli \
-  --until "Fully implemented with passing tests?" --threshold 0.85 --max 20
+loops run feature.loop.ts               # run it (live TUI; --no-tui / --json)
+loops validate feature.loop.ts          # load + print the shape; no model calls
+loops describe feature.loop.ts --json   # machine-readable shape
 ```
 
-Supervision is file-based; no daemon, no socket:
+Watch long runs from another terminal — no daemon, no socket, just files:
 
 ```bash
-loops run build.loop.ts --supervise   # registers under ~/.loops/runs/
+loops run build.loop.ts --supervise
 loops list                            # every supervised run, with state
 loops status <runId>                  # where it is and what's blocking it
 loops tail <runId>                    # stream events live
 loops records <runId> --kind revision # the decision stream, filtered
 ```
 
-`loops helm` is a conversational front end: plain English in, strictly validated intents out, deterministic code executing them ([docs/helm.md](docs/helm.md)). Recipes can declare their own CLI flags with `defineParams`, and a `loops.config.ts` beside the recipe holds project defaults; `loops init <dir>` scaffolds a new recipe folder.
+`loops helm` is a conversational front end: plain English in, validated commands out ([docs/helm.md](docs/helm.md)).
 
 > `loops run <file>` imports and executes that file's module, like `node <file>`. Only run definition files you trust.
 
 ## Scope
 
-`loops` is the body of the loop, nothing more. Scheduling belongs in cron or CI. Durable replay belongs in Temporal, LangGraph, or Mastra — embed a `loops` job inside them. The detailed comparison is in [docs/comparison.md](docs/comparison.md).
+`loops` is the flow, nothing more. Scheduling belongs in cron or CI; durable replay belongs in Temporal, LangGraph, or Mastra — embed a loops job inside them ([comparison](docs/comparison.md)). Acting in the outside world — Slack, GitHub, calendars — is the agent's job through its own tools; the loop decides when.
 
 ## Examples
 
 | Example | Shows |
 | --- | --- |
 | [`simple-poll.loop.ts`](examples/simple-poll.loop.ts) | the smallest loop; offline (`npm run example:poll`) |
-| [`confidence-gate.loop.ts`](examples/confidence-gate.loop.ts) | deterministic and judge gates together |
-| [`dag-pipeline.loop.ts`](examples/dag-pipeline.loop.ts) | a DAG with a loop node and a quorum gate |
-| [`converge-review.loop.ts`](examples/converge-review.loop.ts) | a review rejection re-entering the loop; offline |
-| [`feedback-pipeline.loop.ts`](examples/feedback-pipeline.loop.ts) | kickback between DAG stages |
-| [`engineer.loop.ts`](examples/engineer.loop.ts) | an engineer, end to end: issue → research → plan → approval → build → review → docs → PR, repeated |
-| [`build-service.loop.ts`](examples/build-service.loop.ts) | four engineer loops in a DAG, five-lens review, two vendors |
-| [`ship-pr.loop.ts`](examples/ship-pr.loop.ts) | push → PR → gated squash-merge that preserves the Ledger |
-| [`stall-demo.loop.ts`](examples/stall-demo.loop.ts) | no-progress detection (`npm run example:stall`) |
-| [`feature-dev.ts`](examples/feature-dev.ts) | a reusable feature loop with its own CLI flags |
+| [`confidence-gate.loop.ts`](examples/confidence-gate.loop.ts) | a command check and a judge together |
+| [`engineer.loop.ts`](examples/engineer.loop.ts) | a day's work: issue → research → plan → approval → build → review → docs → PR, repeated |
+| [`dag-pipeline.loop.ts`](examples/dag-pipeline.loop.ts) | a flow with a loop inside and a jury at the end |
+| [`converge-review.loop.ts`](examples/converge-review.loop.ts) | a review rejection re-running the loop; offline |
+| [`feedback-pipeline.loop.ts`](examples/feedback-pipeline.loop.ts) | sending work back between stages |
+| [`build-service.loop.ts`](examples/build-service.loop.ts) | four engineer loops in one flow, five reviewers, two vendors |
+| [`ship-pr.loop.ts`](examples/ship-pr.loop.ts) | push → PR → gated squash-merge that keeps the reasoning |
+| [`stall-demo.loop.ts`](examples/stall-demo.loop.ts) | stopping a loop that's going nowhere (`npm run example:stall`) |
+| [`feature-dev.ts`](examples/feature-dev.ts) | a reusable flow with its own CLI flags |
 
 ## Docs
 
 - [docs/concepts.md](docs/concepts.md) — the memory model and the three loop shapes (Converge, Sweep, Tend)
-- [docs/patterns.md](docs/patterns.md) — copy-paste recipes: the loop shapes, feedback tiers, PR shipping, guards
+- [docs/patterns.md](docs/patterns.md) — copy-paste recipes: feedback, PR shipping, guard rails
 - [docs/comparison.md](docs/comparison.md) — vs. Mastra and LangGraph
-- [docs/helm.md](docs/helm.md) — the conversational harness and its driver eval
+- [docs/helm.md](docs/helm.md) — the conversational front end
 - [docs/semantic-records.md](docs/semantic-records.md) — the decision-stream contract behind `loops records`
-- [skills/author-loop/SKILL.md](skills/author-loop/SKILL.md) — the authoring guide an agent reads to compose a loop
+- [skills/author-loop/SKILL.md](skills/author-loop/SKILL.md) — the guide an agent reads to write a loop
 
 ## Develop
 
 ```bash
 git clone https://github.com/jonny981/loops.git && cd loops && npm install
-npm test               # vitest: offline, deterministic via the mock engine
-npm run typecheck      # tsc --noEmit
+npm test               # offline, deterministic
+npm run typecheck
 node bin/loops.mjs --help
 ```
 
-Runs from a checkout with no build step (the CLI executes the TypeScript source via [`tsx`](https://github.com/privatenumber/tsx)). Status: alpha — the API can break on a minor bump; [CHANGELOG.md](CHANGELOG.md) records what each version added or broke.
+No build step from a checkout — the CLI runs the TypeScript source via [`tsx`](https://github.com/privatenumber/tsx). Status: alpha; [CHANGELOG.md](CHANGELOG.md) records what each version added or broke.
 
-Contributions welcome. Open an issue to discuss anything substantial first. Keep the core focused: resist adding node types or configuration that don't earn their place.
+Contributions welcome. Open an issue to discuss anything substantial first.
 
 ## License
 
