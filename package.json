@@ -92,6 +92,7 @@
     "example:poll": "tsx src/index.ts run examples/simple-poll.loop.ts --no-tui",
     "example:helm": "tsx examples/helm-offline.ts",
     "example:stall": "tsx src/index.ts run examples/stall-demo.loop.ts --no-tui",
+    "example:steer": "tsx src/index.ts run examples/steer.loop.ts --no-tui",
     "example:gate": "tsx src/index.ts run examples/confidence-gate.loop.ts",
     "prepack": "npm run schema:check && npm run build",
     "prepublishOnly": "npm run typecheck && node scripts/changelog-gate.mjs"

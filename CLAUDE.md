@@ -45,7 +45,16 @@ src/core/
                       threads lastGate, samples noProgress, propagates paused
   dag.ts              dag()/sequence()/parallel(): toposort, needs/optional/when,
                       bounded cross-stage kickback (re-run a dirty subgraph); a failed
-                      optional producer neither fails the dag nor blocks dependents
+                      optional producer neither fails the dag nor blocks dependents;
+                      with a `plan` (LivePlan) the dag is live/steerable — epoch
+                      scheduler, per-node abort, safepoint edit application, and a
+                      guard keeping crystallized (passed) nodes immutable
+  plan.ts             LivePlan/livePlan: the versioned, steerable graph behind a live
+                      dag (docs/momentum.md) — atomic edit batches (add/remove/rewire/
+                      cancel/reprioritise) validated per batch (the live toposort),
+                      templates for out-of-process adds, guards + subscribers
+  momentum.ts         momentumFromEvents: crystallization (gated completions), steers,
+                      stalls → the alive/idle/stalled/done read behind `loops status`
   pipeline.ts         pipeline(name, stages): ordered named stages as sugar over dag(),
                       plus renderPipelineTable (stages as a markdown table)
   condition.ts        commandSucceeds, agentCheck (dimensions, confidenceTag, cwd,
@@ -127,6 +136,9 @@ src/runtime/
   persist.ts          makeRecorder (JSONL), makeCheckpointer/loadCheckpoint
   supervisor.ts       the file registry (~/.loops/runs): startSupervisor writes;
                       listRuns/readRunStatus/readRunProgress/formatEvent read
+  control.ts          the registry's command side (control.jsonl): requestControl
+                      writes from another process; startControlChannel polls in the
+                      run — pause (safepoint, exit 75), abort, steer (LivePlan edits)
   semantic.ts         semanticRecordsFromEvent + makeSemanticRecorder — the decision
                       stream (dispatch/completion/surfacing/revision) behind `records`
   semantic-schema.ts  strict semantic record v1 Zod contract, JSON Schema source,

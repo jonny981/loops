@@ -23,6 +23,7 @@ import type { RunParams } from './params.ts';
 import type { NoProgressInput, StallReport } from './progress.ts';
 import type { EnvHandle, Environment } from '../env/environment.ts';
 import type { Forge } from './forge.ts';
+import type { LivePlan } from './plan.ts';
 
 /** Terminal disposition of a `Job`. */
 export type OutcomeStatus =
@@ -235,6 +236,13 @@ export interface JobContext {
   /** Ready-to-paste command to resume a paused run, when reconstructable. */
   readonly resumeCommand?: string;
   /**
+   * Out-of-process pause request, set by the runner's control channel. Loops
+   * and dags read it at their safepoints (the top of an iteration; before a
+   * node starts) and finish `paused` — the same resumable halt a human gate
+   * produces. The object is shared and mutated by the runner; jobs only read.
+   */
+  readonly pause?: Readonly<{ requested: boolean; reason?: string }>;
+  /**
    * Run-level grounding default (`RunOptions.ground`), consumed by `agentJob`;
    * a job's own `ground` config (including an explicit `false`) wins.
    */
@@ -414,12 +422,33 @@ export interface DagNode {
    * rejected. Only consulted when the dag's `maxKickbacks` is set.
    */
   acceptsKickbackTo?: string[];
+  /**
+   * Scheduling preference among simultaneously-ready nodes: higher runs first.
+   * A hint over the concurrency queue's admission order, not an execution
+   * guarantee. Default 0. Steerable at runtime via a `reprioritise` plan edit.
+   */
+  priority?: number;
 }
 
 export interface DagConfig {
   name: string;
-  /** Node name → a `DagNode`, or a bare `Job` (shorthand for no deps/gates). */
-  nodes: Record<string, DagNode | Job>;
+  /**
+   * Node name → a `DagNode`, or a bare `Job` (shorthand for no deps/gates).
+   * Exactly one of `nodes` (a static graph) or `plan` (a live one) is required.
+   */
+  nodes?: Record<string, DagNode | Job>;
+  /**
+   * A live, steerable graph in place of static `nodes` (see docs/momentum.md).
+   * The dag reads the plan at each scheduling epoch: edits accepted mid-run
+   * (add/remove/rewire/cancel/reprioritise) take structural effect at the next
+   * barrier — the safepoint — while a `cancel`/`remove` of a running node
+   * aborts it immediately via its per-node signal. While the dag runs it
+   * guards the plan so no edit touches a node that already passed (the past
+   * is immutable). The dag still terminates: it completes when a barrier
+   * settles with no steer landed since it began — within one plan version,
+   * execution provably ends; indefinite life comes only from further steers.
+   */
+  plan?: LivePlan;
   /** Max nodes running at once. Default: 4. */
   concurrency?: number;
   /** When a required node fails, abort the rest. Default: true. */
@@ -633,6 +662,21 @@ export type LoopEvent =
       attempt?: number;
     }
   | { kind: 'dag:end'; ts: number; path: string[]; outcome: Outcome }
+  | {
+      // A steer landed on (or was refused by) a live plan: one event per edit
+      // in the batch. `accepted` batches carry the post-apply plan `version`;
+      // a refused batch is emitted by the refusing site with `note` naming the
+      // offence. The audit trail of the plan is as first-class as the work's.
+      kind: 'dag:edit';
+      ts: number;
+      path: string[];
+      plan: string;
+      version: number;
+      op: 'add' | 'remove' | 'rewire' | 'cancel' | 'reprioritise';
+      node: string;
+      accepted: boolean;
+      note?: string;
+    }
   | {
       // A node sent work back to an earlier node. `accepted` distinguishes a
       // honoured kickback (the subgraph re-runs) from a rejected one (non-ancestor,

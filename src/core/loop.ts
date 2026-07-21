@@ -400,6 +400,17 @@ export function loop(config: LoopConfig): Job {
             { status: 'aborted', summary: 'aborted by signal' },
             iteration,
           );
+        // The iteration boundary is the loop's safepoint: an out-of-process
+        // pause lands here, after the current turn completed, as the same
+        // resumable halt a human gate produces.
+        if (parent.pause?.requested)
+          return finish(
+            {
+              status: 'paused',
+              summary: `paused by control${parent.pause.reason ? `: ${parent.pause.reason}` : ''}`,
+            },
+            iteration,
+          );
         if (config.max != null && iteration >= config.max) {
           return finish(
             {

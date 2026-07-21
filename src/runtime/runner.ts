@@ -25,6 +25,8 @@ import {
   type CheckpointDiagnostics,
 } from './persist.ts';
 import { startSupervisor, newRunId, type Supervisor } from './supervisor.ts';
+import { startControlChannel, type ControlChannel } from './control.ts';
+import { getLivePlan, livePlanNames } from '../core/plan.ts';
 import { jobMeta } from '../core/describe.ts';
 import { currentBranch, workspaceFingerprint } from '../core/git.ts';
 import type { GroundConfig } from '../core/job.ts';
@@ -454,6 +456,92 @@ export async function run(
   const resolveEngine = (ref?: EngineRef): Engine =>
     registry.create(ref, defaultEngine);
 
+  // A supervised run also listens: the control channel polls the registry for
+  // out-of-process commands. `pause` flips the shared flag that loops/dags read
+  // at their safepoints; `abort` fires the root controller; `steer` applies an
+  // edit batch to a registered live plan (accepted edits are emitted by the
+  // running dag as `dag:edit`; refused batches are emitted here with the
+  // refusal, so the audit trail records both sides).
+  const pauseFlag: { requested: boolean; reason?: string } = {
+    requested: false,
+  };
+  let control: ControlChannel | undefined;
+  if (options.supervise) {
+    control = startControlChannel({
+      runId: runId!,
+      onCommand: (command) => {
+        switch (command.cmd) {
+          case 'abort':
+            emit({
+              kind: 'log',
+              ts: Date.now(),
+              path: [],
+              level: 'warn',
+              message: `control: abort requested${command.reason ? ` (${command.reason})` : ''}`,
+            });
+            controller.abort();
+            break;
+          case 'pause':
+            pauseFlag.requested = true;
+            pauseFlag.reason = command.reason;
+            emit({
+              kind: 'log',
+              ts: Date.now(),
+              path: [],
+              level: 'warn',
+              message: `control: pause requested${command.reason ? ` (${command.reason})` : ''}; pausing at the next safepoint`,
+            });
+            break;
+          case 'steer': {
+            const names = livePlanNames();
+            const planName =
+              command.plan ?? (names.length === 1 ? names[0] : undefined);
+            const plan = planName ? getLivePlan(planName) : undefined;
+            if (!plan) {
+              emit({
+                kind: 'error',
+                ts: Date.now(),
+                path: [],
+                message: command.plan
+                  ? `control: steer refused: unknown plan "${command.plan}" (registered: ${names.join(', ') || 'none'})`
+                  : `control: steer refused: no plan named and ${names.length ? `${names.length} registered` : 'none registered'}`,
+                code: 'STEER',
+              });
+              break;
+            }
+            try {
+              plan.apply(command.edits ?? []);
+            } catch (e) {
+              const error = LoopError.from(e, { code: 'STEER' });
+              for (const edit of command.edits ?? []) {
+                emit({
+                  kind: 'dag:edit',
+                  ts: Date.now(),
+                  path: [],
+                  plan: plan.name,
+                  version: plan.version,
+                  op: edit.op,
+                  node: edit.name,
+                  accepted: false,
+                  note: error.message,
+                });
+              }
+              if (!command.edits?.length)
+                emit({
+                  kind: 'error',
+                  ts: Date.now(),
+                  path: [],
+                  message: `control: steer refused: ${error.message}`,
+                  code: 'STEER',
+                });
+            }
+            break;
+          }
+        }
+      },
+    });
+  }
+
   if (restoreEvent) emit({ ...restoreEvent, ts: Date.now() });
 
   // The root workspace is the substrate the whole run reads and writes. Branch
@@ -522,6 +610,7 @@ export async function run(
     onLimit: options.onLimit ?? 'auto',
     maxWaitMs: options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
     resumeCommand: options.resumeCommand,
+    pause: control ? pauseFlag : undefined,
     groundDefault: options.ground,
     curateEnabled: options.curate,
     ladderEnabled: options.ladder,
@@ -546,6 +635,7 @@ export async function run(
     });
     outcome = { status: 'fail', summary: error.message, error };
   } finally {
+    control?.stop();
     // Tear the environment down whatever happened (best-effort).
     if (environment) await environment.down(controller.signal).catch(() => {});
   }

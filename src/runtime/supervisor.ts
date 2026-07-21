@@ -37,6 +37,10 @@ import type {
 } from '../core/types.ts';
 import { makeSemanticRecorder } from './semantic.ts';
 import { SEMANTIC_RUN_RECORD_SCHEMA_VERSION } from './semantic-schema.ts';
+import {
+  momentumFromEvents,
+  type MomentumReport,
+} from '../core/momentum.ts';
 
 /** High-frequency transcript deltas: kept out of the record, as in `recordTo`. */
 const NOISE: ReadonlySet<LoopEvent['kind']> = new Set([
@@ -413,6 +417,11 @@ export interface RunProgress {
     kind: 'gate-failing' | 'limit-pause' | 'human-gate' | 'error';
     detail: string;
   };
+  /**
+   * The momentum read over the event-stream tail (windowed, like `recent`):
+   * is the run alive (crystallizing gated work), idle, stalled, or done.
+   */
+  momentum?: MomentumReport;
   /** The most recent events, rendered through `formatEvent`. */
   recent: string[];
 }
@@ -528,6 +537,7 @@ export function readRunProgress(
     startedAt: status.startedAt,
     updatedAt: status.updatedAt,
     blocker: deriveBlocker(status.status, tail, status.live),
+    momentum: momentumFromEvents(tail, { status: status.status, now }),
     recent: tail.slice(-(opts?.recent ?? 10)).map(formatEvent),
   };
 }
@@ -576,6 +586,8 @@ function renderEvent(event: LoopEvent): string {
       return `${at}· node ${event.node}: ${event.phase}${event.outcome ? ` (${event.outcome.status}${event.outcome.late ? ' late' : ''})` : ''}`;
     case 'dag:kickback':
       return `${at}↩ kickback ${event.accepted ? 'accepted' : 'rejected'} ${event.from} -> ${event.to}: ${event.reason}${event.note ? ` (${event.note})` : ''}`;
+    case 'dag:edit':
+      return `${at}⇄ steer ${event.accepted ? 'accepted' : 'refused'} ${event.op} ${event.node} (plan ${event.plan} v${event.version})${event.note ? `: ${event.note}` : ''}`;
     case 'dag:end':
       return `${at}◂ dag ${event.outcome.status}${event.outcome.late ? ' late' : ''}`;
     case 'job:start':

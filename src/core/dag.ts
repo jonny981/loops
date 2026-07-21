@@ -11,6 +11,15 @@
  *     anything not already in flight;
  *   - `optional` nodes never fail the DAG nor block dependents;
  *   - an unmet `when` gate *skips* the node, which counts as green.
+ *
+ * With a `plan` (a `LivePlan`) instead of static `nodes`, the graph is data
+ * and the dag is *steerable* (docs/momentum.md): accepted plan edits take
+ * structural effect at the next barrier — the safepoint — via the same
+ * invalidate-and-re-enter mechanics kickback uses, while a `cancel`/`remove`
+ * of a running node aborts it immediately through its per-node controller.
+ * The dag guards the plan while it runs: no edit touches a node that already
+ * passed (the past is immutable). Execution still terminates within any one
+ * plan version; only further steers extend a run's life.
  */
 
 import pLimit from 'p-limit';
@@ -42,6 +51,7 @@ import type { EnvHandle } from '../env/environment.ts';
 import { LoopError } from './errors.ts';
 import { revisionFromOutcome } from './feedback.ts';
 import { DEFAULT_FANOUT_CONCURRENCY } from './concurrency.ts';
+import type { PlanChange } from './plan.ts';
 
 /** Sanitise a name into a git-ref-safe slug. */
 function slug(s: string): string {
@@ -52,67 +62,100 @@ function normalize(node: DagNode | Job): DagNode {
   return typeof node === 'function' ? { job: node } : node;
 }
 
+/** One immutable snapshot of the graph — rebuilt per plan version, never
+ *  mutated in place, so closures created during a barrier stay consistent. */
+interface Graph {
+  names: string[];
+  nodes: Map<string, DagNode>;
+  order: string[];
+  dependents: Map<string, string[]>;
+}
+
 export function dag(config: DagConfig): Job {
   if (!config.name)
     throw new LoopError({
       code: 'CONFIG',
       message: 'dag() requires a non-empty name',
     });
-  const names = Object.keys(config.nodes);
-  const nodes = new Map<string, DagNode>(
-    names.map((n) => [n, normalize(config.nodes[n]!)]),
-  );
-
-  // Fail fast on a bad graph, before the Job is ever run.
-  const edges: [string, string][] = [];
-  for (const [name, node] of nodes) {
-    for (const dep of node.needs ?? []) {
-      if (!nodes.has(dep)) {
-        throw new LoopError({
-          code: 'CONFIG',
-          message: `dag "${config.name}": node "${name}" needs unknown node "${dep}"`,
-        });
-      }
-      edges.push([dep, name]); // dep must precede name
-    }
-  }
-  let order: string[];
-  try {
-    order = toposort.array(names, edges);
-  } catch (e) {
+  const plan = config.plan;
+  if (plan && config.nodes)
     throw new LoopError({
       code: 'CONFIG',
-      message: `dag "${config.name}": dependency cycle detected`,
-      cause: e,
+      message: `dag "${config.name}": pass exactly one of "nodes" (static) or "plan" (live), not both`,
     });
-  }
+  if (!plan && !config.nodes)
+    throw new LoopError({
+      code: 'CONFIG',
+      message: `dag "${config.name}": requires "nodes" or a live "plan"`,
+    });
+
+  const buildGraph = (source: Map<string, DagNode>): Graph => {
+    const names = [...source.keys()];
+    const edges: [string, string][] = [];
+    for (const [name, node] of source) {
+      for (const dep of node.needs ?? []) {
+        if (!source.has(dep)) {
+          throw new LoopError({
+            code: 'CONFIG',
+            message: `dag "${config.name}": node "${name}" needs unknown node "${dep}"`,
+          });
+        }
+        edges.push([dep, name]); // dep must precede name
+      }
+    }
+    let order: string[];
+    try {
+      order = toposort.array(names, edges);
+    } catch (e) {
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `dag "${config.name}": dependency cycle detected`,
+        cause: e,
+      });
+    }
+    const dependents = new Map<string, string[]>(names.map((n) => [n, []]));
+    for (const [dep, name] of edges) dependents.get(dep)!.push(name);
+    return { names, nodes: source, order, dependents };
+  };
+
+  // Fail fast on a bad graph, before the Job is ever run (either source; a
+  // live plan re-validates every edit itself, so this snapshot stays valid).
+  const initialGraph = buildGraph(
+    plan
+      ? plan.nodes()
+      : new Map(
+          Object.keys(config.nodes!).map((n) => [
+            n,
+            normalize(config.nodes![n]!),
+          ]),
+        ),
+  );
 
   const stopOnError = config.stopOnError ?? true;
   const maxKickbacks = config.maxKickbacks ?? 0;
 
-  // Static graph relations for routing cross-stage feedback (kickback). All pure
-  // functions of the declared `needs` edges, computed once. `dependents` is the
-  // forward adjacency (who needs me); a kickback to a target re-runs the target
-  // plus everything reachable from it, and the target must be an ancestor.
-  const dependents = new Map<string, string[]>(names.map((n) => [n, []]));
-  for (const [dep, name] of edges) dependents.get(dep)!.push(name);
-  const ancestorsOf = (name: string): Set<string> => {
+  // Graph relations for routing cross-stage feedback (kickback) and steer
+  // invalidation. Pure functions of a snapshot's `needs` edges. `dependents`
+  // is the forward adjacency (who needs me); a kickback to a target re-runs
+  // the target plus everything reachable from it, and the target must be an
+  // ancestor.
+  const ancestorsOf = (g: Graph, name: string): Set<string> => {
     const seen = new Set<string>();
-    const stack = [...(nodes.get(name)!.needs ?? [])];
+    const stack = [...(g.nodes.get(name)!.needs ?? [])];
     while (stack.length) {
       const n = stack.pop()!;
       if (seen.has(n)) continue;
       seen.add(n);
-      stack.push(...(nodes.get(n)!.needs ?? []));
+      stack.push(...(g.nodes.get(n)!.needs ?? []));
     }
     return seen;
   };
-  const dirtyFrom = (target: string): Set<string> => {
+  const dirtyFrom = (g: Graph, target: string): Set<string> => {
     const seen = new Set<string>([target]);
     const stack = [target];
     while (stack.length) {
       const n = stack.pop()!;
-      for (const d of dependents.get(n)!)
+      for (const d of g.dependents.get(n)!)
         if (!seen.has(d)) {
           seen.add(d);
           stack.push(d);
@@ -133,7 +176,9 @@ export function dag(config: DagConfig): Job {
     const resumedDag = parent.checkpoint?.resumeDags?.[checkpointKey];
     if (parent.checkpoint?.resumeDags)
       delete parent.checkpoint.resumeDags[checkpointKey];
-    parent.emit({ kind: 'dag:start', ts: ts(), path, depth, nodes: names });
+
+    let g = plan ? buildGraph(plan.nodes()) : initialGraph;
+    parent.emit({ kind: 'dag:start', ts: ts(), path, depth, nodes: g.names });
 
     const limit = pLimit(limitN);
     const results = new Map<string, Outcome>();
@@ -147,28 +192,82 @@ export function dag(config: DagConfig): Job {
     // renders it as "## Next". Empty in the common (no-kickback) case.
     const pendingKickback = new Map<string, Outcome>();
 
+    // The frontier's controllers: one per running node, so a steer can preempt
+    // a single branch without stopping the graph.
+    const nodeAborts = new Map<string, AbortController>();
+    // Names terminated by a steer (cancel, or remove of a not-yet-passed
+    // node). Cancellation is deliberate: it neither trips stopOnError nor
+    // counts against the dag's disposition.
+    const cancelledNames = new Set<string>(plan ? plan.cancelled() : []);
+    const cancelledOutcome = (): Outcome => ({
+      status: 'aborted',
+      summary: 'cancelled by steer',
+    });
+    const pausedOutcome = (): Outcome => ({
+      status: 'paused',
+      summary: `paused by control${parent.pause?.reason ? `: ${parent.pause.reason}` : ''}`,
+    });
+
+    // Steers land here as they are accepted; their structural effect applies
+    // at the next barrier (the safepoint). Cancellation of a running node is
+    // the one immediate effect — the barrier may be waiting on that very node.
+    const pendingSteers: PlanChange[] = [];
+    let detachGuard: (() => void) | undefined;
+    let unsubscribe: (() => void) | undefined;
+    if (plan) {
+      detachGuard = plan.attachGuard((edits) => {
+        for (const edit of edits) {
+          if (edit.op === 'add' || edit.op === 'reprioritise') continue;
+          if (results.get(edit.name)?.status === 'pass')
+            return `${edit.op} refused: node "${edit.name}" already crystallized (the past is immutable)`;
+        }
+        return undefined;
+      });
+      unsubscribe = plan.subscribe((change) => {
+        pendingSteers.push(change);
+        for (const edit of change.edits) {
+          parent.emit({
+            kind: 'dag:edit',
+            ts: ts(),
+            path,
+            plan: plan.name,
+            version: change.version,
+            op: edit.op,
+            node: edit.name,
+            accepted: true,
+          });
+          if (edit.op === 'cancel' || edit.op === 'remove') {
+            cancelledNames.add(edit.name);
+            nodeAborts.get(edit.name)?.abort();
+          }
+        }
+      });
+    }
+
     // Each node runs under its own name in the path, so a nested job (e.g. a
     // loop) is uniquely addressable for stats/logs even across same-named siblings.
     const nodeCtx = (
       name: string,
       workspace?: Workspace,
       environment?: EnvHandle,
+      signal?: AbortSignal,
     ): JobContext =>
       childContext(parent, {
         depth,
         path: [...path, name],
         workspace,
         environment,
+        signal,
         lastReview: pendingKickback.get(name),
         graph: {
           dag: config.name,
           node: name,
           path: [...path, name],
-          needs: nodes.get(name)!.needs ?? [],
-          dependents: dependents.get(name) ?? [],
+          needs: g.nodes.get(name)!.needs ?? [],
+          dependents: g.dependents.get(name) ?? [],
         },
-        timeoutMs: nodes.get(name)!.timeoutMs,
-        timeoutGraceMs: nodes.get(name)!.timeoutGraceMs,
+        timeoutMs: g.nodes.get(name)!.timeoutMs,
+        timeoutGraceMs: g.nodes.get(name)!.timeoutGraceMs,
       });
 
     // Land-back merges are serialised: concurrent nodes finishing at once must
@@ -186,9 +285,10 @@ export function dag(config: DagConfig): Job {
     const runNodeJob = async (
       name: string,
       node: DagNode,
+      signal?: AbortSignal,
     ): Promise<Outcome> => {
       const isolated = node.isolate ?? config.isolation === 'worktree';
-      if (!isolated) return node.job(nodeCtx(name));
+      if (!isolated) return node.job(nodeCtx(name, undefined, undefined, signal));
 
       const base = parent.workspace;
       if (!(await isRepo({ cwd: base.dir, signal: parent.signal }))) {
@@ -196,7 +296,7 @@ export function dag(config: DagConfig): Job {
           `node "${name}" requested worktree isolation but ${base.dir} is not a git repo; running in the shared workspace`,
           'warn',
         );
-        return node.job(nodeCtx(name));
+        return node.job(nodeCtx(name, undefined, undefined, signal));
       }
 
       const branch = `loops/${slug(config.name)}-${slug(name)}-${(forkSeq += 1)}`;
@@ -213,7 +313,7 @@ export function dag(config: DagConfig): Job {
       try {
         if (config.environment)
           envHandle = await config.environment.up(wtWs, parent.signal);
-        const outcome = await node.job(nodeCtx(name, wtWs, envHandle));
+        const outcome = await node.job(nodeCtx(name, wtWs, envHandle, signal));
         if (outcome.status === 'pass') {
           // Capture anything the node left uncommitted, so nothing is stranded
           // in the worktree, then land it back.
@@ -307,7 +407,7 @@ export function dag(config: DagConfig): Job {
         outcome,
         attempt: attempts.get(name),
         cached,
-        timeoutMs: nodes.get(name)!.timeoutMs,
+        timeoutMs: g.nodes.get(name)?.timeoutMs,
       });
       // A paused node is a deliberate halt (a human gate awaiting
       // acknowledgement), not a failure: stop scheduling not-yet-started nodes
@@ -318,8 +418,11 @@ export function dag(config: DagConfig): Job {
       if (
         phase === 'done' &&
         outcome.status !== 'pass' &&
-        nodes.get(name)!.optional !== true &&
+        g.nodes.get(name)?.optional !== true &&
         stopOnError &&
+        // A cancelled node is a deliberate steer, not a failure — it must not
+        // stop its siblings.
+        !cancelledNames.has(name) &&
         // A node requesting a kickback is going to be re-run — don't let its
         // (provisional) non-pass abort siblings before the feedback is resolved.
         !(maxKickbacks > 0 && revisionFromOutcome(outcome)?.target)
@@ -332,7 +435,7 @@ export function dag(config: DagConfig): Job {
     const run = (name: string): Promise<Outcome> => {
       const existing = memo.get(name);
       if (existing) return existing;
-      const node = nodes.get(name)!;
+      const node = g.nodes.get(name)!;
       const promise = (async (): Promise<Outcome> => {
         // This node's run count: 1 the first time, +1 each kickback re-run (the
         // memo/results were cleared for the dirty subgraph, so run() re-enters).
@@ -340,6 +443,8 @@ export function dag(config: DagConfig): Job {
         // Whole node is guarded: a throw anywhere (dep resolution, `when`, the
         // job) becomes a recorded outcome, so the DAG always reaches `dag:end`.
         try {
+          if (cancelledNames.has(name))
+            return record(name, cancelledOutcome(), 'done');
           const needs = node.needs ?? [];
           const deps = await Promise.all(needs.map(run));
           // A declared `needs` on a REQUIRED producer is a hard dependency — its
@@ -349,7 +454,7 @@ export function dag(config: DagConfig): Job {
           // (unmet `when`) come back with status 'pass', so they never block.
           const blocked = needs.some(
             (dep, i) =>
-              deps[i]!.status !== 'pass' && nodes.get(dep)!.optional !== true,
+              deps[i]!.status !== 'pass' && g.nodes.get(dep)!.optional !== true,
           );
           if (blocked)
             return record(
@@ -357,6 +462,8 @@ export function dag(config: DagConfig): Job {
               { status: 'aborted', summary: 'blocked by a failed dependency' },
               'done',
             );
+          if (parent.pause?.requested)
+            return record(name, pausedOutcome(), 'done');
           if (parent.signal.aborted || stopped)
             return record(
               name,
@@ -374,6 +481,10 @@ export function dag(config: DagConfig): Job {
           // agentCheck gate counts against the cap (it's real backend load).
           const result = await limit(
             async (): Promise<{ outcome: Outcome; phase: 'done' | 'skip' }> => {
+              if (cancelledNames.has(name))
+                return { outcome: cancelledOutcome(), phase: 'done' };
+              if (parent.pause?.requested)
+                return { outcome: pausedOutcome(), phase: 'done' };
               if (parent.signal.aborted || stopped)
                 return {
                   outcome: {
@@ -412,11 +523,36 @@ export function dag(config: DagConfig): Job {
                 attempt: attempts.get(name),
                 timeoutMs: node.timeoutMs,
               });
-              return { outcome: await runNodeJob(name, node), phase: 'done' };
+              // The per-node controller: a steer cancelling this node aborts
+              // exactly this branch of the frontier, nothing else. Static dags
+              // pay nothing — the combined signal degenerates to the parent's.
+              const ctl = new AbortController();
+              nodeAborts.set(name, ctl);
+              if (cancelledNames.has(name)) ctl.abort();
+              try {
+                const signal = AbortSignal.any([parent.signal, ctl.signal]);
+                return {
+                  outcome: await runNodeJob(name, node, signal),
+                  phase: 'done',
+                };
+              } finally {
+                nodeAborts.delete(name);
+              }
             },
           );
-          return record(name, result.outcome, result.phase);
+          // A preempted node reports as cancelled whatever its abort surfaced
+          // as — unless it raced to a genuine pass, which stands (it
+          // crystallized first).
+          const outcome =
+            cancelledNames.has(name) &&
+            result.phase === 'done' &&
+            result.outcome.status !== 'pass'
+              ? cancelledOutcome()
+              : result.outcome;
+          return record(name, outcome, result.phase);
         } catch (e) {
+          if (cancelledNames.has(name))
+            return record(name, cancelledOutcome(), 'done');
           const error = LoopError.from(e, {
             code: 'BODY',
             phase: 'body',
@@ -440,16 +576,68 @@ export function dag(config: DagConfig): Job {
       return promise;
     };
 
-    await Promise.all(names.map(run));
+    // One scheduling epoch: kick off every node in the current graph, highest
+    // `priority` admitted to the concurrency queue first (memoized nodes
+    // return instantly, so an epoch only *runs* what an edit or kickback
+    // invalidated).
+    const runAll = (): Promise<Outcome[]> => {
+      const entry = [...g.names].sort(
+        (a, b) =>
+          (g.nodes.get(b)!.priority ?? 0) - (g.nodes.get(a)!.priority ?? 0),
+      );
+      return Promise.all(entry.map(run));
+    };
+
+    // Apply the steers that landed during the last barrier: rebuild the graph
+    // at the plan's current version and invalidate the affected subgraph so it
+    // re-runs — kickback's mechanics, generalised to arbitrary edits. A node
+    // that already passed keeps its result: the past is immutable, and
+    // re-doing accepted work is kickback's job, not steering's.
+    const applySteers = (): boolean => {
+      if (!plan || !pendingSteers.length) return false;
+      const changes = pendingSteers.splice(0);
+      const oldG = g;
+      g = buildGraph(plan.nodes());
+      const dirty = new Set<string>();
+      for (const change of changes) {
+        for (const edit of change.edits) {
+          if (edit.op === 'reprioritise' || edit.op === 'cancel') continue;
+          if (!g.nodes.has(edit.name)) {
+            // Removed: clear its state, and dirty its old consumers (they may
+            // have been rewired onto other producers in the same batch).
+            memo.delete(edit.name);
+            results.delete(edit.name);
+            delete parent.checkpoint?.dags[checkpointKey]?.nodes[edit.name];
+            delete resumedDag?.nodes[edit.name];
+            for (const d of oldG.dependents.get(edit.name) ?? [])
+              if (g.nodes.has(d))
+                for (const dd of dirtyFrom(g, d)) dirty.add(dd);
+            continue;
+          }
+          for (const d of dirtyFrom(g, edit.name)) dirty.add(d);
+        }
+      }
+      for (const d of dirty) {
+        if (results.get(d)?.status === 'pass') continue; // crystallized: stands
+        if (cancelledNames.has(d)) continue; // terminal by steer
+        memo.delete(d);
+        results.delete(d);
+        delete parent.checkpoint?.dags[checkpointKey]?.nodes[d];
+        delete resumedDag?.nodes[d];
+      }
+      stopped = false; // a prior stopOnError must not block the re-run
+      return true;
+    };
 
     // Cross-stage feedback: a node may return a `kickback` asking an earlier
     // node to redo work. We re-run the target + its dependents (the cycle lives
     // in execution, the graph stays acyclic), bounded by `maxKickbacks` so it
-    // provably terminates. The whole block is inert when `maxKickbacks` is 0, so
-    // the default path is exactly the single pass above.
-    if (maxKickbacks > 0) {
-      let used = 0;
-      const rejected = new Set<string>();
+    // provably terminates. The whole pass is inert when `maxKickbacks` is 0, so
+    // the default path is exactly the single barrier.
+    let kickbacksUsed = 0;
+    const kickbackRejected = new Set<string>();
+    const kickbackPass = async (): Promise<void> => {
+      if (maxKickbacks <= 0) return;
       const emitKickback = (
         from: string,
         to: string,
@@ -473,18 +661,16 @@ export function dag(config: DagConfig): Job {
         // even the gate itself, whose `human:gate` event must fire exactly
         // once per pause. Leave `stopped` set and the kickback unresolved;
         // resumed DAG nodes restore completed green work from checkpoint.
-        if (names.some((n) => results.get(n)?.status === 'paused')) break;
+        if (g.names.some((n) => results.get(n)?.status === 'paused')) break;
         // Honour kickbacks in topological order, skipping any already rejected.
-        const from = order.find(
-          (n) => {
-            const result = results.get(n);
-            return (
-              result !== undefined &&
-              revisionFromOutcome(result)?.target !== undefined &&
-              !rejected.has(n)
-            );
-          },
-        );
+        const from = g.order.find((n) => {
+          const result = results.get(n);
+          return (
+            result !== undefined &&
+            revisionFromOutcome(result)?.target !== undefined &&
+            !kickbackRejected.has(n)
+          );
+        });
         if (!from) break;
         const request = revisionFromOutcome(results.get(from)!)!;
         const to = request.target!;
@@ -493,21 +679,21 @@ export function dag(config: DagConfig): Job {
         // Validate the target: it must exist, be an ancestor, and (if the node
         // declares `acceptsKickbackTo`) be an allowed target. An invalid target
         // is rejected once and never reconsidered unless the node itself re-runs.
-        const allow = nodes.get(from)!.acceptsKickbackTo;
-        const note = !nodes.has(to)
+        const allow = g.nodes.get(from)!.acceptsKickbackTo;
+        const note = !g.nodes.has(to)
           ? `unknown node "${to}"`
-          : !ancestorsOf(from).has(to)
+          : !ancestorsOf(g, from).has(to)
             ? `"${to}" is not an ancestor of "${from}"`
             : allow && !allow.includes(to)
               ? `"${from}" does not accept kickback to "${to}"`
               : undefined;
         if (note) {
-          rejected.add(from);
+          kickbackRejected.add(from);
           emitKickback(from, to, reason, false, note);
           continue;
         }
 
-        if (used >= maxKickbacks) {
+        if (kickbacksUsed >= maxKickbacks) {
           // Budget spent. Reject and stop: the unresolved kickback leaves the
           // kicking node's own outcome to stand.
           emitKickback(
@@ -520,13 +706,13 @@ export function dag(config: DagConfig): Job {
           break;
         }
 
-        used += 1;
+        kickbacksUsed += 1;
         emitKickback(from, to, reason, true);
-        const dirty = dirtyFrom(to);
+        const dirty = dirtyFrom(g, to);
         for (const d of dirty) {
           memo.delete(d); // force re-run
           results.delete(d);
-          rejected.delete(d); // a re-run earns a fresh verdict
+          kickbackRejected.delete(d); // a re-run earns a fresh verdict
           delete parent.checkpoint?.dags[checkpointKey]?.nodes[d];
           delete resumedDag?.nodes[d];
         }
@@ -536,21 +722,45 @@ export function dag(config: DagConfig): Job {
           revision: { ...request, source: request.source ?? from },
         });
         stopped = false; // a prior stopOnError must not block the re-run
-        await Promise.all(names.map(run));
+        await runAll();
       }
+    };
+
+    try {
+      // The epoch loop. A static dag makes exactly one pass (barrier +
+      // kickbacks) and exits; a live dag re-enters once per steer batch that
+      // landed during the previous epoch, and completes when a barrier settles
+      // with no steer landed since it began — so within one plan version,
+      // execution terminates, and only external force extends the run.
+      for (;;) {
+        await runAll();
+        await kickbackPass();
+        if (!plan) break;
+        if (g.names.some((n) => results.get(n)?.status === 'paused')) break;
+        if (!applySteers()) break;
+      }
+    } finally {
+      detachGuard?.();
+      unsubscribe?.();
     }
 
-    const requiredFailed = names.filter(
+    const requiredFailed = g.names.filter(
       (n) =>
-        results.get(n)?.status === 'fail' && nodes.get(n)!.optional !== true,
+        results.get(n)?.status === 'fail' &&
+        g.nodes.get(n)!.optional !== true &&
+        !cancelledNames.has(n),
     );
-    const requiredAborted = names.filter(
+    const requiredAborted = g.names.filter(
       (n) =>
-        results.get(n)?.status === 'aborted' && nodes.get(n)!.optional !== true,
+        results.get(n)?.status === 'aborted' &&
+        g.nodes.get(n)!.optional !== true &&
+        !cancelledNames.has(n),
     );
     // A pause anywhere in the graph (any node, optional included) pauses the
     // whole dag. First in declaration order names the outcome.
-    const pausedNode = names.find((n) => results.get(n)?.status === 'paused');
+    const pausedNode = g.names.find(
+      (n) => results.get(n)?.status === 'paused',
+    );
     const data = Object.fromEntries(results);
     const late = [...results.values()].some((r) => r.late);
     let outcome: Outcome;
@@ -587,7 +797,7 @@ export function dag(config: DagConfig): Job {
       outcome = {
         status: 'pass',
         ...(late ? { late: true } : {}),
-        summary: `dag "${config.name}": all ${names.length} node(s) green`,
+        summary: `dag "${config.name}": all ${g.names.length} node(s) green`,
         data,
       };
     }
@@ -598,19 +808,18 @@ export function dag(config: DagConfig): Job {
   return setMeta(job, {
     kind: 'dag',
     name: config.name,
-    nodes: Object.entries(config.nodes).map(([name, v]) => {
-      const node = typeof v === 'function' ? undefined : v;
-      const nodeJob = node ? node.job : (v as Job);
+    ...(plan ? { live: plan.name } : {}),
+    nodes: [...initialGraph.nodes.entries()].map(([name, node]) => {
       return {
         name,
-        needs: node?.needs ?? [],
-        isolate: node?.isolate ?? false,
-        optional: node?.optional === true,
-        ...(node?.timeoutMs ? { timeoutMs: node.timeoutMs } : {}),
+        needs: node.needs ?? [],
+        isolate: node.isolate ?? false,
+        optional: node.optional === true,
+        ...(node.timeoutMs ? { timeoutMs: node.timeoutMs } : {}),
         // Condition labels only — the meta must stay JSON-serializable
         // (`loops describe --json` prints it verbatim).
-        ...(node?.when ? { when: describeConditions(node.when) } : {}),
-        job: jobMeta(nodeJob),
+        ...(node.when ? { when: describeConditions(node.when) } : {}),
+        job: jobMeta(node.job),
       };
     }),
   });

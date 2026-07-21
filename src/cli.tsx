@@ -49,6 +49,9 @@ import {
   type SemanticRunRecord,
 } from './runtime/semantic.ts';
 import { SEMANTIC_RECORD_FILTER_KINDS } from './runtime/semantic-schema.ts';
+import { requestControl } from './runtime/control.ts';
+import { momentumLine } from './core/momentum.ts';
+import type { PlanEdit } from './core/plan.ts';
 import type { Job, LoopConfig, Outcome } from './core/types.ts';
 import type { EngineName, EngineOptions } from './engines/engine.ts';
 
@@ -1563,6 +1566,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           ? `  evidence: ${progress.evidence.count}${progress.evidence.indexPath ? ` at ${progress.evidence.indexPath}` : ''}`
           : '',
         `  tokens:  ${r.live.usage.inputTokens} in / ${r.live.usage.outputTokens} out (${r.live.usage.calls} calls)`,
+        progress?.momentum
+          ? `  momentum: ${momentumLine(progress.momentum)}`
+          : '',
         progress?.blocker
           ? `  blocker: ${progress.blocker.kind}: ${toLine(progress.blocker.detail)}`
           : '',
@@ -1630,6 +1636,110 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       }
       process.removeListener('SIGINT', onSig);
     });
+
+  // ── Control: command a run from another process (the channel is a file) ──
+
+  program
+    .command('control')
+    .argument('<runId>', 'a run id from `loops list`')
+    .argument('<action>', 'pause | abort')
+    .option('--reason <text>', 'why — recorded and surfaced in the paused summary')
+    .description(
+      'pause a supervised run at its next safepoint (resumable, exit 75) or abort it',
+    )
+    .action((runId: string, action: string, flags: { reason?: string }) => {
+      if (action !== 'pause' && action !== 'abort') {
+        process.stderr.write(`unknown control action "${action}" (pause | abort)\n`);
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        requestControl(runId, { cmd: action, reason: flags.reason });
+      } catch (e) {
+        process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      process.stdout.write(
+        action === 'pause'
+          ? `pause requested: ${runId} will finish its current turn and pause at the next safepoint\n`
+          : `abort requested: ${runId}\n`,
+      );
+    });
+
+  program
+    .command('steer')
+    .argument('<runId>', 'a run id from `loops list`')
+    .argument(
+      '[edits]',
+      'a JSON edit batch: [{"op":"add","name":...,"node":{...}}, {"op":"cancel","name":...}, ...]',
+    )
+    .option('--plan <name>', "the live plan's registered name (defaults to the run's only plan)")
+    .option('--file <path>', 'read the JSON edit batch from a file instead')
+    .description(
+      'apply an atomic edit batch (add/remove/rewire/cancel/reprioritise) to a running live plan',
+    )
+    .action(
+      (
+        runId: string,
+        editsArg: string | undefined,
+        flags: { plan?: string; file?: string },
+      ) => {
+        let raw = editsArg;
+        if (flags.file) {
+          try {
+            raw = fs.readFileSync(flags.file, 'utf8');
+          } catch (e) {
+            process.stderr.write(
+              `cannot read --file ${flags.file}: ${e instanceof Error ? e.message : String(e)}\n`,
+            );
+            process.exitCode = 1;
+            return;
+          }
+        }
+        if (!raw) {
+          process.stderr.write('pass an edit batch as JSON, or --file <path>\n');
+          process.exitCode = 1;
+          return;
+        }
+        let edits: PlanEdit[];
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          edits = Array.isArray(parsed) ? (parsed as PlanEdit[]) : [parsed as PlanEdit];
+        } catch (e) {
+          process.stderr.write(
+            `edit batch is not valid JSON: ${e instanceof Error ? e.message : String(e)}\n`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const bad = edits.find(
+          (edit) =>
+            !edit ||
+            typeof edit !== 'object' ||
+            typeof edit.op !== 'string' ||
+            typeof edit.name !== 'string',
+        );
+        if (bad !== undefined) {
+          process.stderr.write(
+            'every edit needs an "op" and a "name" (add | remove | rewire | cancel | reprioritise)\n',
+          );
+          process.exitCode = 1;
+          return;
+        }
+        try {
+          requestControl(runId, { cmd: 'steer', plan: flags.plan, edits });
+        } catch (e) {
+          process.stderr.write(`${e instanceof Error ? e.message : String(e)}\n`);
+          process.exitCode = 1;
+          return;
+        }
+        process.stdout.write(
+          `steer sent: ${edits.length} edit${edits.length === 1 ? '' : 's'} for ${runId}` +
+            `${flags.plan ? ` (plan ${flags.plan})` : ''}; acceptance lands as dag:edit events (loops tail ${runId})\n`,
+        );
+      },
+    );
 
   program
     .command('records')

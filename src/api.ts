@@ -52,6 +52,31 @@ export {
 // Primitives
 export { loop } from './core/loop.ts';
 export { dag, sequence, parallel } from './core/dag.ts';
+export {
+  LivePlan,
+  livePlan,
+  getLivePlan,
+  livePlanNames,
+  type LivePlanConfig,
+  type PlanEdit,
+  type PlanTemplate,
+  type PlanGuard,
+  type PlanChange,
+} from './core/plan.ts';
+export {
+  momentumFromEvents,
+  momentumLine,
+  type MomentumReport,
+  type MomentumState,
+  type MomentumOptions,
+} from './core/momentum.ts';
+export {
+  requestControl,
+  startControlChannel,
+  controlPath,
+  type ControlCommand,
+  type ControlChannel,
+} from './runtime/control.ts';
 export { mapWithConcurrency } from './core/concurrency.ts';
 export {
   pipeline,

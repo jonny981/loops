@@ -125,7 +125,7 @@ Strip the library to its verbs and three remain. In the theorem, selection and i
 
 The theorem also draws the line between `loops` and graph frameworks that allow cycles. A back-edge over shared state is a flowchart jump — `goto`, the thing structured programming retired. Here the graph is always acyclic, and iteration lives in one named construct with its own gate, caps, and stall detection. **Their cycles are `goto`; `loop()` is `while`.** That is not a claim about power — back-edges compute everything `while` does, just as `goto` did. The win was always reasoning, not capability (Dijkstra's argument in *Go To Statement Considered Harmful*, 1968), and it's the same win here: because the graph never jumps, its shape is knowable before a token is spent — `loops validate` and `assertGraph` exist because of that. Turing complete where it must be, decidable where it can be ([docs/theory.md](docs/theory.md)).
 
-One behaviour is deliberately still missing: **preemption**. A person also drops the plan mid-flight when the world changes. A loop whose body picks its next job at runtime (the Tend pattern in [docs/concepts.md](docs/concepts.md)) approximates it; a graph that can be rewritten mid-run is on the [roadmap](#roadmap).
+The fourth verb — **preemption**, a person dropping the plan mid-flight when the world changes — ships in its first slice as **steering**: a graph built on a `livePlan` can be rewritten while it runs (add, remove, rewire, cancel, reprioritise), with every edit batch validated before it applies, running work preempted through its own signal, and the whole history recorded. The Tend pattern (a loop whose body picks its next job at runtime, [docs/concepts.md](docs/concepts.md)) remains the shape for discovered worklists; steering is how the plan itself changes under you. The design and what remains of it are [docs/momentum.md](docs/momentum.md).
 
 ## Building blocks
 
@@ -175,6 +175,22 @@ revisionRequest({ target: 'implement', findings })
 dag({ name: 'team', isolation: 'worktree', nodes: { server, web, integrate } })
 tournament({ name: 'best-of-3', n: 3, candidate, judge }) // try 3 approaches, keep the winner
 ```
+
+**Steer a running graph.** Make the graph a `livePlan` and it becomes data you can edit while it runs — add discovered work, cancel a doomed branch, rewire the rest — validated per batch (the live toposort), applied at safepoints, recorded as `dag:edit` events. From another terminal, against a `--supervise` run:
+
+```ts
+const plan = livePlan({ name: 'sprint', nodes: { survey }, templates: { fix } })
+dag({ name: 'work', plan }) // completes when a barrier settles with no new steer
+```
+
+```bash
+loops steer  <runId> '[{"op":"add","name":"fix-9","template":"fix","params":{"issue":9}},
+                      {"op":"cancel","name":"refactor"}]'
+loops control <runId> pause   # finish the current turn, pause resumable (exit 75)
+loops status  <runId>         # momentum: alive — 5 crystallized (2.4/h), 2 steers
+```
+
+A node that already passed cannot be edited — its work is a commit, its acceptance a gate verdict; the past is immutable. The design is [docs/momentum.md](docs/momentum.md); the offline demo is `npm run example:steer`.
 
 **Remember between attempts.**
 
@@ -303,9 +319,8 @@ Every example in [`examples/`](examples/) is a runnable definition file:
 
 ## Roadmap
 
-- **Preemption** — the fourth verb. Pause a running graph, rewrite it on new information, resume. Until then, the Tend pattern (a loop that picks its next job at runtime) is the approximation. The design is written: [docs/momentum.md](docs/momentum.md).
-- Out-of-process control: pause, abort, and kick back a running loop from outside — the substrate preemption needs
-- `convergence count` (turns from intent to outcome) and `cost per accepted change` as first-class reported metrics
+- **Preemption, the rest of it** — the first slice ships as `livePlan` steering + out-of-process control (`loops steer` / `loops control pause|abort`), per [docs/momentum.md](docs/momentum.md). Still to come from that design: safepoints inside a node (wind-down instead of abort), park-and-consolidate for preempted work, kickback injection from outside, and steerable loop bodies.
+- `convergence count` (turns from intent to outcome) and `cost per accepted change` as first-class reported metrics, joining the `momentum` read in `loops status`
 - Calibration helpers for agent judges
 - More engine adapters (OpenAI, local models)
 

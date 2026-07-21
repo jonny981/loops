@@ -6,8 +6,9 @@ deliberate fourth. This document is that fourth verb's design: **steer** — the
 rewrite of a running graph done as a first-class, validated, recorded
 operation. It defines the model (past / frontier / future), the quantity the
 verbs conserve (**momentum**), the mechanism (the live plan and its
-safepoints), and the role each existing subsystem plays. Everything here is
-design, not shipped behaviour; the changelog is the record of what ships.
+safepoints), and the role each existing subsystem plays. The first slice of
+this design is implemented — see [What ships](#what-ships) for the mapping —
+and the changelog remains the record of exactly what shipped when.
 
 ## Why: the path is never mapped
 
@@ -205,17 +206,36 @@ whose semantics it inherits:
 | `isolated()` / worktrees | frontier branches that can be parked or preempted without collateral damage |
 | `consolidateJob` | park-and-resume memory; the stale-decision hygiene on revival |
 
+## What ships
+
+The first implemented slice of this design, and where each piece lives:
+
+| design element | implementation |
+|---|---|
+| the live plan (versioned graph, atomic batches, live toposort) | `livePlan()` / `LivePlan` (`src/core/plan.ts`); templates give out-of-process `add` a vocabulary of work |
+| the epoch scheduler + per-node abort | `dag({ plan })` (`src/core/dag.ts`): edits apply structurally at the barrier (the safepoint); `cancel`/`remove` of a running node aborts its own signal immediately |
+| the arrow of time | the running dag guards the plan: any edit touching a passed node is refused (`already crystallized`) |
+| out-of-process control | the registry's command side (`src/runtime/control.ts`): `loops control <runId> pause\|abort`, `loops steer <runId> '<edits>'`; `pause` lands at the loop/dag safepoints as the standard resumable `paused` (exit 75) |
+| the steer audit | one `dag:edit` event per edit, accepted or refused, in the event stream and registry |
+| momentum, measured | `momentumFromEvents` (`src/core/momentum.ts`): crystallization count/rate + the alive/idle/stalled/done read, surfaced in `loops status` |
+| the offline demo | `npm run example:steer` — discovered work steered in, a running node preempted, an urgent node injected, completion when momentum runs out |
+
+Per-version termination holds as designed: a live dag completes when a
+barrier settles with no steer landed since it began.
+
 ## Sequencing
 
-Each stage lands standalone value; none requires the ones after it.
+Stages 1–2 (and the steer vocabulary of stage 3) are the shipped slice above.
+What remains, each landing standalone value:
 
-1. **Out-of-process control** — pause, abort, kickback into a running run
-   from outside; the registry grows a command side. Converts the supervisor
-   from observer to operator.
-2. **The live plan** — the versioned plan object, per-edit validation, the
-   epoch scheduler, per-node abort.
-3. **Steer semantics** — the edit vocabulary end to end: safepoints,
-   parking, resumption grounding.
+1. **Deeper safepoints** — cooperative wind-down inside a node (finish the
+   engine turn, commit the scratch, then yield) instead of signal abort;
+   steerable loop bodies at their iteration boundary.
+2. **Park-and-consolidate** — fold a preempted node's in-flight state into a
+   commit body on cancellation, and ground its revival on the consolidated
+   ledger.
+3. **Out-of-process kickback** — inject a revision into a running dag from
+   the control channel, completing the operator's verb set.
 4. **Proof** — the Tend ∘ Converge capstone benchmark
    ([bench](../bench/RESULTS.md) names it unproven) and a team-shaped
    recipe as the demonstration that momentum, not scale, is what makes

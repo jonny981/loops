@@ -13,6 +13,42 @@ heading, dated, before the tag is pushed.
 
 ### Added
 
+- **Live dags — the first slice of preemption (docs/momentum.md).**
+  `livePlan()` makes a dag's graph data: a versioned plan whose edit batches
+  (`add`/`remove`/`rewire`/`cancel`/`reprioritise`) are validated atomically
+  before they apply — unknown deps, dangling consumers, and cycles refuse the
+  whole batch (the live toposort) — and `dag({ plan })` executes it as a
+  steerable run: edits take structural effect at the next barrier (the
+  safepoint) via the same invalidate-and-re-enter mechanics kickback uses,
+  while a `cancel`/`remove` of a running node aborts exactly that node
+  through its own per-node signal. A running dag guards its plan so no edit
+  touches a node that already passed (the past is immutable), a cancelled
+  node neither fails the dag nor trips `stopOnError` (a deliberate steer is
+  not a failure), and the dag still terminates: it completes when a barrier
+  settles with no steer landed since it began. Every accepted or refused
+  edit is a `dag:edit` event. Plan `templates` give out-of-process adds a
+  vocabulary: a JSON steer instantiates work the recipe registered by name.
+  New `DagNode.priority` orders admission among ready nodes and is steerable
+  via `reprioritise`.
+- **Out-of-process control** — the registry's command side
+  (`~/.loops/runs/<runId>/control.jsonl`, `src/runtime/control.ts`).
+  `loops control <runId> pause` pauses a supervised run at its next
+  safepoint (the top of a loop iteration; before a dag node starts) as the
+  standard resumable `paused` halt (exit 75); `loops control <runId> abort`
+  stops it; `loops steer <runId> '<edits-json>'` applies an edit batch to a
+  registered live plan by name. `requestControl`/`startControlChannel` are
+  exported for programmatic use, and `JobContext.pause` carries the shared
+  pause flag to every safepoint.
+- **Momentum, measured** (`src/core/momentum.ts`). `momentumFromEvents`
+  folds an event stream into the crystallization count and rate (fresh
+  gate-accepted completions — never checkpoint restores, skips, or refused
+  steers), plus the alive / idle / stalled / done state read.
+  `loops status` prints it (`momentum: alive — 5 crystallized (2.4/h),
+  2 steers`) via `RunProgress.momentum`.
+- `examples/steer.loop.ts` (`npm run example:steer`) — the offline live-dag
+  demo: a survey node steers discovered fixes into the plan from a
+  template, an incident cancels the running refactor mid-flight and injects
+  a hotfix, and the dag completes when momentum runs out.
 - `docs/momentum.md` — the design document for preemption, the roadmap's
   fourth verb: the past/frontier/future model of a running graph, momentum
   (crystallization rate, not activity) as the quantity that defines when a

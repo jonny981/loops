@@ -32,6 +32,8 @@ export interface ContextOverride {
   timeoutMs?: number;
   /** Override the inherited timeout grace for jobs in this scope. */
   timeoutGraceMs?: number;
+  /** Override the abort signal (a per-node controller in a live dag). */
+  signal?: AbortSignal;
 }
 
 export function childContext(
@@ -41,7 +43,7 @@ export function childContext(
   return {
     engine: parent.engine,
     resolveEngine: parent.resolveEngine,
-    signal: parent.signal,
+    signal: over.signal ?? parent.signal,
     runId: parent.runId,
     checkpoint: parent.checkpoint,
     fingerprintExcludePaths: parent.fingerprintExcludePaths,
@@ -62,6 +64,7 @@ export function childContext(
     onLimit: parent.onLimit,
     maxWaitMs: parent.maxWaitMs,
     resumeCommand: parent.resumeCommand,
+    pause: parent.pause,
     groundDefault: parent.groundDefault,
     curateEnabled: parent.curateEnabled,
     ladderEnabled: parent.ladderEnabled,

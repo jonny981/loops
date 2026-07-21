@@ -13,6 +13,7 @@ export type LoopErrorCode =
   | 'RATE_LIMIT' // the provider throttled the call (resets on its own)
   | 'QUOTA' // an account/usage allowance was hit (may or may not reset)
   | 'BODY' // the step body threw
+  | 'STEER' // a live-plan edit batch was refused (invalid or vetoed)
   | 'UNKNOWN';
 
 export type LoopPhase =
