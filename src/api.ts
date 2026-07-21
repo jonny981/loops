@@ -59,6 +59,7 @@ export {
   livePlanNames,
   type LivePlanConfig,
   type PlanEdit,
+  type PlanEditSource,
   type PlanTemplate,
   type PlanGuard,
   type PlanChange,

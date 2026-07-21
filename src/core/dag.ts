@@ -133,6 +133,7 @@ export function dag(config: DagConfig): Job {
 
   const stopOnError = config.stopOnError ?? true;
   const maxKickbacks = config.maxKickbacks ?? 0;
+  const maxSteers = config.maxSteers ?? 100;
 
   // Graph relations for routing cross-stage feedback (kickback) and steer
   // invalidation. Pure functions of a snapshot's `needs` edges. `dependents`
@@ -192,9 +193,13 @@ export function dag(config: DagConfig): Job {
     // renders it as "## Next". Empty in the common (no-kickback) case.
     const pendingKickback = new Map<string, Outcome>();
 
-    // The frontier's controllers: one per running node, so a steer can preempt
-    // a single branch without stopping the graph.
+    // The frontier's controllers: one hard + one soft per running node, so a
+    // steer can preempt a single branch without stopping the graph. The soft
+    // controller (`windDown`) is the cooperative channel: a cancel with a
+    // grace fires it first and hard-aborts only at the deadline.
     const nodeAborts = new Map<string, AbortController>();
+    const nodeWinds = new Map<string, AbortController>();
+    const graceTimers = new Map<string, NodeJS.Timeout>();
     // Names terminated by a steer (cancel, or remove of a not-yet-passed
     // node). Cancellation is deliberate: it neither trips stopOnError nor
     // counts against the dag's disposition.
@@ -212,10 +217,17 @@ export function dag(config: DagConfig): Job {
     // at the next barrier (the safepoint). Cancellation of a running node is
     // the one immediate effect — the barrier may be waiting on that very node.
     const pendingSteers: PlanChange[] = [];
+    let internalSteers = 0;
     let detachGuard: (() => void) | undefined;
     let unsubscribe: (() => void) | undefined;
     if (plan) {
-      detachGuard = plan.attachGuard((edits) => {
+      detachGuard = plan.attachGuard((edits, meta) => {
+        // The in-graph steer budget: recipe code may only rewrite its own plan
+        // `maxSteers` times per run, so self-modification provably terminates
+        // (mirroring `maxKickbacks`). External force — the control channel —
+        // is exempt: an operator keeping a run alive is the designed use.
+        if (meta.source === 'internal' && internalSteers >= maxSteers)
+          return `in-graph steer budget (${maxSteers}) exhausted`;
         for (const edit of edits) {
           if (edit.op === 'add' || edit.op === 'reprioritise') continue;
           if (results.get(edit.name)?.status === 'pass')
@@ -225,6 +237,7 @@ export function dag(config: DagConfig): Job {
       });
       unsubscribe = plan.subscribe((change) => {
         pendingSteers.push(change);
+        if (change.source === 'internal') internalSteers += 1;
         for (const edit of change.edits) {
           parent.emit({
             kind: 'dag:edit',
@@ -238,7 +251,21 @@ export function dag(config: DagConfig): Job {
           });
           if (edit.op === 'cancel' || edit.op === 'remove') {
             cancelledNames.add(edit.name);
-            nodeAborts.get(edit.name)?.abort();
+            const graceMs = edit.op === 'cancel' ? edit.graceMs : undefined;
+            if (graceMs && graceMs > 0 && nodeWinds.has(edit.name)) {
+              // Cooperative wind-down: fire the soft signal so the node can
+              // finish its current turn and yield; the hard abort lands only
+              // when the grace expires (and no-ops if the node settled first).
+              nodeWinds.get(edit.name)!.abort();
+              const timer = setTimeout(
+                () => nodeAborts.get(edit.name)?.abort(),
+                graceMs,
+              );
+              timer.unref?.();
+              graceTimers.set(edit.name, timer);
+            } else {
+              nodeAborts.get(edit.name)?.abort();
+            }
           }
         }
       });
@@ -251,6 +278,7 @@ export function dag(config: DagConfig): Job {
       workspace?: Workspace,
       environment?: EnvHandle,
       signal?: AbortSignal,
+      windDown?: AbortSignal,
     ): JobContext =>
       childContext(parent, {
         depth,
@@ -258,6 +286,7 @@ export function dag(config: DagConfig): Job {
         workspace,
         environment,
         signal,
+        windDown,
         lastReview: pendingKickback.get(name),
         graph: {
           dag: config.name,
@@ -286,9 +315,11 @@ export function dag(config: DagConfig): Job {
       name: string,
       node: DagNode,
       signal?: AbortSignal,
+      windDown?: AbortSignal,
     ): Promise<Outcome> => {
       const isolated = node.isolate ?? config.isolation === 'worktree';
-      if (!isolated) return node.job(nodeCtx(name, undefined, undefined, signal));
+      if (!isolated)
+        return node.job(nodeCtx(name, undefined, undefined, signal, windDown));
 
       const base = parent.workspace;
       if (!(await isRepo({ cwd: base.dir, signal: parent.signal }))) {
@@ -296,7 +327,7 @@ export function dag(config: DagConfig): Job {
           `node "${name}" requested worktree isolation but ${base.dir} is not a git repo; running in the shared workspace`,
           'warn',
         );
-        return node.job(nodeCtx(name, undefined, undefined, signal));
+        return node.job(nodeCtx(name, undefined, undefined, signal, windDown));
       }
 
       const branch = `loops/${slug(config.name)}-${slug(name)}-${(forkSeq += 1)}`;
@@ -313,7 +344,9 @@ export function dag(config: DagConfig): Job {
       try {
         if (config.environment)
           envHandle = await config.environment.up(wtWs, parent.signal);
-        const outcome = await node.job(nodeCtx(name, wtWs, envHandle, signal));
+        const outcome = await node.job(
+          nodeCtx(name, wtWs, envHandle, signal, windDown),
+        );
         if (outcome.status === 'pass') {
           // Capture anything the node left uncommitted, so nothing is stranded
           // in the worktree, then land it back.
@@ -523,20 +556,30 @@ export function dag(config: DagConfig): Job {
                 attempt: attempts.get(name),
                 timeoutMs: node.timeoutMs,
               });
-              // The per-node controller: a steer cancelling this node aborts
-              // exactly this branch of the frontier, nothing else. Static dags
-              // pay nothing — the combined signal degenerates to the parent's.
+              // The per-node controllers: a steer cancelling this node aborts
+              // exactly this branch of the frontier, nothing else — hard via
+              // `ctl`, cooperatively via `wind` (a cancel with a grace). Static
+              // dags pay nothing — the combined signal degenerates to the
+              // parent's and `windDown` never fires.
               const ctl = new AbortController();
+              const wind = new AbortController();
               nodeAborts.set(name, ctl);
+              nodeWinds.set(name, wind);
               if (cancelledNames.has(name)) ctl.abort();
               try {
                 const signal = AbortSignal.any([parent.signal, ctl.signal]);
                 return {
-                  outcome: await runNodeJob(name, node, signal),
+                  outcome: await runNodeJob(name, node, signal, wind.signal),
                   phase: 'done',
                 };
               } finally {
                 nodeAborts.delete(name);
+                nodeWinds.delete(name);
+                const timer = graceTimers.get(name);
+                if (timer !== undefined) {
+                  clearTimeout(timer);
+                  graceTimers.delete(name);
+                }
               }
             },
           );
@@ -742,6 +785,8 @@ export function dag(config: DagConfig): Job {
     } finally {
       detachGuard?.();
       unsubscribe?.();
+      for (const timer of graceTimers.values()) clearTimeout(timer);
+      graceTimers.clear();
     }
 
     const requiredFailed = g.names.filter(

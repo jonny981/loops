@@ -30,6 +30,25 @@ heading, dated, before the tag is pushed.
   vocabulary: a JSON steer instantiates work the recipe registered by name.
   New `DagNode.priority` orders admission among ready nodes and is steerable
   via `reprioritise`.
+- **Cooperative wind-down.** A `cancel` edit with `graceMs` preempts
+  gracefully: the node's `ctx.windDown` signal (new on `JobContext`, threaded
+  by `childContext`) fires immediately, a loop finishes its current iteration
+  and yields at its boundary, and the hard per-node abort lands only when the
+  grace expires — so the turn in flight completes untouched and work that
+  ignores the signal is still bounded by the deadline. Grace timers are
+  unref'd and cleaned up when the node settles or the dag ends.
+- **The in-graph steer budget.** `DagConfig.maxSteers` (default 100) bounds
+  how many `internal`-source edit batches recipe code may apply per dag run —
+  the guard refuses further ones, so a self-modifying graph provably
+  terminates, mirroring `maxKickbacks`. Steers from the control channel carry
+  `source: 'external'` and are exempt: outside force is the designed source
+  of indefinite life. `LivePlan.apply` takes `{ source }`, `PlanChange`
+  carries it, and guards receive it.
+- **Fail-closed steering.** `LivePlan.apply` refuses unknown edit ops and
+  missing names (never a silent version bump), wraps a throwing template into
+  an atomic batch refusal, treats a throwing guard as a veto (fails closed),
+  refuses reentrant applies from inside a guard or subscriber, and isolates
+  throwing subscribers so an applied batch is never half-notified.
 - **Out-of-process control** — the registry's command side
   (`~/.loops/runs/<runId>/control.jsonl`, `src/runtime/control.ts`).
   `loops control <runId> pause` pauses a supervised run at its next
@@ -38,7 +57,10 @@ heading, dated, before the tag is pushed.
   stops it; `loops steer <runId> '<edits-json>'` applies an edit batch to a
   registered live plan by name. `requestControl`/`startControlChannel` are
   exported for programmatic use, and `JobContext.pause` carries the shared
-  pause flag to every safepoint.
+  pause flag to every safepoint. Commands target a live run only: the channel
+  starts reading at end-of-file, so a resumed run never replays the `pause`
+  or `abort` that ended its previous life, and the CLI refuses commands for
+  runs that do not exist, already ended, or whose process is gone.
 - **Momentum, measured** (`src/core/momentum.ts`). `momentumFromEvents`
   folds an event stream into the crystallization count and rate (fresh
   gate-accepted completions — never checkpoint restores, skips, or refused

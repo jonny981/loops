@@ -135,6 +135,96 @@ describe('livePlan', () => {
     expect(p.nodes().size).toBe(0);
   });
 
+  it('refuses an unknown op — never a silent version bump', () => {
+    const p = plan({ a: job('a') });
+    expect(() =>
+      p.apply([{ op: 'explode', name: 'a' } as unknown as PlanEdit]),
+    ).toThrow(/unknown edit op "explode"/);
+    expect(() => p.apply([null as unknown as PlanEdit])).toThrow(
+      /unknown edit op/,
+    );
+    expect(() =>
+      p.apply([{ op: 'remove' } as unknown as PlanEdit]),
+    ).toThrow(/non-empty "name"/);
+    expect(p.version).toBe(1);
+  });
+
+  it('a throwing template refuses the batch with its message', () => {
+    const p = plan(
+      { a: job('a') },
+      {
+        templates: {
+          boom: () => {
+            throw new Error('factory exploded');
+          },
+        },
+      },
+    );
+    expect(() =>
+      p.apply([
+        { op: 'add', name: 'ok', node: job('ok') },
+        { op: 'add', name: 'bad', template: 'boom' },
+      ]),
+    ).toThrow(/template "boom" threw .* factory exploded/);
+    expect(p.version).toBe(1);
+    expect(p.nodes().has('ok')).toBe(false); // atomic: the good edit rolled back too
+  });
+
+  it('a throwing guard fails closed — the batch is refused, never waved by', () => {
+    const p = plan({ a: job('a') });
+    const detach = p.attachGuard(() => {
+      throw new Error('guard crashed');
+    });
+    expect(() => p.apply([{ op: 'remove', name: 'a' }])).toThrow(
+      /guard threw: guard crashed/,
+    );
+    expect(p.nodes().has('a')).toBe(true);
+    detach();
+  });
+
+  it('refuses a reentrant apply from inside a guard, keeping the plan whole', () => {
+    const p = plan({ a: job('a') });
+    const detach = p.attachGuard(() => {
+      p.apply([{ op: 'reprioritise', name: 'a', priority: 1 }]); // throws
+      return undefined;
+    });
+    expect(() => p.apply([{ op: 'remove', name: 'a' }])).toThrow(
+      /reentrant apply/,
+    );
+    expect(p.version).toBe(1);
+    detach();
+  });
+
+  it('isolates a throwing subscriber: the apply commits and later listeners still fire', () => {
+    const p = plan({ a: job('a') });
+    const seen: number[] = [];
+    p.subscribe(() => {
+      throw new Error('broken subscriber');
+    });
+    p.subscribe((change) => seen.push(change.version));
+    const change = p.apply([{ op: 'reprioritise', name: 'a', priority: 2 }]);
+    expect(change.version).toBe(2);
+    expect(seen).toEqual([2]);
+    expect(p.nodes().get('a')!.priority).toBe(2);
+  });
+
+  it('stamps the steer source on the change and hands it to guards', () => {
+    const p = plan({ a: job('a') });
+    const sources: string[] = [];
+    p.attachGuard((_edits, meta) => {
+      sources.push(meta.source);
+      return undefined;
+    });
+    const internal = p.apply([{ op: 'reprioritise', name: 'a', priority: 1 }]);
+    const external = p.apply(
+      [{ op: 'reprioritise', name: 'a', priority: 2 }],
+      { source: 'external' },
+    );
+    expect(internal.source).toBe('internal');
+    expect(external.source).toBe('external');
+    expect(sources).toEqual(['internal', 'external']);
+  });
+
   it('notifies subscribers with the post-apply version and the batch', () => {
     const p = plan({ a: job('a') });
     const seen: Array<{ version: number; ops: string[] }> = [];

@@ -510,7 +510,7 @@ export async function run(
               break;
             }
             try {
-              plan.apply(command.edits ?? []);
+              plan.apply(command.edits ?? [], { source: 'external' });
             } catch (e) {
               const error = LoopError.from(e, { code: 'STEER' });
               for (const edit of command.edits ?? []) {

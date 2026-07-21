@@ -190,7 +190,7 @@ loops control <runId> pause   # finish the current turn, pause resumable (exit 7
 loops status  <runId>         # momentum: alive — 5 crystallized (2.4/h), 2 steers
 ```
 
-A node that already passed cannot be edited — its work is a commit, its acceptance a gate verdict; the past is immutable. The design is [docs/momentum.md](docs/momentum.md); the offline demo is `npm run example:steer`.
+A node that already passed cannot be edited — its work is a commit, its acceptance a gate verdict; the past is immutable. A `cancel` with `graceMs` preempts cooperatively: the node's `ctx.windDown` fires, a loop finishes its current iteration and yields, and the hard abort lands only at the deadline. In-graph steering is budgeted (`maxSteers`, default 100) so a self-modifying graph provably terminates; steers from the control channel are exempt — outside force is how an indefinite process stays alive. The design is [docs/momentum.md](docs/momentum.md); the offline demo is `npm run example:steer`.
 
 **Remember between attempts.**
 
@@ -319,7 +319,7 @@ Every example in [`examples/`](examples/) is a runnable definition file:
 
 ## Roadmap
 
-- **Preemption, the rest of it** — the first slice ships as `livePlan` steering + out-of-process control (`loops steer` / `loops control pause|abort`), per [docs/momentum.md](docs/momentum.md). Still to come from that design: safepoints inside a node (wind-down instead of abort), park-and-consolidate for preempted work, kickback injection from outside, and steerable loop bodies.
+- **Preemption, the rest of it** — shipped: `livePlan` steering, cooperative wind-down (`cancel` + `graceMs`), the in-graph steer budget, and out-of-process control (`loops steer` / `loops control pause|abort`), per [docs/momentum.md](docs/momentum.md). Still to come from that design: park-and-consolidate for preempted work, and kickback injection from outside.
 - `convergence count` (turns from intent to outcome) and `cost per accepted change` as first-class reported metrics, joining the `momentum` read in `loops status`
 - Calibration helpers for agent judges
 - More engine adapters (OpenAI, local models)

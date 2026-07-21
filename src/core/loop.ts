@@ -411,6 +411,18 @@ export function loop(config: LoopConfig): Job {
             },
             iteration,
           );
+        // So does a wind-down: a graceful cancel lets the current iteration
+        // finish, then the loop yields here instead of being hard-aborted at
+        // the grace deadline. The workspace already holds everything durable.
+        if (parent.windDown?.aborted)
+          return finish(
+            {
+              status: 'aborted',
+              summary: `wound down at iteration ${iteration} (graceful cancel)`,
+              ...(last ? { data: last.data } : {}),
+            },
+            iteration,
+          );
         if (config.max != null && iteration >= config.max) {
           return finish(
             {

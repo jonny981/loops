@@ -1639,6 +1639,32 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   // ── Control: command a run from another process (the channel is a file) ──
 
+  // Commands only reach a live run (the channel never replays), so refuse
+  // targets that do not exist, already ended, or whose process is gone.
+  const assertLiveRun = (runId: string): boolean => {
+    const status = readRunStatus(runId);
+    if (!status) {
+      process.stderr.write(`no run "${runId}" in ${runsHome()}\n`);
+      process.exitCode = 1;
+      return false;
+    }
+    if (status.status !== 'running') {
+      process.stderr.write(
+        `run "${runId}" has ended (${status.status}); control commands only reach a live run\n`,
+      );
+      process.exitCode = 1;
+      return false;
+    }
+    if (!status.alive) {
+      process.stderr.write(
+        `run "${runId}" is not alive (process gone); the command would never be read\n`,
+      );
+      process.exitCode = 1;
+      return false;
+    }
+    return true;
+  };
+
   program
     .command('control')
     .argument('<runId>', 'a run id from `loops list`')
@@ -1653,6 +1679,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      if (!assertLiveRun(runId)) return;
       try {
         requestControl(runId, { cmd: action, reason: flags.reason });
       } catch (e) {
@@ -1727,6 +1754,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           process.exitCode = 1;
           return;
         }
+        if (!assertLiveRun(runId)) return;
         try {
           requestControl(runId, { cmd: 'steer', plan: flags.plan, edits });
         } catch (e) {

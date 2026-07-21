@@ -243,6 +243,15 @@ export interface JobContext {
    */
   readonly pause?: Readonly<{ requested: boolean; reason?: string }>;
   /**
+   * Cooperative preemption: fires when a steer cancelled this scope with a
+   * wind-down grace. A cooperative body — a loop at its iteration boundary, a
+   * long fnJob between steps — finishes its current turn and yields; the hard
+   * abort (`signal`) follows only when the grace expires. Work that ignores it
+   * is simply aborted at the deadline, so honouring it is an optimisation of
+   * grace, never a correctness requirement.
+   */
+  readonly windDown?: AbortSignal;
+  /**
    * Run-level grounding default (`RunOptions.ground`), consumed by `agentJob`;
    * a job's own `ground` config (including an explicit `false`) wins.
    */
@@ -480,6 +489,16 @@ export interface DagConfig {
    * terminates. Default 0 — kickbacks are ignored and behaviour is unchanged.
    */
   maxKickbacks?: number;
+  /**
+   * Budget on IN-GRAPH steering (live dags only): how many `internal`-source
+   * edit batches this run will accept from recipe code before the dag's guard
+   * refuses further ones — the bound that keeps a self-modifying graph provably
+   * terminating, mirroring `maxKickbacks`. External steers (the control
+   * channel: a person, a helm driver) are exempt — outside force is how an
+   * indefinite process stays alive, and it is always a deliberate, recorded
+   * act. Default 100.
+   */
+  maxSteers?: number;
 }
 
 /** Per-node disposition within a DAG run. */

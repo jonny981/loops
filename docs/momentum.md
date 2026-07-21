@@ -215,7 +215,9 @@ The first implemented slice of this design, and where each piece lives:
 | the live plan (versioned graph, atomic batches, live toposort) | `livePlan()` / `LivePlan` (`src/core/plan.ts`); templates give out-of-process `add` a vocabulary of work |
 | the epoch scheduler + per-node abort | `dag({ plan })` (`src/core/dag.ts`): edits apply structurally at the barrier (the safepoint); `cancel`/`remove` of a running node aborts its own signal immediately |
 | the arrow of time | the running dag guards the plan: any edit touching a passed node is refused (`already crystallized`) |
-| out-of-process control | the registry's command side (`src/runtime/control.ts`): `loops control <runId> pause\|abort`, `loops steer <runId> '<edits>'`; `pause` lands at the loop/dag safepoints as the standard resumable `paused` (exit 75) |
+| cooperative wind-down | `cancel` with `graceMs`: the node's `ctx.windDown` signal fires immediately (a loop yields at its next iteration boundary; the turn in flight completes untouched) and the hard per-node abort lands only at the grace deadline |
+| the in-graph steer budget | `DagConfig.maxSteers` (default 100): recipe-code (`internal`) batches are guard-refused past the budget, so a self-modifying graph provably terminates; control-channel (`external`) steers are exempt — outside force is the designed source of indefinite life |
+| out-of-process control | the registry's command side (`src/runtime/control.ts`): `loops control <runId> pause\|abort`, `loops steer <runId> '<edits>'`; `pause` lands at the loop/dag safepoints as the standard resumable `paused` (exit 75); commands target a live run only — the channel starts at end-of-file, so a resumed run never replays the pause or abort that ended its previous life |
 | the steer audit | one `dag:edit` event per edit, accepted or refused, in the event stream and registry |
 | momentum, measured | `momentumFromEvents` (`src/core/momentum.ts`): crystallization count/rate + the alive/idle/stalled/done read, surfaced in `loops status` |
 | the offline demo | `npm run example:steer` — discovered work steered in, a running node preempted, an urgent node injected, completion when momentum runs out |
@@ -223,20 +225,23 @@ The first implemented slice of this design, and where each piece lives:
 Per-version termination holds as designed: a live dag completes when a
 barrier settles with no steer landed since it began.
 
+Refusals fail closed throughout: an unknown edit op, a throwing template, a
+throwing guard, and a reentrant apply all refuse the whole batch with a
+`STEER` error and leave the plan untouched; a throwing subscriber never
+undoes an applied batch.
+
 ## Sequencing
 
-Stages 1–2 (and the steer vocabulary of stage 3) are the shipped slice above.
-What remains, each landing standalone value:
+The shipped slice above covers the live plan, the safepoint/wind-down steer
+vocabulary, out-of-process control, and momentum. What remains, each landing
+standalone value:
 
-1. **Deeper safepoints** — cooperative wind-down inside a node (finish the
-   engine turn, commit the scratch, then yield) instead of signal abort;
-   steerable loop bodies at their iteration boundary.
-2. **Park-and-consolidate** — fold a preempted node's in-flight state into a
+1. **Park-and-consolidate** — fold a preempted node's in-flight state into a
    commit body on cancellation, and ground its revival on the consolidated
    ledger.
-3. **Out-of-process kickback** — inject a revision into a running dag from
+2. **Out-of-process kickback** — inject a revision into a running dag from
    the control channel, completing the operator's verb set.
-4. **Proof** — the Tend ∘ Converge capstone benchmark
+3. **Proof** — the Tend ∘ Converge capstone benchmark
    ([bench](../bench/RESULTS.md) names it unproven) and a team-shaped
    recipe as the demonstration that momentum, not scale, is what makes
    long-lived agent work trustworthy.

@@ -34,6 +34,8 @@ export interface ContextOverride {
   timeoutGraceMs?: number;
   /** Override the abort signal (a per-node controller in a live dag). */
   signal?: AbortSignal;
+  /** Override the wind-down signal (a per-node graceful-cancel channel). */
+  windDown?: AbortSignal;
 }
 
 export function childContext(
@@ -65,6 +67,7 @@ export function childContext(
     maxWaitMs: parent.maxWaitMs,
     resumeCommand: parent.resumeCommand,
     pause: parent.pause,
+    windDown: over.windDown ?? parent.windDown,
     groundDefault: parent.groundDefault,
     curateEnabled: parent.curateEnabled,
     ladderEnabled: parent.ladderEnabled,

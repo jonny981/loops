@@ -40,8 +40,22 @@ export type PlanEdit =
     }
   | { op: 'remove'; name: string }
   | { op: 'rewire'; name: string; needs: string[] }
-  | { op: 'cancel'; name: string }
+  | {
+      op: 'cancel';
+      name: string;
+      /**
+       * Wind-down grace, in ms. With a grace, a running node's `ctx.windDown`
+       * signal fires immediately (a cooperative body — a loop at its iteration
+       * boundary — finishes its current turn and yields) and the hard per-node
+       * abort follows only when the grace expires. Without one, the hard abort
+       * is immediate.
+       */
+      graceMs?: number;
+    }
   | { op: 'reprioritise'; name: string; priority: number };
+
+/** Where a steer came from: recipe code in the run, or the control channel. */
+export type PlanEditSource = 'internal' | 'external';
 
 /** A named node factory: the recipe's vocabulary of steerable work. */
 export type PlanTemplate = (params: unknown) => DagNode | Job;
@@ -61,16 +75,24 @@ export interface LivePlanConfig {
 
 /**
  * An executor's veto over a batch. Returns a reason to refuse the whole batch,
- * or undefined to allow it. Attached while a dag is running the plan.
+ * or undefined to allow it. A guard that throws is treated as a veto carrying
+ * its message — a broken guard fails closed, never open. Attached while a dag
+ * is running the plan.
  */
-export type PlanGuard = (edits: readonly PlanEdit[]) => string | undefined;
+export type PlanGuard = (
+  edits: readonly PlanEdit[],
+  meta: { source: PlanEditSource },
+) => string | undefined;
 
 export interface PlanChange {
   version: number;
   edits: readonly PlanEdit[];
+  source: PlanEditSource;
 }
 
 type PlanListener = (change: PlanChange) => void;
+
+const EDIT_OPS = new Set(['add', 'remove', 'rewire', 'cancel', 'reprioritise']);
 
 function normalize(node: DagNode | Job): DagNode {
   return typeof node === 'function' ? { job: node } : node;
@@ -166,19 +188,50 @@ export class LivePlan {
     return this.#cancelled;
   }
 
+  #applying = false;
+
   /**
    * Apply a batch of edits atomically. The whole batch is validated against a
-   * copy of the graph — structural rules first (unknown names, duplicate adds,
-   * dangling consumers, cycles: the live toposort), then every attached
-   * executor guard (the arrow of time: no edit touches crystallized work).
-   * Any refusal throws a `STEER` `LoopError` and nothing applies; success
-   * mutates the graph, bumps the version, and notifies subscribers.
+   * copy of the graph — shape first (a real op, a non-empty name), structural
+   * rules next (unknown names, duplicate adds, dangling consumers, cycles: the
+   * live toposort), then every attached executor guard (the arrow of time: no
+   * edit touches crystallized work). Any refusal throws a `STEER` `LoopError`
+   * and nothing applies; success mutates the graph, bumps the version, and
+   * notifies subscribers. Reentrant applies (from inside a guard or listener)
+   * are refused — an edit must never observe a half-notified plan.
+   *
+   * `source` marks where the batch came from: `'internal'` (recipe code inside
+   * the run — the default) counts against a running dag's `maxSteers` budget so
+   * self-modification provably terminates; `'external'` (the control channel: a
+   * person, a helm driver) is exempt — outside force is how an indefinite
+   * process stays alive.
    */
-  apply(edits: readonly PlanEdit[]): PlanChange {
+  apply(
+    edits: readonly PlanEdit[],
+    opts?: { source?: PlanEditSource },
+  ): PlanChange {
+    if (this.#applying)
+      throw steerError(
+        this.name,
+        'reentrant apply (from a guard or subscriber) refused',
+      );
     if (!edits.length) throw steerError(this.name, 'empty edit batch');
+    const source = opts?.source ?? 'internal';
     const next = new Map(this.#nodes);
     const nextCancelled = new Set(this.#cancelled);
     for (const edit of edits) {
+      if (
+        !edit ||
+        typeof edit !== 'object' ||
+        typeof (edit as { op?: unknown }).op !== 'string' ||
+        !EDIT_OPS.has(edit.op)
+      )
+        throw steerError(
+          this.name,
+          `unknown edit op ${JSON.stringify((edit as { op?: unknown } | null)?.op)} (add | remove | rewire | cancel | reprioritise)`,
+        );
+      if (typeof edit.name !== 'string' || !edit.name)
+        throw steerError(this.name, `${edit.op}: edit needs a non-empty "name"`);
       switch (edit.op) {
         case 'add': {
           if (next.has(edit.name))
@@ -193,7 +246,14 @@ export class LivePlan {
                 this.name,
                 `add: unknown template "${edit.template}" (registered: ${[...this.#templates.keys()].join(', ') || 'none'})`,
               );
-            node = normalize(template(edit.params));
+            try {
+              node = normalize(template(edit.params));
+            } catch (e) {
+              throw steerError(
+                this.name,
+                `add: template "${edit.template}" threw for node "${edit.name}": ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
             if (edit.needs) node = { ...node, needs: [...edit.needs] };
             if (edit.priority !== undefined)
               node = { ...node, priority: edit.priority };
@@ -244,16 +304,34 @@ export class LivePlan {
       }
     }
     validateGraph(this.name, next, nextCancelled);
-    for (const guard of this.#guards) {
-      const veto = guard(edits);
-      if (veto) throw steerError(this.name, veto);
+    this.#applying = true;
+    try {
+      for (const guard of this.#guards) {
+        let veto: string | undefined;
+        try {
+          veto = guard(edits, { source });
+        } catch (e) {
+          // A broken guard fails closed: the batch is refused, never waved by.
+          veto = `guard threw: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        if (veto) throw steerError(this.name, veto);
+      }
+      this.#nodes = next;
+      this.#cancelled = nextCancelled;
+      this.#version += 1;
+      const change: PlanChange = { version: this.#version, edits, source };
+      for (const listener of this.#listeners) {
+        try {
+          listener(change);
+        } catch {
+          // One broken subscriber must not undo an applied batch or starve the
+          // others; the apply already committed.
+        }
+      }
+      return change;
+    } finally {
+      this.#applying = false;
     }
-    this.#nodes = next;
-    this.#cancelled = nextCancelled;
-    this.#version += 1;
-    const change: PlanChange = { version: this.#version, edits };
-    for (const listener of this.#listeners) listener(change);
-    return change;
   }
 
   /** Attach an executor guard; returns a detach function. */

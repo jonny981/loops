@@ -25,8 +25,14 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  statSync,
 } from 'node:fs';
 import { join } from 'node:path';
+
+/** Size of a file by path (throws when absent). */
+function fstatAtPath(path: string): number {
+  return statSync(path).size;
+}
 
 import { LoopError } from '../core/errors.ts';
 import type { PlanEdit } from '../core/plan.ts';
@@ -82,7 +88,16 @@ export function startControlChannel(opts: {
   onCommand: (command: ControlCommand) => void;
   intervalMs?: number;
 }): ControlChannel {
+  // Commands target a LIVE run: start at the file's current end so commands
+  // written before this channel opened are never replayed. Without this, a
+  // resumed run would immediately re-execute the very `pause` (or worse,
+  // `abort`) that ended its previous life.
   let offset = 0;
+  try {
+    offset = fstatAtPath(controlPath(opts.runId));
+  } catch {
+    /* no control file yet: start at 0 */
+  }
   let pending = '';
   const poll = () => {
     let chunk: string | undefined;

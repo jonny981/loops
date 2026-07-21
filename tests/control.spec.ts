@@ -86,6 +86,64 @@ describe('out-of-process control', () => {
     expect(iterations).toBeLessThan(200);
   });
 
+  it('never replays commands written before the run started', async () => {
+    const runId = 'stale-test';
+    // A previous life's pause AND abort sit in the control file. A fresh run
+    // must ignore both — replaying a stale abort would kill every resume.
+    requestControl(runId, { cmd: 'pause', reason: 'from a previous life' });
+    requestControl(runId, { cmd: 'abort' });
+    let iterations = 0;
+    const { outcome } = await run(
+      loop({
+        name: 'fresh',
+        max: 3,
+        delayMs: 30,
+        body: fnJob('tick', async () => {
+          iterations += 1;
+          return { status: 'fail' as const };
+        }),
+      }),
+      { ...mockOpts, supervise: true, runId },
+    );
+    expect(outcome.status).toBe('exhausted'); // ran out its cap, untouched
+    expect(iterations).toBe(3);
+  });
+
+  it('emits a refused dag:edit when a steer batch is invalid', async () => {
+    const runId = 'refuse-test';
+    const name = planName();
+    const plan = livePlan({
+      name,
+      nodes: {
+        waiter: fnJob('waiter', async (ctx) => {
+          requestControl(runId, {
+            cmd: 'steer',
+            plan: name,
+            edits: [{ op: 'explode', name: 'x' } as never],
+          });
+          // Hold the barrier open until the poller has delivered the command.
+          const deadline = Date.now() + 5_000;
+          while (!refused.length && Date.now() < deadline && !ctx.signal.aborted)
+            await new Promise((r) => setTimeout(r, 10));
+          return { status: 'pass' as const };
+        }),
+      },
+    });
+    const refused: string[] = [];
+    const { outcome } = await run(dag({ name: 'refusals', plan }), {
+      ...mockOpts,
+      supervise: true,
+      runId,
+      onEvent: (e) => {
+        if (e.kind === 'dag:edit' && !e.accepted) refused.push(e.note ?? '');
+      },
+    });
+    expect(outcome.status).toBe('pass');
+    expect(refused.length).toBe(1);
+    expect(refused[0]).toMatch(/unknown edit op "explode"/);
+    expect(plan.version).toBe(1); // nothing applied
+  });
+
   it('steer reaches a running live dag from outside the job tree', async () => {
     const runId = 'steer-test';
     const name = planName();

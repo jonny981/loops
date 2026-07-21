@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { run, dag, fnJob, livePlan, MockEngine } from '../src/api.ts';
+import { run, dag, loop, fnJob, livePlan, MockEngine } from '../src/api.ts';
 import type { Job, LoopEvent, Outcome, RunOptions } from '../src/api.ts';
 
 const mockOpts: RunOptions = {
@@ -143,6 +143,82 @@ describe('live dag (a steered plan)', () => {
     const data = outcome.data as Record<string, Outcome>;
     expect(data.blocked!.status).toBe('pass');
     expect('bad' in data).toBe(false); // removed from the plan, gone from the graph
+  });
+
+  it('a graceful cancel winds a loop node down at its iteration boundary, not mid-turn', async () => {
+    let iterations = 0;
+    let sawHardAbort = false;
+    const plan = livePlan({
+      name: planName(),
+      nodes: {
+        worker: loop({
+          name: 'worker-loop',
+          max: 50,
+          body: fnJob('turn', async (ctx) => {
+            iterations += 1;
+            await new Promise((r) => setTimeout(r, 30));
+            if (ctx.signal.aborted) sawHardAbort = true;
+            return { status: 'fail' as const, summary: 'more to do' };
+          }),
+        }),
+        incident: fnJob('incident', async () => {
+          // Cancel only once a turn is genuinely in flight, so the assertion
+          // "the current turn completes untouched" is actually exercised.
+          while (iterations === 0) await new Promise((r) => setTimeout(r, 5));
+          plan.apply([{ op: 'cancel', name: 'worker', graceMs: 60_000 }]);
+          return { status: 'pass' as const };
+        }),
+      },
+    });
+    const { outcome } = await run(
+      dag({ name: 'wind-down', plan, concurrency: 2 }),
+      mockOpts,
+    );
+    expect(outcome.status).toBe('pass');
+    const data = outcome.data as Record<string, Outcome>;
+    expect(data.worker!.status).toBe('aborted');
+    expect(data.worker!.summary).toBe('cancelled by steer');
+    // The loop yielded at its boundary well before max, and the hard abort
+    // (60s away) never fired: the turn in flight completed untouched.
+    expect(iterations).toBeGreaterThanOrEqual(1);
+    expect(iterations).toBeLessThan(50);
+    expect(sawHardAbort).toBe(false);
+  });
+
+  it('bounds in-graph steering with maxSteers while external force stays exempt', async () => {
+    let refusal = '';
+    const noop = (name: string): Job =>
+      fnJob(name, async () => ({ status: 'pass' as const }));
+    const plan = livePlan({
+      name: planName(),
+      nodes: {
+        steerer: fnJob('steerer', async () => {
+          plan.apply([{ op: 'add', name: 'in-1', node: noop('in-1') }]);
+          plan.apply([{ op: 'add', name: 'in-2', node: noop('in-2') }]);
+          try {
+            plan.apply([{ op: 'add', name: 'in-3', node: noop('in-3') }]);
+          } catch (e) {
+            refusal = e instanceof Error ? e.message : String(e);
+          }
+          // The operator is not budgeted: external source still lands.
+          plan.apply([{ op: 'add', name: 'ext-1', node: noop('ext-1') }], {
+            source: 'external',
+          });
+          return { status: 'pass' as const };
+        }),
+      },
+    });
+    const { outcome } = await run(
+      dag({ name: 'budgeted', plan, maxSteers: 2 }),
+      mockOpts,
+    );
+    expect(outcome.status).toBe('pass');
+    expect(refusal).toMatch(/in-graph steer budget \(2\) exhausted/);
+    const data = outcome.data as Record<string, Outcome>;
+    expect(data['in-1']!.status).toBe('pass');
+    expect(data['in-2']!.status).toBe('pass');
+    expect('in-3' in data).toBe(false);
+    expect(data['ext-1']!.status).toBe('pass');
   });
 
   it('a live dag with no steers behaves exactly like a static one and terminates', async () => {
