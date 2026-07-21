@@ -61,6 +61,27 @@ heading, dated, before the tag is pushed.
   starts reading at end-of-file, so a resumed run never replays the `pause`
   or `abort` that ended its previous life, and the CLI refuses commands for
   runs that do not exist, already ended, or whose process is gone.
+- **Force over HTTP — the webhook listener** (`src/runtime/listener.ts`).
+  `RunOptions.listen` / `loops run --listen <port>` opens an in-run HTTP
+  endpoint where any webhook (an issue opened, an incident fired) is
+  ingested, validated, filtered, and routed into the same
+  `steer`/`pause`/`abort` commands every control surface uses: POSTs to
+  `/control` carry command envelopes, POSTs to any other path go through
+  the recipe's `route` — the validate/filter/map step (return a command,
+  or undefined to drop) — and `GET /momentum` serves the live momentum
+  read back on the same port, so the system emitting force can see whether
+  it landed. `loops listen` runs the standalone gateway: one port fronting
+  every supervised run on the machine through the registry's file channel
+  (`POST /runs/<runId>/control`, `GET /runs/<runId>/momentum`,
+  `GET /runs`), refusing commands for runs that are not live. Fail-closed
+  throughout: binds 127.0.0.1 by default (the gateway refuses a wider host
+  with no token), bearer auth in constant time, bodies capped (413),
+  malformed JSON and unknown commands 400, a throwing `route` refuses the
+  request without dispatching, and `webhookSignatureValid` verifies
+  provider HMAC signatures (GitHub `X-Hub-Signature-256` style) over the
+  raw body. Exported: `startWebhookListener`, `startRegistryGateway`,
+  `webhookSignatureValid`, `MomentumTracker` (the incremental fold behind
+  both the listener's live read and `momentumFromEvents`).
 - **Momentum, measured** (`src/core/momentum.ts`). `momentumFromEvents`
   folds an event stream into the crystallization count and rate (fresh
   gate-accepted completions — never checkpoint restores, skips, or refused

@@ -25,8 +25,18 @@ import {
   type CheckpointDiagnostics,
 } from './persist.ts';
 import { startSupervisor, newRunId, type Supervisor } from './supervisor.ts';
-import { startControlChannel, type ControlChannel } from './control.ts';
+import {
+  startControlChannel,
+  type ControlChannel,
+  type ControlCommand,
+} from './control.ts';
+import {
+  startWebhookListener,
+  type WebhookListener,
+  type WebhookRoute,
+} from './listener.ts';
 import { getLivePlan, livePlanNames } from '../core/plan.ts';
+import { MomentumTracker } from '../core/momentum.ts';
 import { jobMeta } from '../core/describe.ts';
 import { currentBranch, workspaceFingerprint } from '../core/git.ts';
 import type { GroundConfig } from '../core/job.ts';
@@ -155,6 +165,27 @@ export interface RunOptions {
    * `limit:pause` event. The CLI reconstructs this from the invocation.
    */
   resumeCommand?: string;
+  /**
+   * Open an HTTP listener for this run: webhooks in, momentum out. POSTs to
+   * `/control` carry command envelopes; POSTs to any other path go through
+   * `route` — the recipe's validate/filter/map step that turns a raw webhook
+   * (an issue opened, an incident fired) into a `steer`/`pause`/`abort`, or
+   * drops it; `GET /momentum` serves the live momentum read. Binds 127.0.0.1
+   * unless `host` widens it (set `token` when it does). Commands dispatch
+   * through the same handler as the file channel, so every control surface
+   * has identical semantics.
+   */
+  listen?: {
+    /** Port to bind; 0 picks an ephemeral one (see `onListen`). */
+    port: number;
+    host?: string;
+    /** Bearer token required on every request except `/healthz`. */
+    token?: string;
+    maxBodyBytes?: number;
+    route?: WebhookRoute;
+    /** Called with the bound port once listening (useful with `port: 0`). */
+    onListen?: (info: { port: number }) => void;
+  };
 }
 
 export interface RunResult {
@@ -265,6 +296,7 @@ export async function run(
   }
 
   const stats = new Stats();
+  const momentum = new MomentumTracker();
   const controller = new AbortController();
   if (options.signal) {
     if (options.signal.aborted) controller.abort();
@@ -448,6 +480,7 @@ export async function run(
 
   const emit = (event: LoopEvent) => {
     stats.record(event);
+    momentum.record(event);
     if (budget && event.kind === 'engine:usage')
       budget.add(event.usage.inputTokens + event.usage.outputTokens);
     options.onEvent?.(event);
@@ -465,81 +498,116 @@ export async function run(
   const pauseFlag: { requested: boolean; reason?: string } = {
     requested: false,
   };
+  // Every control surface — the registry file channel, the HTTP listener —
+  // dispatches through this one handler, so a webhook-borne steer and a
+  // terminal-borne one have identical semantics and identical audit events.
+  const handleControlCommand = (command: ControlCommand, origin: string) => {
+    switch (command.cmd) {
+      case 'abort':
+        emit({
+          kind: 'log',
+          ts: Date.now(),
+          path: [],
+          level: 'warn',
+          message: `${origin}: abort requested${command.reason ? ` (${command.reason})` : ''}`,
+        });
+        controller.abort();
+        break;
+      case 'pause':
+        pauseFlag.requested = true;
+        pauseFlag.reason = command.reason;
+        emit({
+          kind: 'log',
+          ts: Date.now(),
+          path: [],
+          level: 'warn',
+          message: `${origin}: pause requested${command.reason ? ` (${command.reason})` : ''}; pausing at the next safepoint`,
+        });
+        break;
+      case 'steer': {
+        const names = livePlanNames();
+        const planName =
+          command.plan ?? (names.length === 1 ? names[0] : undefined);
+        const plan = planName ? getLivePlan(planName) : undefined;
+        if (!plan) {
+          emit({
+            kind: 'error',
+            ts: Date.now(),
+            path: [],
+            message: command.plan
+              ? `${origin}: steer refused: unknown plan "${command.plan}" (registered: ${names.join(', ') || 'none'})`
+              : `${origin}: steer refused: no plan named and ${names.length ? `${names.length} registered` : 'none registered'}`,
+            code: 'STEER',
+          });
+          break;
+        }
+        try {
+          plan.apply(command.edits ?? [], { source: 'external' });
+        } catch (e) {
+          const error = LoopError.from(e, { code: 'STEER' });
+          for (const edit of command.edits ?? []) {
+            emit({
+              kind: 'dag:edit',
+              ts: Date.now(),
+              path: [],
+              plan: plan.name,
+              version: plan.version,
+              op: edit.op,
+              node: edit.name,
+              accepted: false,
+              note: error.message,
+            });
+          }
+          if (!command.edits?.length)
+            emit({
+              kind: 'error',
+              ts: Date.now(),
+              path: [],
+              message: `${origin}: steer refused: ${error.message}`,
+              code: 'STEER',
+            });
+        }
+        break;
+      }
+    }
+  };
   let control: ControlChannel | undefined;
   if (options.supervise) {
     control = startControlChannel({
       runId: runId!,
-      onCommand: (command) => {
-        switch (command.cmd) {
-          case 'abort':
-            emit({
-              kind: 'log',
-              ts: Date.now(),
-              path: [],
-              level: 'warn',
-              message: `control: abort requested${command.reason ? ` (${command.reason})` : ''}`,
-            });
-            controller.abort();
-            break;
-          case 'pause':
-            pauseFlag.requested = true;
-            pauseFlag.reason = command.reason;
-            emit({
-              kind: 'log',
-              ts: Date.now(),
-              path: [],
-              level: 'warn',
-              message: `control: pause requested${command.reason ? ` (${command.reason})` : ''}; pausing at the next safepoint`,
-            });
-            break;
-          case 'steer': {
-            const names = livePlanNames();
-            const planName =
-              command.plan ?? (names.length === 1 ? names[0] : undefined);
-            const plan = planName ? getLivePlan(planName) : undefined;
-            if (!plan) {
-              emit({
-                kind: 'error',
-                ts: Date.now(),
-                path: [],
-                message: command.plan
-                  ? `control: steer refused: unknown plan "${command.plan}" (registered: ${names.join(', ') || 'none'})`
-                  : `control: steer refused: no plan named and ${names.length ? `${names.length} registered` : 'none registered'}`,
-                code: 'STEER',
-              });
-              break;
-            }
-            try {
-              plan.apply(command.edits ?? [], { source: 'external' });
-            } catch (e) {
-              const error = LoopError.from(e, { code: 'STEER' });
-              for (const edit of command.edits ?? []) {
-                emit({
-                  kind: 'dag:edit',
-                  ts: Date.now(),
-                  path: [],
-                  plan: plan.name,
-                  version: plan.version,
-                  op: edit.op,
-                  node: edit.name,
-                  accepted: false,
-                  note: error.message,
-                });
-              }
-              if (!command.edits?.length)
-                emit({
-                  kind: 'error',
-                  ts: Date.now(),
-                  path: [],
-                  message: `control: steer refused: ${error.message}`,
-                  code: 'STEER',
-                });
-            }
-            break;
-          }
-        }
-      },
+      onCommand: (command) => handleControlCommand(command, 'control'),
     });
+  }
+
+  // The HTTP listener: webhooks in (validated, filtered, routed by the
+  // recipe's `route`), momentum out. A failed bind is a CONFIG failure now,
+  // not a silent run with a dead ingest surface.
+  let listener: WebhookListener | undefined;
+  if (options.listen) {
+    try {
+      listener = await startWebhookListener({
+        ...options.listen,
+        dispatch: handleControlCommand,
+        momentum: () => ({
+          runId,
+          momentum: momentum.report({ status: 'running' }),
+        }),
+      });
+    } catch (e) {
+      throw new LoopError({
+        code: 'CONFIG',
+        message: `listener failed to bind ${options.listen.host ?? '127.0.0.1'}:${options.listen.port}: ${e instanceof Error ? e.message : String(e)}`,
+        cause: e,
+      });
+    }
+    emit({
+      kind: 'log',
+      ts: Date.now(),
+      path: [],
+      level: 'info',
+      message: `listening on ${options.listen.host ?? '127.0.0.1'}:${listener.port} (POST /control, POST <route paths>, GET /momentum)`,
+    });
+    options.listen.onListen?.({ port: listener.port });
   }
 
   if (restoreEvent) emit({ ...restoreEvent, ts: Date.now() });
@@ -610,7 +678,7 @@ export async function run(
     onLimit: options.onLimit ?? 'auto',
     maxWaitMs: options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
     resumeCommand: options.resumeCommand,
-    pause: control ? pauseFlag : undefined,
+    pause: control || listener ? pauseFlag : undefined,
     groundDefault: options.ground,
     curateEnabled: options.curate,
     ladderEnabled: options.ladder,
@@ -636,6 +704,7 @@ export async function run(
     outcome = { status: 'fail', summary: error.message, error };
   } finally {
     control?.stop();
+    if (listener) await listener.close().catch(() => {});
     // Tear the environment down whatever happened (best-effort).
     if (environment) await environment.down(controller.signal).catch(() => {});
   }

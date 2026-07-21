@@ -139,6 +139,11 @@ src/runtime/
   control.ts          the registry's command side (control.jsonl): requestControl
                       writes from another process; startControlChannel polls in the
                       run — pause (safepoint, exit 75), abort, steer (LivePlan edits)
+  listener.ts         force over HTTP: startWebhookListener (in-run — webhooks
+                      ingested, bearer/HMAC validated, filtered + routed by the
+                      recipe's `route` into control commands; GET /momentum reads
+                      back) + startRegistryGateway (`loops listen`, one port
+                      fronting every supervised run) + webhookSignatureValid
   semantic.ts         semanticRecordsFromEvent + makeSemanticRecorder — the decision
                       stream (dispatch/completion/surfacing/revision) behind `records`
   semantic-schema.ts  strict semantic record v1 Zod contract, JSON Schema source,

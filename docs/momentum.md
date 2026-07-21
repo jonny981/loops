@@ -108,9 +108,12 @@ so the plan's history is as auditable as the work's. `dag:kickback`
 
 Two sources, with different budgets:
 
-- **Out-of-process** — a person, or a helm driver, through the control
-  channel. Unbudgeted: external steering is exactly how an indefinite
-  process is supposed to stay alive.
+- **Out-of-process** — a person, a helm driver, or the world itself, through
+  the control channel or the HTTP listener. Any webhook — an issue opened,
+  an incident fired, a deploy finished — is ingested, validated, filtered,
+  and routed into a steer, so outside events become force without the sender
+  knowing anything about loops. Unbudgeted: external steering is exactly how
+  an indefinite process is supposed to stay alive.
 - **In-graph** — a node requesting a plan change, the generalisation of
   kickback. Budgeted, like `maxKickbacks`, so self-modification provably
   terminates.
@@ -218,6 +221,7 @@ The first implemented slice of this design, and where each piece lives:
 | cooperative wind-down | `cancel` with `graceMs`: the node's `ctx.windDown` signal fires immediately (a loop yields at its next iteration boundary; the turn in flight completes untouched) and the hard per-node abort lands only at the grace deadline |
 | the in-graph steer budget | `DagConfig.maxSteers` (default 100): recipe-code (`internal`) batches are guard-refused past the budget, so a self-modifying graph provably terminates; control-channel (`external`) steers are exempt — outside force is the designed source of indefinite life |
 | out-of-process control | the registry's command side (`src/runtime/control.ts`): `loops control <runId> pause\|abort`, `loops steer <runId> '<edits>'`; `pause` lands at the loop/dag safepoints as the standard resumable `paused` (exit 75); commands target a live run only — the channel starts at end-of-file, so a resumed run never replays the pause or abort that ended its previous life |
+| force over HTTP | the webhook listener (`src/runtime/listener.ts`): `RunOptions.listen` / `loops run --listen` opens an in-run endpoint where any webhook is ingested, validated (bearer + `webhookSignatureValid` HMAC), filtered and routed by the recipe's `route` into the same steer/pause/abort commands; `GET /momentum` serves the liveness read back on the same port; `loops listen` runs the standalone gateway — one port fronting every supervised run via the file channel |
 | the steer audit | one `dag:edit` event per edit, accepted or refused, in the event stream and registry |
 | momentum, measured | `momentumFromEvents` (`src/core/momentum.ts`): crystallization count/rate + the alive/idle/stalled/done read, surfaced in `loops status` |
 | the offline demo | `npm run example:steer` — discovered work steered in, a running node preempted, an urgent node injected, completion when momentum runs out |

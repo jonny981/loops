@@ -86,6 +86,7 @@ interface RunFlags {
   resumeTrustWorkspace?: boolean;
   supervise?: boolean;
   runId?: string;
+  listen?: string;
   prices?: string;
   baselineModel?: string;
   curate?: boolean; // commander sets false for --no-curate
@@ -929,6 +930,13 @@ async function execute(
     resumeTrustWorkspace: flags.resumeTrustWorkspace,
     supervise: flags.supervise,
     runId: flags.runId,
+    listen:
+      flags.listen != null
+        ? {
+            port: parseListenPort(flags.listen),
+            token: process.env.LOOPS_LISTEN_TOKEN || undefined,
+          }
+        : undefined,
     cost,
     // Only an explicit --no-curate / --no-ladder overrides the recipe;
     // commander defaults negated flags to true, which must stay "unset".
@@ -1091,6 +1099,15 @@ function parsePositiveIntFlag(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`${flag} must be a positive integer, got "${value}"`);
+  }
+  return parsed;
+}
+
+/** A TCP port for --listen: 0 (ephemeral, reported in the log) to 65535. */
+function parseListenPort(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+    throw new Error(`--listen must be a port (0-65535), got "${value}"`);
   }
   return parsed;
 }
@@ -1319,6 +1336,10 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option(
       '--run-id <id>',
       'assign the registry id for --supervise (so a dispatching tool knows it up front)',
+    )
+    .option(
+      '--listen <port>',
+      'open an HTTP listener on 127.0.0.1: webhooks in (POST /control; recipe `listen.route` for raw payloads), momentum out (GET /momentum); bearer auth via LOOPS_LISTEN_TOKEN',
     );
   const coreOptions = optionMetadata(runCommand);
   const inferredRunFile = inferRunFile(argv.slice(2), coreOptions);
@@ -1766,6 +1787,58 @@ export async function main(argv: string[] = process.argv): Promise<void> {
           `steer sent: ${edits.length} edit${edits.length === 1 ? '' : 's'} for ${runId}` +
             `${flags.plan ? ` (plan ${flags.plan})` : ''}; acceptance lands as dag:edit events (loops tail ${runId})\n`,
         );
+      },
+    );
+
+  program
+    .command('listen')
+    .description(
+      'run the webhook gateway: one HTTP port fronting every supervised run — POST /runs/<runId>/control ingests command envelopes, GET /runs/<runId>/momentum serves the liveness read',
+    )
+    .option('--port <port>', 'port to bind (default 7433; 0 = ephemeral)')
+    .option('--host <host>', 'bind address (default 127.0.0.1)')
+    .option(
+      '--token <token>',
+      'require `Authorization: Bearer <token>` (default: LOOPS_LISTEN_TOKEN env; strongly advised off-loopback)',
+    )
+    .action(
+      async (flags: { port?: string; host?: string; token?: string }) => {
+        const { startRegistryGateway } = await import('./runtime/listener.ts');
+        const host = flags.host ?? '127.0.0.1';
+        const token = flags.token ?? process.env.LOOPS_LISTEN_TOKEN ?? undefined;
+        if (host !== '127.0.0.1' && host !== 'localhost' && !token) {
+          process.stderr.write(
+            `refusing to listen on ${host} with no token: pass --token or set LOOPS_LISTEN_TOKEN\n`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        let gateway;
+        try {
+          gateway = await startRegistryGateway({
+            port: flags.port != null ? parseListenPort(flags.port) : 7433,
+            host,
+            token,
+          });
+        } catch (e) {
+          process.stderr.write(
+            `gateway failed to bind: ${e instanceof Error ? e.message : String(e)}\n`,
+          );
+          process.exitCode = 1;
+          return;
+        }
+        process.stdout.write(
+          `gateway listening on ${host}:${gateway.port}\n` +
+            `  POST /runs/<runId>/control   {"cmd":"steer"|"pause"|"abort",...}\n` +
+            `  GET  /runs/<runId>/momentum  the liveness read\n` +
+            `  GET  /runs                   all supervised runs\n` +
+            `${token ? 'auth: bearer token required\n' : 'auth: none (loopback only)\n'}(Ctrl-C to stop)\n`,
+        );
+        await new Promise<void>((resolve) => {
+          process.once('SIGINT', () => resolve());
+          process.once('SIGTERM', () => resolve());
+        });
+        await gateway.close();
       },
     );
 

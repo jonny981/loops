@@ -67,10 +67,20 @@ export {
 export {
   momentumFromEvents,
   momentumLine,
+  MomentumTracker,
   type MomentumReport,
   type MomentumState,
   type MomentumOptions,
 } from './core/momentum.ts';
+export {
+  startWebhookListener,
+  startRegistryGateway,
+  webhookSignatureValid,
+  type WebhookRequest,
+  type WebhookRoute,
+  type WebhookListener,
+  type WebhookListenerOptions,
+} from './runtime/listener.ts';
 export {
   requestControl,
   startControlChannel,

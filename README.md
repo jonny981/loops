@@ -190,6 +190,25 @@ loops control <runId> pause   # finish the current turn, pause resumable (exit 7
 loops status  <runId>         # momentum: alive — 5 crystallized (2.4/h), 2 steers
 ```
 
+**Let the world steer.** Open an HTTP listener and any webhook — an issue opened, an incident fired — becomes force: ingested, validated, filtered, and routed into the same commands. The same port serves momentum back, so the sender can see whether its force landed:
+
+```ts
+run(job, { listen: { port: 8787, token, route: (req) => {
+  if (!webhookSignatureValid({ body: req.body, secret,
+    signature: req.headers['x-hub-signature-256'] })) return undefined; // invalid: dropped
+  const event = req.json() as { action?: string; issue?: { number: number } };
+  return event.action === 'opened' // filtered: only new issues become work
+    ? { cmd: 'steer', edits: [{ op: 'add', name: `fix-${event.issue!.number}`,
+        template: 'fix', params: event.issue }] }
+    : undefined;
+} } })
+```
+
+```bash
+loops run --listen 8787 --supervise <file>  # in-run: POST /control, GET /momentum
+loops listen                                # gateway: one port fronting every supervised run
+```
+
 A node that already passed cannot be edited — its work is a commit, its acceptance a gate verdict; the past is immutable. A `cancel` with `graceMs` preempts cooperatively: the node's `ctx.windDown` fires, a loop finishes its current iteration and yields, and the hard abort lands only at the deadline. In-graph steering is budgeted (`maxSteers`, default 100) so a self-modifying graph provably terminates; steers from the control channel are exempt — outside force is how an indefinite process stays alive. The design is [docs/momentum.md](docs/momentum.md); the offline demo is `npm run example:steer`.
 
 **Remember between attempts.**
