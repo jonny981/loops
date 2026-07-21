@@ -13,6 +13,13 @@ heading, dated, before the tag is pushed.
 
 ### Added
 
+- `docs/momentum.md` — the design document for preemption, the roadmap's
+  fourth verb: the past/frontier/future model of a running graph, momentum
+  (crystallization rate, not activity) as the quantity that defines when a
+  run is alive, steering as validated + recorded plan edits (the live
+  toposort), safepoint semantics, and the staged sequencing from
+  out-of-process control to the full steer vocabulary. Linked from the
+  README's docs list and roadmap.
 - `examples/engineer.loop.ts` — an engineer, end to end: a Tend loop that
   picks up the next ready GitHub issue and works it through research, plan,
   a complexity-gated human approval, a build loop with an adversarial review

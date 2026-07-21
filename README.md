@@ -297,12 +297,13 @@ Every example in [`examples/`](examples/) is a runnable definition file:
 - [docs/comparison.md](docs/comparison.md) — vs. Mastra and LangGraph
 - [docs/theory.md](docs/theory.md) — the theorem, Turing completeness, and why the graph stays decidable
 - [docs/helm.md](docs/helm.md) — the conversational front end
+- [docs/momentum.md](docs/momentum.md) — the design for preemption: past/frontier/future, momentum, steering, safepoints
 - [docs/semantic-records.md](docs/semantic-records.md) — the decision-stream contract behind `loops records`
 - [skills/author-loop/SKILL.md](skills/author-loop/SKILL.md) — the guide an agent reads to write a loop
 
 ## Roadmap
 
-- **Preemption** — the fourth verb. Pause a running graph, rewrite it on new information, resume. Until then, the Tend pattern (a loop that picks its next job at runtime) is the approximation.
+- **Preemption** — the fourth verb. Pause a running graph, rewrite it on new information, resume. Until then, the Tend pattern (a loop that picks its next job at runtime) is the approximation. The design is written: [docs/momentum.md](docs/momentum.md).
 - Out-of-process control: pause, abort, and kick back a running loop from outside — the substrate preemption needs
 - `convergence count` (turns from intent to outcome) and `cost per accepted change` as first-class reported metrics
 - Calibration helpers for agent judges
