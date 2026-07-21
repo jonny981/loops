@@ -1,0 +1,23 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/api.ts"],
+  "plugin": ["typedoc-plugin-markdown", "typedoc-vitepress-theme"],
+  "out": "site/api",
+  "docsRoot": "site",
+  "name": "API reference",
+  "readme": "none",
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "excludeInternal": true,
+  "categorizeByGroup": true,
+  "hideGenerator": true,
+  "useCodeBlocks": true,
+  "sanitizeComments": true,
+  "parametersFormat": "table",
+  "interfacePropertiesFormat": "table",
+  "typeDeclarationFormat": "table",
+  "enumMembersFormat": "table",
+  "sort": ["source-order"],
+  "skipErrorChecking": false,
+  "treatWarningsAsErrors": false
+}

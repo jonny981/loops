@@ -23,7 +23,7 @@
  *  the first race and never waits. */
 export const EXIT_DRAIN_MS = 1000;
 
-interface SettleableSubprocess<R> extends PromiseLike<R> {
+export interface SettleableSubprocess<R> extends PromiseLike<R> {
   once(event: 'exit', listener: () => void): unknown;
   stdout?: { destroy(): void } | null;
   stderr?: { destroy(): void } | null;

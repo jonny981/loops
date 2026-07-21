@@ -75,7 +75,7 @@ const outcomeStatusSchema = z.enum([
   'paused',
 ]);
 
-const semanticOutcomeSchema = z
+export const semanticOutcomeSchema = z
   .object({
     status: outcomeStatusSchema,
     summary: z.string().optional(),
@@ -93,7 +93,7 @@ const feedbackSeveritySchema = z.enum([
   'advisory',
 ]);
 
-const semanticDecisionSchema = z.enum([
+export const semanticDecisionSchema = z.enum([
   'accepted',
   'rejected',
   'deferred',

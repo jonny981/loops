@@ -502,6 +502,39 @@ export {
   type EvalOptions,
 } from './helm/eval.ts';
 
+// Referenced supporting types, re-exported so the public API reference is a
+// closed graph — every type a signature mentions resolves to a documented page.
+export type {
+  CheckpointControl,
+  JsonValue,
+  ConditionKind,
+  NodePhase,
+} from './core/types.ts';
+export type { PermissionMode, EngineEventSink } from './engines/engine.ts';
+export type { CurrentWork } from './runtime/supervisor.ts';
+export type { CurateInput } from './core/curate.ts';
+export type { GitOpts } from './core/git.ts';
+export type { SettleableSubprocess } from './engines/settle.ts';
+export type { OracleOptions } from './helm/oracle.ts';
+export type { LoopErrorInit, LoopPhase } from './core/errors.ts';
+export type { PlanListener } from './core/plan.ts';
+export type { CheckpointDag, CheckpointDagNode } from './core/types.ts';
+export type { AdvisorConfig } from './core/job.ts';
+export type {
+  BooleanParamSpec,
+  StringParamSpec,
+  NumberParamSpec,
+  ChoiceParamSpec,
+  StringArrayParamSpec,
+} from './core/params.ts';
+export type { Derive } from './core/pr.ts';
+export type { ReviewTarget } from './core/feedback.ts';
+export type { ErrorEntry, LoopStat, ModelUsage } from './core/stats.ts';
+export {
+  semanticDecisionSchema,
+  semanticOutcomeSchema,
+} from './runtime/semantic-schema.ts';
+
 import type { Job } from './core/types.ts';
 
 /** Identity helper that pins the type of a default export to `Job`. */

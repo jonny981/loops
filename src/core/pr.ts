@@ -26,7 +26,7 @@ function resolveForge(ctx: JobContext): Forge {
   return ctx.forge ?? new GhForge();
 }
 
-type Derive<T> =
+export type Derive<T> =
   | T
   | ((ctx: JobContext, last: Outcome | undefined) => T | Promise<T>);
 

@@ -90,7 +90,7 @@ export interface PlanChange {
   source: PlanEditSource;
 }
 
-type PlanListener = (change: PlanChange) => void;
+export type PlanListener = (change: PlanChange) => void;
 
 const EDIT_OPS = new Set(['add', 'remove', 'rewire', 'cancel', 'reprioritise']);
 

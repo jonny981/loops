@@ -163,7 +163,7 @@ export function graphPositionBlock(graph: GraphPosition): string {
   ].join('\n');
 }
 
-type ReviewTarget = {
+export type ReviewTarget = {
   name?: string;
   scope?: string;
   /** Stable reviewer criteria version. Required when passes are persisted. */

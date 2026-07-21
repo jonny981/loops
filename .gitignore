@@ -4,6 +4,11 @@ dist/
 *.tgz
 .DS_Store
 
+# Docs site: the API reference is generated (npm run docs:api)
+site/api/
+site/.vitepress/dist/
+site/.vitepress/cache/
+
 # Local agent state
 .Codex/
 .codex/

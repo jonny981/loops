@@ -26,7 +26,7 @@ export interface CommitRecord {
   date: string;
 }
 
-interface GitOpts {
+export interface GitOpts {
   cwd: string;
   signal?: AbortSignal;
   excludePaths?: string[];

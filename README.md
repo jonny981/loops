@@ -327,6 +327,10 @@ Every example in [`examples/`](examples/) is a runnable definition file:
 
 ## Docs
 
+**The documentation site** — structured guides plus the full API reference, generated from the source types on every build — lives in [`site/`](site/) and publishes to GitHub Pages via the `Docs` workflow: [jonny981.github.io/loops](https://jonny981.github.io/loops/). Locally: `npm run docs:dev`.
+
+Design notes and deep dives, in-repo:
+
 - [docs/concepts.md](docs/concepts.md) — the memory model and the three loop shapes (Converge, Sweep, Tend)
 - [docs/patterns.md](docs/patterns.md) — copy-paste recipes: feedback, PR shipping, guard rails
 - [docs/comparison.md](docs/comparison.md) — vs. Mastra and LangGraph
